@@ -360,6 +360,30 @@ mod tests {
     use super::*;
     use screeps::{RoomCoordinate, RoomName};
 
+    /// ADR 0044: the reduced-cost admission DECLINES a long haul that is not worth it, and the
+    /// `haul_road_q` config-gate turns it on/off. A mid-value sink (bid 1500) fed from a LOSSLESS
+    /// source (`source_floor = par`) 400 tiles away nets `1500 − 1000 − haul`: with the haul
+    /// subtraction OFF (`haul_road_q = 0`) it is SERVED (net +500); ON (plains) the haul (~1067)
+    /// makes it net-negative → DECLINED (the energy stays banked at the lossless source). This is
+    /// the A1→A2 behaviour the sim arms toggle — unambiguous at the kernel, unlike a full-sim run
+    /// where a profitable remote is (correctly) served under both arms.
+    #[test]
+    fn admission_declines_far_par_sink() {
+        let sink = pos(25, 25);
+        let far = sink.checked_add((400, 0)).expect("400 tiles east is on the map"); // ~8 rooms
+        let carriers = [MarketCarrier { id: 0, pos: sink, free: 100, held: 0, opportunity_milli: 0 }];
+        // A mid-value NON-refill sink (so it matches per-structure, not the aggregate lane).
+        let deposits = [MarketDeposit { sink: 0, pos: sink, bid_milli: 1500, unfulfilled: 100, is_refill: false }];
+        // A LOSSLESS far source (storage) — outside option = par.
+        let pickups = [MarketPickup { src: 0, pos: far, available: 100, source_floor_milli: econ::STORAGE_BID }];
+
+        let served = market_pass(&carriers, &deposits, &pickups, 0, |_, _| false);
+        assert_eq!(served.assignments.len(), 1, "haul OFF: net +500 → the long haul is served");
+
+        let declined = market_pass(&carriers, &deposits, &pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false);
+        assert!(declined.assignments.is_empty(), "haul ON: net-negative long haul is DECLINED (energy stays banked)");
+    }
+
     fn pos(x: u8, y: u8) -> Position {
         let room: RoomName = "W1N1".parse().unwrap();
         Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), room)
