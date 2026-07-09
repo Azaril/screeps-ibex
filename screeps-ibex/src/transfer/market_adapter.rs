@@ -80,11 +80,15 @@ pub fn run_room_market(
     let top = top_unmet_bids(consts, &input.deposits, 3);
     // ADR 0044: live runs the reduced-cost admission ON — plains road factor for the haul
     // subtraction (the shipped behavior; the sim toggles this per arm, live never does).
+    // ADR 0044 step 2: live keeps Chebyshev `get_range_to` for the pickup→sink leg for now — the
+    // true-routed-distance wiring (a cached `PathfinderService` oracle) is a tracked follow-up
+    // (needs the CPU benchmark). The sim already uses true distance via the mover for the analysis.
     let out = market::market_pass(
         &input.carriers,
         &input.deposits,
         &input.pickups,
         screeps_econ_decision::sink_economics::HAUL_ROAD_Q_PLAINS_PERMILLE,
+        &mut |a: screeps::Position, b: screeps::Position| a.get_range_to(b),
         same_structure,
     );
     RoomMarketResult {

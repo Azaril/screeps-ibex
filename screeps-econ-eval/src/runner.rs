@@ -374,7 +374,7 @@ pub fn run_world(
             let plans_preview = market::spawn_requests_market(world, &driver.roles(), unfulfilled, rt);
             let dep_bids = rt.begin_tick(world, info, &plans_preview, &deposit_set);
             let carriers = collect_market_carriers(world, &driver);
-            rt.market_pass(world, &deposit_set, &dep_bids, &pickup_set, &carriers, &mut bookings);
+            rt.market_pass(world, &deposit_set, &dep_bids, &pickup_set, &carriers, &mut bookings, mover);
         }
 
         // ── 3. Worker FSM steps (creep-id order). ───────────────────────────────────────────────
@@ -1850,37 +1850,22 @@ mod tests {
         assert!(out.remote.carrier_ticks > 0, "carriers are utilized");
     }
 
-    /// ADR 0044 P2 validation (observation): run the MARKET arm with the reduced-cost admission OFF
-    /// (A1) vs ON (A2) on Family R with a NEAR (d≈40) and a FAR (d≈260) remote. The admission should
-    /// strand more FAR-remote energy under A2 (declined as beyond-break-even) than A1 (serves all).
+    /// ADR 0044 end state: the MARKET arm (admission + TRUE routed-distance haul pricing always on)
+    /// runs over REALISTIC Family R terrain (generated caves, `routed ≫ Chebyshev`) — the mover-backed
+    /// distance oracle drives the pass without panic, and the remotes are worked. The kernel-level
+    /// decline of a beyond-break-even haul is pinned separately (`market::admission_declines_far_par_sink`).
     #[test]
-    fn family_r_admission_vs_no_admission_far_remote() {
-        use crate::market::MarketArmCfg;
-        let dists = vec![40u32, 260];
-        // Energy left in the FAR remote's source+container after the run (high = not hauled).
-        let far_stranded = |admission: bool| -> u32 {
-            let sc = crate::scenario::FamilyRScenario::new("E11N1", 6, dists.clone(), 5);
-            let (mut world, _t, info) = sc.instantiate();
-            let far_src = world.spawns[0].pos.checked_add((260, 0)).unwrap();
-            let mut mover = crate::movement::RoverMover::new(&world.movement);
-            let cfg = MarketArmCfg { admission, ..Default::default() };
-            let mut opts = RunOptions::new(PolicyConfig::market(cfg), RecoverConsts::default(), 4_000);
-            opts.goal = RunGoal::Horizon;
-            run_world(&sc.shell(), &mut world, &mut mover, &info, &opts);
-            let src_e: u32 = world.sources.iter().filter(|s| s.pos.get_range_to(far_src) <= 1).map(|s| s.energy).sum();
-            let cont_e: u32 = world.containers.iter().filter(|c| c.pos.get_range_to(far_src) <= 2).map(|c| c.store.amount(SimResource::Energy)).sum();
-            src_e + cont_e
-        };
-        let a1 = far_stranded(false);
-        let a2 = far_stranded(true);
-        eprintln!("FAR-remote stranded energy: A1(admission off)={a1}  A2(admission on)={a2}");
-        // Both arms run the MARKET pass over the multi-room world without panic, and the far remote
-        // IS worked (harvested — stranded > 0). The arms are ~equal here BY DESIGN: at d=260 the
-        // remote is still profitable (haul ≈0.69 e/e ≪ the home's refill/upgrade value), so the
-        // admission correctly stays inert. The DECLINE is exercised unambiguously at the kernel
-        // level (`market::tests::admission_declines_far_par_sink`) and needs a par-only /
-        // beyond-break-even economic scenario to show in-sim (ADR deferred: saturated variant).
-        assert!(a1 > 0 && a2 > 0, "both arms mine the far remote (multi-room market arm live): a1={a1} a2={a2}");
+    fn market_end_state_runs_on_realistic_family_r() {
+        let sc = crate::scenario::FamilyRScenario::new("E11N1", 6, vec![0, 0], 5).realistic();
+        let (mut world, _t, info) = sc.instantiate();
+        let home_room = world.spawns[0].pos.room_name();
+        let mut mover = crate::movement::RoverMover::new(&world.movement);
+        let mut opts = RunOptions::new(PolicyConfig::market(crate::market::MarketArmCfg::default()), RecoverConsts::default(), 3_000);
+        opts.goal = RunGoal::Horizon;
+        let out = run_world(&sc.shell(), &mut world, &mut mover, &info, &opts);
+        // Cross-room hauling on realistic terrain is live: energy in flight, a creep reaches a remote.
+        assert!(out.remote.mean_in_flight() > 0, "remote hauling active on realistic terrain");
+        assert!(world.movement.creeps.iter().any(|c| c.pos.room_name() != home_room), "a creep reached a realistic remote room");
     }
 
     /// THE as-hauler regression pin (harvest.rs:104-125 mirrored): an EMPTY harvester with

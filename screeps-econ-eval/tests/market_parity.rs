@@ -97,7 +97,11 @@ fn live_adapter_dtos_match_sim_market_pass() {
         CarrierDto { id: empty, pos: pos(11, 11), free: 100, held: 0, opportunity_milli: 0 },
     ];
     let mut sim_bookings = Bookings::default();
-    rt.market_pass(&world, &dep_set, &dep_bids, &pick_set, &carriers, &mut sim_bookings);
+    // ADR 0044: the sim prices haul on the mover's routed distance. This fixture is an OPEN single
+    // room, so the mover's distance equals Chebyshev — Path A (mover) and Path B (get_range_to) stay
+    // byte-identical, and the sim↔live kernel parity holds.
+    let mut mover = screeps_econ_eval::movement::AnalyticMover::new(&world.movement.terrain);
+    rt.market_pass(&world, &dep_set, &dep_bids, &pick_set, &carriers, &mut sim_bookings, &mut mover);
     let sim_tasks: BTreeMap<u32, MarketTask> = rt.tasks.clone();
 
     // ── Path B: the LIVE adapter's DTO construction over the SAME priced facts, run through the
@@ -121,9 +125,21 @@ fn live_adapter_dtos_match_sim_market_pass() {
         .iter()
         .enumerate()
         .filter(|(_, p)| p.lane == Lane::Haul)
-        .map(|(i, p)| mk::MarketPickup { src: i as u32, pos: p.pos, available: p.available })
+        .map(|(i, p)| mk::MarketPickup {
+            src: i as u32,
+            pos: p.pos,
+            available: p.available,
+            source_floor_milli: screeps_econ_eval::market::src_floor_milli(p.src),
+        })
         .collect();
-    let out = mk::market_pass(&k_carriers, &k_deposits, &k_pickups, |src, sink| same_structure(&pick_set, &dep_set, src, sink));
+    let out = mk::market_pass(
+        &k_carriers,
+        &k_deposits,
+        &k_pickups,
+        screeps_econ_decision::sink_economics::HAUL_ROAD_Q_PLAINS_PERMILLE,
+        &mut |a: Position, b: Position| a.get_range_to(b),
+        |src, sink| same_structure(&pick_set, &dep_set, src, sink),
+    );
 
     // Resolve the kernel's index-scoped tasks back to sim keys (the live adapter does the
     // analogous `TransferTarget` resolution).

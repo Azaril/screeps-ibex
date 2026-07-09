@@ -2747,6 +2747,7 @@ mod tests {
             &k_deposits,
             &k_pickups,
             screeps_econ_decision::sink_economics::HAUL_ROAD_Q_PLAINS_PERMILLE,
+            &mut |a: screeps::Position, b: screeps::Position| a.get_range_to(b),
             |src, sink| pickup_targets[src as usize] == deposit_targets[sink as usize],
         )
         .assignments

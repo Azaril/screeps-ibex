@@ -165,6 +165,14 @@ pub fn market_pass(
     // (`haul_milli(d,0)=0`) — the config-gate the sim's admission-OFF arm uses (with source_floor
     // also 0) to reproduce the pre-reduced-cost market (haul as the `service_ticks` divisor only).
     haul_road_q: u32,
+    // ADR 0044 step 2: the pickup→sink DISTANCE oracle (the structural haul leg). The kernel no
+    // longer assumes Chebyshev `get_range_to` here — the adapter supplies TRUE routed distance
+    // (sim: the multi-room mover; live: the cached `PathfinderService`), so `haul_milli(d)` and the
+    // density's sink leg price the real path, not a straight line that underprices cross-room hauls.
+    // Only the pickup→sink leg (static structure pair, cacheable) uses this; the dynamic
+    // carrier→pickup approach leg stays cheap Chebyshev. `|a,b| a.get_range_to(b)` restores the old
+    // behaviour.
+    dist: &mut dyn FnMut(Position, Position) -> u32,
     same_structure: impl Fn(u32, u32) -> bool,
 ) -> MarketPassResult {
     let mut result = MarketPassResult::default();
@@ -243,7 +251,9 @@ pub fn market_pass(
                     if flow == 0 {
                         continue;
                     }
-                    let service = c.pos.get_range_to(p.pos) + p.pos.get_range_to(dpos) + 2;
+                    // Carrier→pickup approach = cheap Chebyshev (dynamic); pickup→sink = TRUE routed
+                    // distance (static structure pair) via the `dist` oracle.
+                    let service = c.pos.get_range_to(p.pos) + dist(p.pos, dpos) + 2;
                     let better = match best {
                         None => true,
                         Some((bpi, bflow, bserv)) => {
@@ -264,7 +274,7 @@ pub fn market_pass(
                     // leg `pickup→deposit` (NOT the carrier-approach leg the divisor also counts)
                     // and this source's outside option. `market_pass`/greedy declines the arc if
                     // `bid − source_floor − haul(d) ≤ 0`, leaving the energy at the source.
-                    let haul_d = pickups[pi].pos.get_range_to(dpos);
+                    let haul_d = dist(pickups[pi].pos, dpos);
                     edges.push(m::AssignEdge {
                         carrier: ci as u32,
                         supply: Some(pi as u32),
@@ -377,10 +387,10 @@ mod tests {
         // A LOSSLESS far source (storage) — outside option = par.
         let pickups = [MarketPickup { src: 0, pos: far, available: 100, source_floor_milli: econ::STORAGE_BID }];
 
-        let served = market_pass(&carriers, &deposits, &pickups, 0, |_, _| false);
+        let served = market_pass(&carriers, &deposits, &pickups, 0, &mut |a: Position, b: Position| a.get_range_to(b), |_, _| false);
         assert_eq!(served.assignments.len(), 1, "haul OFF: net +500 → the long haul is served");
 
-        let declined = market_pass(&carriers, &deposits, &pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false);
+        let declined = market_pass(&carriers, &deposits, &pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |a: Position, b: Position| a.get_range_to(b), |_, _| false);
         assert!(declined.assignments.is_empty(), "haul ON: net-negative long haul is DECLINED (energy stays banked)");
     }
 
@@ -400,7 +410,7 @@ mod tests {
             // a stressed container close, high bid.
             MarketDeposit { sink: 1, pos: pos(11, 10), bid_milli: 5000, unfulfilled: 100, is_refill: false },
         ];
-        let res = market_pass(&carriers, &deposits, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false);
+        let res = market_pass(&carriers, &deposits, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |a: Position, b: Position| a.get_range_to(b), |_, _| false);
         assert_eq!(res.assignments.len(), 1);
         assert_eq!(res.assignments[0].carrier, 7);
         match res.assignments[0].task {
@@ -423,7 +433,7 @@ mod tests {
             MarketDeposit { sink: 11, pos: pos(25, 20), bid_milli: 6000, unfulfilled: 50, is_refill: true },
         ];
         let pickups = [MarketPickup { src: 99, pos: pos(20, 21), available: 500, source_floor_milli: 0 }];
-        let res = market_pass(&carriers, &deposits, &pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false);
+        let res = market_pass(&carriers, &deposits, &pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |a: Position, b: Position| a.get_range_to(b), |_, _| false);
         assert_eq!(res.assignments.len(), 1);
         match res.assignments[0].task {
             MarketTask::PickupDeliver { src, sink, take, give, .. } => {
@@ -442,10 +452,10 @@ mod tests {
         let harvester = [MarketCarrier { id: 3, pos: pos(10, 10), free: 0, held: 50, opportunity_milli: 2000 }];
         // par storage: surplus 0 — the harvester keeps harvesting (no assignment).
         let par = [MarketDeposit { sink: 0, pos: pos(11, 10), bid_milli: 1000, unfulfilled: 500, is_refill: false }];
-        assert!(market_pass(&harvester, &par, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false).assignments.is_empty());
+        assert!(market_pass(&harvester, &par, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |a: Position, b: Position| a.get_range_to(b), |_, _| false).assignments.is_empty());
         // stressed refill at 12×: surplus (11000)·50 ≫ 2000·(range+1) — it delivers.
         let stress = [MarketDeposit { sink: 0, pos: pos(11, 10), bid_milli: 12_000, unfulfilled: 500, is_refill: true }];
-        assert_eq!(market_pass(&harvester, &stress, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false).assignments.len(), 1);
+        assert_eq!(market_pass(&harvester, &stress, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |a: Position, b: Position| a.get_range_to(b), |_, _| false).assignments.len(), 1);
     }
 
     /// `same_structure` blocks a self-withdraw: a carrier cannot be told to withdraw from the
@@ -456,15 +466,15 @@ mod tests {
         let deposits = [MarketDeposit { sink: 5, pos: pos(11, 10), bid_milli: 3000, unfulfilled: 100, is_refill: false }];
         // The only pickup IS sink 5 (src index 5 maps to sink 5).
         let pickups = [MarketPickup { src: 5, pos: pos(11, 10), available: 100, source_floor_milli: 0 }];
-        let res = market_pass(&carriers, &deposits, &pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |src, sink| src == sink);
+        let res = market_pass(&carriers, &deposits, &pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |a: Position, b: Position| a.get_range_to(b), |src, sink| src == sink);
         assert!(res.assignments.is_empty(), "no self-withdraw edge is generated");
     }
 
     /// Empty world / no carriers ⇒ empty result, no panic.
     #[test]
     fn empty_inputs_are_safe() {
-        assert!(market_pass(&[], &[], &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false).assignments.is_empty());
+        assert!(market_pass(&[], &[], &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |a: Position, b: Position| a.get_range_to(b), |_, _| false).assignments.is_empty());
         let c = [MarketCarrier { id: 1, pos: pos(1, 1), free: 100, held: 0, opportunity_milli: 0 }];
-        assert!(market_pass(&c, &[], &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false).assignments.is_empty());
+        assert!(market_pass(&c, &[], &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |a: Position, b: Position| a.get_range_to(b), |_, _| false).assignments.is_empty());
     }
 }
