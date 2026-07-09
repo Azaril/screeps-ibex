@@ -984,6 +984,9 @@ fn create_environment() -> GameEnvironment {
     // Per-room supply structure cache (ephemeral -- lazily populated each tick).
     world.insert(crate::missions::localsupply::structure_data::SupplyStructureCache::new());
 
+    // Per-room refill sink price cells (ADR 0044 P1 — published from the spawn queue each tick).
+    world.insert(crate::spawnsystem::RefillPricingCache::default());
+
     // Register components and resources for every system in the tick list.
     setup_systems(&mut world);
 

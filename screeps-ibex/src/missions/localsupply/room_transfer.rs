@@ -546,10 +546,10 @@ impl Mission for RoomTransferMission {
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         let structure_data_rc = system_data.supply_structure_cache.get_room(self.room_name);
-        // ADR 0044 P1 — capture this room's refill-pricing cell (mirrors the structure-data Rc). The
-        // hauling pass republishes it from the complete spawn queue each tick before the snapshot
-        // reads it here.
-        let refill_cell = system_data.spawn_queue.refill_context_cell(self.room_data);
+        // ADR 0044 P1 — capture this room's refill-pricing cell from the published cache (mirrors
+        // the structure-data Rc). `SpawnRefillPricingSystem` republishes it from the complete spawn
+        // queue each tick before the snapshot reads it here.
+        let refill_cell = system_data.refill_pricing.context_cell(self.room_data);
 
         system_data.transfer_queue.register_generator(
             self.room_name,

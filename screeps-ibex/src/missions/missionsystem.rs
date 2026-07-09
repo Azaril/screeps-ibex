@@ -42,6 +42,7 @@ pub struct MissionSystemData<'a> {
     repair_queue: Write<'a, RepairQueue>,
     energy_leak: Write<'a, crate::energy_stress::EnergyLeakStats>,
     supply_structure_cache: Write<'a, SupplyStructureCache>,
+    refill_pricing: Write<'a, RefillPricingCache>,
     cleanup_queue: Write<'a, EntityCleanupQueue>,
     economy: Write<'a, EconomySnapshot>,
     pathfinder: Write<'a, PathfinderService>,
@@ -75,6 +76,9 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     /// Repair-leak telemetry counters (ADR 0040 §D6 `repair_leak_e` — always-on).
     pub energy_leak: &'b mut crate::energy_stress::EnergyLeakStats,
     pub supply_structure_cache: &'b mut SupplyStructureCache,
+    /// ADR 0044 P1 — per-room refill sink price cells, published by `SpawnRefillPricingSystem` and
+    /// captured by the transfer refill generator (mirrors `supply_structure_cache`).
+    pub refill_pricing: &'b mut RefillPricingCache,
     pub economy: &'b mut EconomySnapshot,
     pub pathfinder: &'b mut PathfinderService,
     /// The tick's CPU-pressure snapshot (Copy — read freely).
@@ -232,6 +236,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 repair_queue: &mut data.repair_queue,
                 energy_leak: &mut data.energy_leak,
                 supply_structure_cache: &mut data.supply_structure_cache,
+                refill_pricing: &mut data.refill_pricing,
                 economy: &mut data.economy,
                 pathfinder: &mut data.pathfinder,
                 governor: *data.governor,
@@ -294,6 +299,7 @@ impl<'a> System<'a> for RunMissionSystem {
                 repair_queue: &mut data.repair_queue,
                 energy_leak: &mut data.energy_leak,
                 supply_structure_cache: &mut data.supply_structure_cache,
+                refill_pricing: &mut data.refill_pricing,
                 economy: &mut data.economy,
                 pathfinder: &mut data.pathfinder,
                 governor: *data.governor,
