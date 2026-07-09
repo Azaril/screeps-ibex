@@ -440,10 +440,16 @@ pub struct FamilyRScenario {
     pub layout_room: String,
     pub rcl: u8,
     /// True path-distances (tiles east of the home spawn) of the remote sources, e.g.
-    /// `[10,40,90,150,210,260]` — spanning same-room (10) to ~5 rooms out (260).
+    /// `[10,40,90,150,210,260]` — spanning same-room (10) to ~5 rooms out (260). In the REALISTIC
+    /// variant these are re-interpreted as one remote per corridor ROOM (ordinal), and the true
+    /// routed distance (≫ Chebyshev through the generated walls) is what the mover measures.
     pub remote_distances: Vec<u32>,
     pub tick_cap: u32,
     pub seed: u32,
+    /// ADR 0044: use PROCEDURAL realistic terrain for the corridor rooms (cave walls + swamps +
+    /// mid-edge exits) instead of the synthetic open channel — so `routed ≫ Chebyshev` (the regime
+    /// the true-distance migration must handle). One remote per corridor room at its centre.
+    pub realistic: bool,
 }
 
 impl FamilyRScenario {
@@ -455,7 +461,15 @@ impl FamilyRScenario {
             remote_distances,
             tick_cap: DEFAULT_S_TICK_CAP,
             seed,
+            realistic: false,
         }
+    }
+
+    /// Use procedural realistic terrain for the corridor (ADR 0044). One remote per corridor room.
+    pub fn realistic(mut self) -> Self {
+        self.realistic = true;
+        self.name = format!("{}-realistic", self.name);
+        self
     }
 
     /// Instantiate the multi-room world: a healthy home (mirrors [`SteadyScenario::instantiate`]) +
@@ -490,44 +504,74 @@ impl FamilyRScenario {
         // note); the structures still exist as world objects, only their pathing-wall tiles on this
         // one row are cleared.
         let (sx, sy) = (home_spawn.x().u8(), home_spawn.y().u8());
+        let mid = screeps_sim_core::terrain_gen::EXIT_MID; // 25 — the aligned mid-edge exit row
+        // Shared home carve: clear the spawn's row to the east border. In the REALISTIC variant also
+        // carve down the east edge to the corridor's mid-edge exit row (so the home connects to the
+        // first generated room whose west exit is at `mid`).
         for x in sx..50 {
             world.movement.terrain.walls.remove(&(x, sy));
+        }
+        if self.realistic {
+            let (ylo, yhi) = (sy.min(mid), sy.max(mid));
+            for y in ylo..=yhi {
+                world.movement.terrain.walls.remove(&(49, y));
+            }
         }
         // Register the HOME room as a known world room (with its carved terrain) so the multi-room
         // mover treats every OTHER room as impassable and never wanders off the corridor.
         world.movement.rooms.insert(home_room, world.movement.terrain.clone());
-        // The corridor rooms are a 3-wide horizontal CHANNEL at the spawn's row (walled elsewhere):
-        // this forces the multi-room search onto a straight highway — no diagonal room-CORNER
-        // crossings (which the single-step walk cannot follow) — while leaving room for the remote
-        // harvester + container beside the source.
-        let mut channel = SimTerrain::default();
-        let (lo, hi) = (sy.saturating_sub(1), (sy + 1).min(49));
-        for x in 0..50u8 {
-            for y in 0..50u8 {
-                if y < lo || y > hi {
-                    channel.walls.insert((x, y));
-                }
-            }
-        }
-        let max_d = self.remote_distances.iter().copied().max().unwrap_or(0);
-        for step in 1..=max_d {
-            if let Ok(p) = home_spawn.checked_add((step as i32, 0)) {
-                if p.room_name() != home_room {
-                    world.movement.rooms.entry(p.room_name()).or_insert_with(|| channel.clone());
-                }
-            }
-        }
-        for &d in &self.remote_distances {
-            let Ok(src_pos) = home_spawn.checked_add((d as i32, 0)) else {
-                continue;
-            };
-            world.add_source(src_pos, crate::layout::SOURCE_CAPACITY);
-            if let Ok(cont_pos) = src_pos.checked_add((-1, 0)) {
-                world.add_container(
-                    cont_pos,
-                    crate::layout::CONTAINER_CAPACITY,
-                    screeps_econ_engine::constants::CONTAINER_HITS,
+
+        if self.realistic {
+            // PROCEDURAL corridor: one generated room per remote, chained east; the cave walls make
+            // the routed distance ≫ Chebyshev (the true-distance regime). A remote source at each
+            // room's centre (on the carved, connected mid-edge exit row).
+            use screeps_sim_core::terrain_gen::{generate_terrain, Exits, TerrainGenParams};
+            let params = TerrainGenParams { exits: Exits::horizontal(), ..Default::default() };
+            for (k, _) in self.remote_distances.iter().enumerate() {
+                let Ok(anchor) = home_spawn.checked_add(((k as i32 + 1) * 50, 0)) else {
+                    continue;
+                };
+                let room = anchor.room_name();
+                world.movement.rooms.insert(room, generate_terrain(self.seed.wrapping_add((k as u32 + 1) * 101), &params));
+                let src_pos = Position::new(
+                    screeps::RoomCoordinate::new(mid).unwrap(),
+                    screeps::RoomCoordinate::new(mid).unwrap(),
+                    room,
                 );
+                world.add_source(src_pos, crate::layout::SOURCE_CAPACITY);
+                if let Ok(cont_pos) = src_pos.checked_add((-1, 0)) {
+                    world.add_container(cont_pos, crate::layout::CONTAINER_CAPACITY, screeps_econ_engine::constants::CONTAINER_HITS);
+                }
+            }
+        } else {
+            // Synthetic 3-wide horizontal CHANNEL corridor at the spawn row (walled elsewhere): forces
+            // the search onto a straight highway (no diagonal room-CORNER crossings the walk can't
+            // follow) with room for the harvester/container. Remotes at the requested tile distances.
+            let mut channel = SimTerrain::default();
+            let (lo, hi) = (sy.saturating_sub(1), (sy + 1).min(49));
+            for x in 0..50u8 {
+                for y in 0..50u8 {
+                    if y < lo || y > hi {
+                        channel.walls.insert((x, y));
+                    }
+                }
+            }
+            let max_d = self.remote_distances.iter().copied().max().unwrap_or(0);
+            for step in 1..=max_d {
+                if let Ok(p) = home_spawn.checked_add((step as i32, 0)) {
+                    if p.room_name() != home_room {
+                        world.movement.rooms.entry(p.room_name()).or_insert_with(|| channel.clone());
+                    }
+                }
+            }
+            for &d in &self.remote_distances {
+                let Ok(src_pos) = home_spawn.checked_add((d as i32, 0)) else {
+                    continue;
+                };
+                world.add_source(src_pos, crate::layout::SOURCE_CAPACITY);
+                if let Ok(cont_pos) = src_pos.checked_add((-1, 0)) {
+                    world.add_container(cont_pos, crate::layout::CONTAINER_CAPACITY, screeps_econ_engine::constants::CONTAINER_HITS);
+                }
             }
         }
 
@@ -811,6 +855,32 @@ mod tests {
         }
         let d = m.travel_ticks(home_spawn, far, 1, &body, 0).expect("remote reachable");
         assert!((150..=170).contains(&d), "true routed distance ≈ 150: {d}");
+    }
+
+    /// ADR 0044: the REALISTIC Family R variant uses procedural cave terrain for the corridor, so
+    /// the true routed distance to a remote is materially GREATER than the straight-line Chebyshev
+    /// — the `routed ≫ Chebyshev` regime the true-distance haul migration exists to price. Also
+    /// proves the generated corridor is traversable (remotes reachable through the caves).
+    #[test]
+    fn family_r_realistic_routed_exceeds_chebyshev() {
+        let sc = FamilyRScenario::new("E11N1", 6, vec![0, 0, 0], 11).realistic(); // 3 corridor rooms
+        let (world, _t, _info) = sc.instantiate();
+        let home_spawn = world.spawns[0].pos;
+        let mid = screeps_sim_core::terrain_gen::EXIT_MID;
+        let room1 = home_spawn.checked_add((50, 0)).unwrap().room_name();
+        let remote1 = Position::new(
+            screeps::RoomCoordinate::new(mid).unwrap(),
+            screeps::RoomCoordinate::new(mid).unwrap(),
+            room1,
+        );
+        assert!(world.sources.iter().any(|s| s.pos == remote1), "a remote source sits at room-1 centre");
+
+        use crate::movement::Mover;
+        let mut m = crate::movement::RoverMover::new(&world.movement);
+        let body = screeps_sim_core::SimBody::unboosted(&[Part::Carry, Part::Move]);
+        let routed = m.travel_ticks(home_spawn, remote1, 1, &body, 0).expect("remote reachable through the caves");
+        let chebyshev = home_spawn.get_range_to(remote1);
+        assert!(routed > chebyshev, "realistic terrain: routed {routed} > Chebyshev {chebyshev} (the regime step 2 prices)");
     }
 
     /// Catalog well-posedness: every scenario instantiates; the collapse drain holds; controls
