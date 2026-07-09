@@ -257,6 +257,14 @@ pub fn run_scenario(sc: &EconScenario, opts: &RunOptions) -> RunOutcome {
     run_world(sc, &mut world, &mut mover, &info, opts)
 }
 
+/// Run a Family R (remote-mining) scenario through the MULTI-ROOM [`crate::movement::RoverMover`]
+/// (ADR 0044 P2) — the mover routes remote-container→home hauls across rooms at true distance.
+pub fn run_family_r(sc: &crate::scenario::FamilyRScenario, opts: &RunOptions) -> RunOutcome {
+    let (mut world, _terrain, info) = sc.instantiate();
+    let mut mover = crate::movement::RoverMover::new(&world.movement);
+    run_world(&sc.shell(), &mut world, &mut mover, &info, opts)
+}
+
 /// The inner loop over an already-instantiated world (the oracle/test seam).
 pub fn run_world(
     sc: &EconScenario,
@@ -283,8 +291,24 @@ pub fn run_world(
         .iter()
         .map(|c| (c.id, c.body.alive_part_count(Part::Work), c.body.alive_part_count(Part::Carry)))
         .collect();
+    // Single-room families keep the M1 skeleton convention (all harvesters on source 0). When the
+    // world has REMOTE sources (Family R — sources outside the spawn room), round-robin the initial
+    // harvesters across ALL sources so remotes are mined from t0 (the K4 spawn kernel already covers
+    // every source over time; this just warm-starts the remote lanes).
+    let home_room = world.spawns.first().map(|s| s.pos.room_name());
+    let has_remotes = home_room.map_or(false, |hr| world.sources.iter().any(|s| s.pos.room_name() != hr));
+    let n_sources = world.sources.len().max(1);
+    let mut next_harvester = 0usize;
     for (id, work, _carry) in initial {
-        let role = if work == 0 { Role::Hauler } else { Role::Harvester { source_idx: 0 } };
+        let role = if work == 0 {
+            Role::Hauler
+        } else if has_remotes {
+            let s = next_harvester % n_sources;
+            next_harvester += 1;
+            Role::Harvester { source_idx: s }
+        } else {
+            Role::Harvester { source_idx: 0 }
+        };
         driver.workers.insert(id, Worker::new(role));
     }
 
@@ -1791,6 +1815,23 @@ mod tests {
         let mut mover = AnalyticMover::new(terrain);
         let opts = RunOptions::new(PolicyConfig::default(), RecoverConsts::default(), ticks);
         run_world(&sc(ticks), world, &mut mover, info, &opts);
+    }
+
+    /// ADR 0044 P2: a Family R remote-mining scenario RUNS end-to-end through the multi-room
+    /// `RoverMover` — creeps traverse rooms (the mover drives cross-room movement for thousands of
+    /// ticks without panicking/deadlocking) and at least one creep reaches a REMOTE room, proving
+    /// the remote lanes are actually worked (the flow the ADR 0044 admission prices).
+    #[test]
+    fn family_r_runs_multiroom_and_reaches_remotes() {
+        let sc = crate::scenario::FamilyRScenario::new("E11N1", 6, vec![40, 90], 3);
+        let (mut world, _terrain, info) = sc.instantiate();
+        let home_room = world.spawns[0].pos.room_name();
+        let mut mover = crate::movement::RoverMover::new(&world.movement);
+        let mut opts = RunOptions::new(PolicyConfig::default(), RecoverConsts::default(), 2_000);
+        opts.goal = RunGoal::Horizon;
+        let _out = run_world(&sc.shell(), &mut world, &mut mover, &info, &opts);
+        let creep_in_remote = world.movement.creeps.iter().any(|c| c.pos.room_name() != home_room);
+        assert!(creep_in_remote, "a creep reached a remote room — cross-room movement is live");
     }
 
     /// THE as-hauler regression pin (harvest.rs:104-125 mirrored): an EMPTY harvester with

@@ -557,6 +557,23 @@ impl FamilyRScenario {
 
         (world, realized.terrain, info)
     }
+
+    /// A minimal `EconScenario` shell carrying the identity fields `run_world` reports (name/seed);
+    /// the run parameters come from `RunOptions`. Mirrors [`SteadyScenario::shell`].
+    pub fn shell(&self) -> EconScenario {
+        EconScenario {
+            name: self.name.clone(),
+            layout_room: self.layout_room.clone(),
+            rcl: self.rcl,
+            storage_energy: 0,
+            creeps: CreepInit::Wiped,
+            road_health_pct: 100,
+            downgrade_clock_pct: 100,
+            tick_cap: self.tick_cap,
+            seed: self.seed,
+            bait: false,
+        }
+    }
 }
 
 /// The R corpus: one healthy home + the ADR 0044 remote distance ladder (straddling the
