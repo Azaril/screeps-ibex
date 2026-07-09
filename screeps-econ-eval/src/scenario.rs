@@ -504,18 +504,27 @@ impl FamilyRScenario {
         // note); the structures still exist as world objects, only their pathing-wall tiles on this
         // one row are cleared.
         let (sx, sy) = (home_spawn.x().u8(), home_spawn.y().u8());
-        let mid = screeps_sim_core::terrain_gen::EXIT_MID; // 25 — the aligned mid-edge exit row
-        // Shared home carve: clear the spawn's row to the east border. In the REALISTIC variant also
-        // carve down the east edge to the corridor's mid-edge exit row (so the home connects to the
-        // first generated room whose west exit is at `mid`).
-        for x in sx..50 {
+        let mid = screeps_sim_core::terrain_gen::EXIT_MID; // 25 — generated rooms' mid-edge exit
+        // Connect the home to the corridor with an INTERIOR highway to the east edge, then an edge
+        // exit BAND that EXACTLY matches the first corridor room's west-exit band. The kernel (and
+        // the engine) relocates a creep across an exit tile WITHOUT checking the mirror tile is
+        // walkable (`tick.rs:53-76`); real Screeps guarantees aligned exits by map construction, so
+        // a mismatched seam here would drop a creep onto a wall. The realistic corridor's west exit
+        // is `mid±1`; the synthetic channel's is `sy±1` — so the home opens exactly that band.
+        let band_mid = if self.realistic { mid } else { sy };
+        let (blo, bhi) = (band_mid.saturating_sub(1), (band_mid + 1).min(49));
+        // Interior channel: the spawn row out to x=48, then column 48 spanning the band rows (all
+        // interior — the edge column 49 is opened only at the aligned band below).
+        for x in sx..49 {
             world.movement.terrain.walls.remove(&(x, sy));
         }
-        if self.realistic {
-            let (ylo, yhi) = (sy.min(mid), sy.max(mid));
-            for y in ylo..=yhi {
-                world.movement.terrain.walls.remove(&(49, y));
-            }
+        let (clo, chi) = (sy.min(blo), sy.max(bhi));
+        for y in clo..=chi {
+            world.movement.terrain.walls.remove(&(48, y));
+        }
+        // The aligned east-edge exit band — the seam with corridor room 1 (walkable on both sides).
+        for y in blo..=bhi {
+            world.movement.terrain.walls.remove(&(49, y));
         }
         // Register the HOME room as a known world room (with its carved terrain) so the multi-room
         // mover treats every OTHER room as impassable and never wanders off the corridor.
@@ -875,12 +884,49 @@ mod tests {
         );
         assert!(world.sources.iter().any(|s| s.pos == remote1), "a remote source sits at room-1 centre");
 
+        let _ = remote1;
+        // Measure to the FARTHEST remote (3 caves): detours accumulate room-over-room, so the true
+        // routed distance materially exceeds the straight-line Chebyshev — the regime step 2 prices.
+        let room3 = home_spawn.checked_add((150, 0)).unwrap().room_name();
+        let remote3 = Position::new(screeps::RoomCoordinate::new(mid).unwrap(), screeps::RoomCoordinate::new(mid).unwrap(), room3);
         use crate::movement::Mover;
         let mut m = crate::movement::RoverMover::new(&world.movement);
         let body = screeps_sim_core::SimBody::unboosted(&[Part::Carry, Part::Move]);
-        let routed = m.travel_ticks(home_spawn, remote1, 1, &body, 0).expect("remote reachable through the caves");
-        let chebyshev = home_spawn.get_range_to(remote1);
+        let routed = m.travel_ticks(home_spawn, remote3, 1, &body, 0).expect("far remote reachable through the caves");
+        let chebyshev = home_spawn.get_range_to(remote3);
         assert!(routed > chebyshev, "realistic terrain: routed {routed} > Chebyshev {chebyshev} (the regime step 2 prices)");
+    }
+
+    /// ADR 0044 (operator correctness check): every OPEN room-edge tile in the realistic Family R
+    /// world has a WALKABLE mirror in its neighbouring room — the engine's exit-alignment invariant
+    /// the kernel's wall-blind edge relocation (`tick.rs:53-76`) relies on. A mismatched seam would
+    /// drop a creep onto a wall. (Neighbours outside the known world are skipped — no crossing there.)
+    #[test]
+    fn family_r_realistic_exit_seams_are_walkable_both_sides() {
+        let sc = FamilyRScenario::new("E11N1", 6, vec![0, 0, 0], 11).realistic();
+        let (world, _t, _info) = sc.instantiate();
+        let rooms = &world.movement.rooms;
+        let mut violations: Vec<String> = Vec::new();
+        for (&room, terrain) in rooms {
+            for i in 0..50u8 {
+                for &(x, y) in &[(0u8, i), (49, i), (i, 0), (i, 49)] {
+                    if terrain.walls.contains(&(x, y)) {
+                        continue; // walled edge — the kernel attempts no crossing here
+                    }
+                    // The kernel's relocation offset (its priority order: x==0, y==0, x==49, y==49).
+                    let off = if x == 0 { (-1, 0) } else if y == 0 { (0, -1) } else if x == 49 { (1, 0) } else { (0, 1) };
+                    let here = Position::new(screeps::RoomCoordinate::new(x).unwrap(), screeps::RoomCoordinate::new(y).unwrap(), room);
+                    if let Ok(mirror) = here.checked_add(off) {
+                        if let Some(nbr) = rooms.get(&mirror.room_name()) {
+                            if nbr.walls.contains(&(mirror.x().u8(), mirror.y().u8())) {
+                                violations.push(format!("{}({x},{y})→wall", room));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(violations.is_empty(), "open exit seams with a wall on the far side: {violations:?}");
     }
 
     /// Catalog well-posedness: every scenario instantiates; the collapse drain holds; controls
