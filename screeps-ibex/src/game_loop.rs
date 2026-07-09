@@ -103,6 +103,9 @@ macro_rules! for_each_system {
         // push objectives this tick and before the spawn queue consumes its demand.
         $op!(SquadManagerSystem, "squad_manager", StageClass::Always);
         $op!(RunSquadUpdateSystem, "run_squad_update", StageClass::Always);
+        // ADR 0044 P1: publish the refill sink price from the now-complete spawn queue (every
+        // producer above has run) BEFORE the hauling pass's transfer snapshot reads it in RunJobSystem.
+        $op!(SpawnRefillPricingSystem, "spawn_refill_pricing", StageClass::Always);
         $op!(RunJobSystem, "run_jobs", StageClass::Always);
         // === Entity cleanup: process all pending deletions ===
         $op!(EntityCleanupSystem, "entity_cleanup", StageClass::Always);

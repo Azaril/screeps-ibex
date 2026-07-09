@@ -11,8 +11,10 @@ use screeps::*;
 use screeps_common::Location as PlanTileLocation;
 use screeps_foreman::terrain::FastRoomTerrain;
 use specs::prelude::*;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 /// Ticks per body part for spawn duration (Screeps constant).
 const CREEP_SPAWN_TIME: u32 = 3;
@@ -185,12 +187,34 @@ pub struct RenewRequest {
     pub ticks_to_live: u32,
 }
 
+/// The spawn lane's marginal value, published per room for the transfer refill sink (ADR 0044
+/// P1). `SpawnRequest.priority` is already the body ROI in the shared `BID_SCALE` currency (M5b),
+/// so the head-of-line bid IS the refill sink's `V·U` — no rate reconstruction. The transfer
+/// refill generator reads this to price "energy delivered to the spawn lane" at exactly the ROI
+/// of the marginal body it unblocks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RefillPricingContext {
+    /// Cost of the CHEAPEST queued body for the room (e) — the refill floor's exact next-body
+    /// denominator (`instant_spawnability_premium`). 0 = no body queued (idle lane → par floor).
+    pub next_body_cost_e: u32,
+    /// The HEAD-OF-LINE queued spawn bid (milli-e/t): the ROI of the marginal body the refill
+    /// unblocks. `None` = queue empty (no body waiting → refill rides its derived floor, not the cap).
+    pub top_blocked_roi_milli: Option<u32>,
+}
+
 #[derive(Default)]
 pub struct SpawnQueue {
     next_token: u32,
     requests: HashMap<Entity, Vec<SpawnRequest>>,
     /// Per-room renew requests; ephemeral, cleared when queue is processed.
     renew_requests: HashMap<Entity, Vec<RenewRequest>>,
+    /// Per-room refill-pricing cells (ADR 0044 P1). The transfer refill generator captures a
+    /// room's `Rc` at registration (the same shared-cell bridge `SupplyStructureCache` uses — the
+    /// generator cannot reach this resource at flush time) and reads it when the hauling-pass
+    /// snapshot flushes. Published each tick by [`Self::publish_refill_pricing`] AFTER every spawn
+    /// producer has run and BEFORE the snapshot build — same tick, no lag. Transient (not
+    /// serialized), like the rest of the queue.
+    refill_pricing: HashMap<Entity, Rc<RefCell<RefillPricingContext>>>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -236,6 +260,34 @@ impl SpawnQueue {
     /// Iterate over (room_entity, requests) for visualization/gather systems.
     pub fn iter_requests(&self) -> std::collections::hash_map::Iter<'_, Entity, Vec<SpawnRequest>> {
         self.requests.iter()
+    }
+
+    /// Get (or create) the shared refill-pricing cell for a room — captured by the transfer refill
+    /// generator at registration (ADR 0044 P1). Mirrors [`SupplyStructureCache::get_room`]: the
+    /// returned `Rc` outlives this borrow and is read at snapshot-flush time.
+    pub fn refill_context_cell(&mut self, room: Entity) -> Rc<RefCell<RefillPricingContext>> {
+        self.refill_pricing.entry(room).or_default().clone()
+    }
+
+    /// Publish each captured room's marginal spawn-lane value into its cell from the CURRENT queue
+    /// (ADR 0044 P1). Called ONCE per tick from the hauling pass, after every spawn producer has
+    /// registered and immediately before the transfer snapshot flush — so the refill sink prices
+    /// against a COMPLETE, same-tick queue (no lag). Uses interior mutability (`&self`) so it needs
+    /// only a shared `Read<SpawnQueue>`; only rooms with a live cell (a registered transfer
+    /// generator) are written — a room that dropped all requests resets to the idle default.
+    pub fn publish_refill_pricing(&self) {
+        for (room, cell) in &self.refill_pricing {
+            let ctx = match self.requests.get(room) {
+                Some(requests) if !requests.is_empty() => RefillPricingContext {
+                    // Requests are DESCENDING by bid (`request`'s head-of-line insertion) — the
+                    // front is the highest-bid banker whose ROI the fill unblocks.
+                    top_blocked_roi_milli: Some(requests[0].priority()),
+                    next_body_cost_e: requests.iter().map(|r| r.cost()).min().unwrap_or(0),
+                },
+                _ => RefillPricingContext::default(),
+            };
+            *cell.borrow_mut() = ctx;
+        }
     }
 }
 
@@ -564,12 +616,64 @@ impl<'a> System<'a> for SpawnQueueSystem {
     }
 }
 
+/// ADR 0044 P1 — publish each room's refill sink price (head-of-line body ROI + cheapest queued
+/// body cost) into its shared cell, from the COMPLETE spawn queue. Ordering contract: this runs in
+/// the window AFTER every spawn producer (`RunMissionSystem` + `SquadManagerSystem`) and BEFORE the
+/// hauling pass's transfer snapshot flush reads the cells (`RunJobSystem`) — so the refill sink
+/// prices against a fresh, same-tick head-of-line ROI with no lag. A shared `Read` using the cells'
+/// interior mutability, so it adds no write contention.
+pub struct SpawnRefillPricingSystem;
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> System<'a> for SpawnRefillPricingSystem {
+    type SystemData = Read<'a, SpawnQueue>;
+
+    fn run(&mut self, spawn_queue: Self::SystemData) {
+        spawn_queue.publish_refill_pricing();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn test_request(priority: u32) -> SpawnRequest {
         SpawnRequest::new(format!("test-{}", priority), &[Part::Move], priority, None, Box::new(|_, _| {}))
+    }
+
+    /// ADR 0044 P1: `publish_refill_pricing` reports the head-of-line bid (the marginal body's ROI,
+    /// since spawn priority IS the body ROI in the shared currency) and the CHEAPEST queued body
+    /// cost (the floor's next-body denominator) into each captured cell — and resets a drained lane
+    /// to the idle default so a room that stopped queueing no longer prices refill above par.
+    #[test]
+    fn publish_refill_pricing_reports_head_of_line_and_cheapest_body() {
+        let mut world = specs::World::new();
+        let room = world.create_entity().build();
+        let idle = world.create_entity().build();
+
+        let mut queue = SpawnQueue::default();
+        // Cells are captured at generator-registration time (before any request this tick).
+        let cell = queue.refill_context_cell(room);
+        let idle_cell = queue.refill_context_cell(idle);
+
+        // A costly low-bid worker and a cheap high-bid banker queued for the same room.
+        queue.request(
+            room,
+            SpawnRequest::new("worker".into(), &[Part::Work, Part::Carry, Part::Move], 5_000, None, Box::new(|_, _| {})),
+        );
+        queue.request(room, SpawnRequest::new("banker".into(), &[Part::Move], 8_000, None, Box::new(|_, _| {})));
+
+        queue.publish_refill_pricing();
+
+        let ctx = *cell.borrow();
+        assert_eq!(ctx.top_blocked_roi_milli, Some(8_000), "head-of-line = the highest bid queued");
+        assert_eq!(ctx.next_body_cost_e, 50, "cheapest queued body (a lone MOVE), not the worker's 200");
+        assert_eq!(*idle_cell.borrow(), RefillPricingContext::default(), "a captured room with no requests stays idle");
+
+        // Drain the queue (as `clear` does each tick) and republish — the cell returns to idle.
+        queue.clear();
+        queue.publish_refill_pricing();
+        assert_eq!(*cell.borrow(), RefillPricingContext::default(), "drained lane → no body waiting → idle default");
     }
 
     /// Pin: the spawn queue orders requests DESCENDING by bid (highest

@@ -321,7 +321,14 @@ pub fn instant_spawnability_premium(lane_deficit_e: u32, next_body_cost_e: u32) 
 /// much as the deficit is worth. A FULL room registers zero deposit amount (structural, K1) —
 /// the bid is moot there.
 pub fn refill_bid(consts: &MarketConsts, top_blocked_roi_milli: Option<u32>, lane_deficit_e: u32, next_body_cost_e: u32) -> u32 {
-    let floor = instant_spawnability_premium(lane_deficit_e, next_body_cost_e).max(BID_SCALE);
+    // ADR 0044 P1 correction: the instant-spawnability premium values filling toward the NEXT body
+    // — energy beyond one body's cost is buffer (priced by `buffer_deposit_bid`), NOT instant. Bound
+    // the premium's deficit to the imminent-spawn portion so the floor stays in [par, 2·par] instead
+    // of exploding ~40× on a deep (e.g. RCL8-empty) lane. This is what lets the caller drop its
+    // external `.min(cap)`: with `floor ≤ 2·par ≤ cap`, the internal clamp is the sole ceiling and
+    // `top_blocked_roi` (the ROI of the body the fill unblocks) is the true driver between them.
+    let imminent_deficit_e = lane_deficit_e.min(next_body_cost_e);
+    let floor = instant_spawnability_premium(imminent_deficit_e, next_body_cost_e).max(BID_SCALE);
     let cap = consts.refill_roi_cap_milli.max(floor);
     top_blocked_roi_milli.unwrap_or(0).clamp(floor, cap)
 }
@@ -747,15 +754,35 @@ mod tests {
     #[test]
     fn refill_bid_clamps_to_derived_floor_and_cap() {
         let consts = c();
-        // Unblocked queue rides at the derived premium (deficit 300 vs a 250 body ⇒ 2.2×).
-        assert_eq!(refill_bid(&consts, None, 300, 250), 2200, "unblocked queue rides the derived floor");
-        // A tiny top-blocked ROI still floors at the derived premium.
-        assert_eq!(refill_bid(&consts, Some(1), 300, 250), 2200);
+        // ADR 0044 P1: the floor's deficit is bounded to the imminent-spawn portion
+        // min(deficit, body). An unblocked queue with deficit ≥ the next body rides at exactly 2×
+        // (filling one body's worth), NOT 1 + full_deficit/body — the deep-lane explosion is gone.
+        assert_eq!(refill_bid(&consts, None, 300, 250), 2000, "unblocked deep-enough lane rides the 2× imminent floor");
+        // A tiny top-blocked ROI still floors at the (bounded) derived premium.
+        assert_eq!(refill_bid(&consts, Some(1), 300, 250), 2000);
+        // Sub-body deficit still scales linearly: 50 short of a 250 body ⇒ 1.2×.
+        assert_eq!(refill_bid(&consts, None, 50, 250), 1200, "shallow lane scales below 2×");
         // A full lane (deficit 0): the floor is par, so a mid ROI passes through.
         assert_eq!(refill_bid(&consts, Some(3000), 0, 250), 3000);
         // A huge ROI clamps at the cap regardless of the floor.
         assert_eq!(refill_bid(&consts, Some(999_999), 300, 250), consts.refill_roi_cap_milli, "capped");
         assert_eq!(body_roi_milli(1000, 0), 0, "degenerate zero-cost body enables nothing");
+    }
+
+    /// ADR 0044 P1: the deep-lane floor no longer explodes, so dropping the caller's external
+    /// `.min(cap)` is safe — an RCL8-scale empty lane (deficit ≫ any single body) never bids above
+    /// the ROI cap even with NO top-blocked ROI, and a genuine high-ROI blocked body still pulls
+    /// the bid up to (but not past) the cap.
+    #[test]
+    fn refill_bid_deep_lane_stays_bounded_without_external_min() {
+        let consts = c();
+        let cap = consts.refill_roi_cap_milli;
+        // Deep empty RCL8 lane, cheapest queued body ~300e: OLD floor was 1000+1000·12000/300 ≈ 41×
+        // par (the flagged explosion). NOW the imminent-spawn bound floors it at 2× par.
+        assert_eq!(refill_bid(&consts, None, 12_000, 300), 2000, "no external cap needed — floor is bounded");
+        assert!(refill_bid(&consts, None, 12_000, 300) <= cap);
+        // A real high-ROI blocked body still drives the bid, clamped by the internal cap alone.
+        assert_eq!(refill_bid(&consts, Some(50_000), 12_000, 300), cap, "internal clamp is the sole ceiling");
     }
 
     /// Healthy-room floor = the numeraire (spec Part A shape property): with storage present

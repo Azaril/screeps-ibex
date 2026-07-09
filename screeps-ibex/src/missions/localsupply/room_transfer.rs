@@ -25,12 +25,6 @@ use screeps_econ_decision::demand::{
     RefillStructDto, RoomEconDto, StorageDto, source_link_withdraw_priority, storage_link_withdraw_priority,
 };
 
-/// ADR 0043 A1 — the conservative next-body-cost fallback for the live `refill_bid` (the energy the
-/// deficit premium is amortized over). Matches the sim's own fallback (a bare 300 spawn body) used
-/// when no planned body fits; the EXACT cheapest-queued-body + the top-blocked ROI (the sim reads them
-/// from the spawn plans) need the spawn queue threaded into this mission — tracked A1 refinement.
-const REFILL_NEXT_BODY_COST_FALLBACK_E: u32 = 300;
-
 pub struct RoomTransferMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
@@ -175,7 +169,11 @@ impl RoomTransferMission {
         Ok(())
     }
 
-    fn transfer_request_haul_generator(room_entity: Entity, structure_data: Rc<RefCell<Option<StructureData>>>) -> TransferQueueGenerator {
+    fn transfer_request_haul_generator(
+        room_entity: Entity,
+        structure_data: Rc<RefCell<Option<StructureData>>>,
+        refill_cell: Rc<RefCell<crate::spawnsystem::RefillPricingContext>>,
+    ) -> TransferQueueGenerator {
         Box::new(move |system, transfer, _room_name| {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
             let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
@@ -194,27 +192,23 @@ impl RoomTransferMission {
             // demands (ADR 0040 M3 — the policy lives in screeps_econ_decision::demand).
             let (dto, targets) = Self::build_room_econ_dto(structure_data, room_data.name);
 
-            // ADR 0043 A1 — price the refill lane by the EV kernel. The deficit is the free energy the
-            // spawn/extension lane can still accept (== the sim's `capacity - available`). First cut:
-            // `top_blocked = None` and a conservative next-body-cost fallback (the sim's own 300 fallback);
-            // the exact cheapest-queued-body + top-blocked ROI need the spawn queue (tracked A1 refinement).
+            // ADR 0044 P1 — price the refill lane by the EV kernel with the EXACT spawn-queue inputs.
+            // The deficit is the free energy the spawn/extension lane can still accept (== the sim's
+            // `capacity - available`). `refill_cell` holds this room's marginal spawn-lane value,
+            // published from the COMPLETE queue immediately before this snapshot flush (same tick, no
+            // lag): the head-of-line body ROI drives the bid, the cheapest queued body is the floor's
+            // next-body denominator. No external `.min(cap)`: the kernel's imminent-spawn-bounded floor
+            // (≤ 2·par) plus its internal cap are the sole ceiling now (ADR 0044 retired the stopgap).
             let refill_lane_deficit: u32 =
                 dto.spawns.iter().map(|s| s.free_energy).sum::<u32>() + dto.extensions.iter().map(|e| e.free_energy).sum::<u32>();
             let market_consts = screeps_econ_decision::sink_economics::MarketConsts::default();
-            // Clamp to the named ROI cap (10×par). The derived floor `1000 + 1000·deficit/next_body`
-            // grows unbounded in `deficit`; with the conservative 300 next-body fallback a large (RCL8)
-            // lane would otherwise explode to ~40×par and starve the rest of the economy. The cap is the
-            // kernel's intended ceiling; a starved lane still pins at 10×par (well above the old flat 5000
-            // band, so no refill regression), and the sub-cap deficit-scaling (a nearly-full lane → ~par)
-            // is preserved. The exact cheapest-queued-body (which makes the whole curve sub-cap and matches
-            // the sim without the clamp) is the tracked A1 refinement.
+            let refill_ctx = *refill_cell.borrow();
             let refill_bid = screeps_econ_decision::sink_economics::refill_bid(
                 &market_consts,
-                None,
+                refill_ctx.top_blocked_roi_milli,
                 refill_lane_deficit,
-                REFILL_NEXT_BODY_COST_FALLBACK_E,
-            )
-            .min(market_consts.refill_roi_cap_milli);
+                refill_ctx.next_body_cost_e,
+            );
             Self::execute_demands(transfer, &targets, room_haul_demand(&dto), refill_bid);
 
             Ok(())
@@ -552,11 +546,15 @@ impl Mission for RoomTransferMission {
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         let structure_data_rc = system_data.supply_structure_cache.get_room(self.room_name);
+        // ADR 0044 P1 — capture this room's refill-pricing cell (mirrors the structure-data Rc). The
+        // hauling pass republishes it from the complete spawn queue each tick before the snapshot
+        // reads it here.
+        let refill_cell = system_data.spawn_queue.refill_context_cell(self.room_data);
 
         system_data.transfer_queue.register_generator(
             self.room_name,
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,
-            Self::transfer_request_haul_generator(self.room_data, structure_data_rc.clone()),
+            Self::transfer_request_haul_generator(self.room_data, structure_data_rc.clone(), refill_cell),
         );
 
         system_data.transfer_queue.register_generator(
