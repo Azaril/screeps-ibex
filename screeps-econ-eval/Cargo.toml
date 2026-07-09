@@ -22,6 +22,9 @@ screeps-sim-core = { git = "https://github.com/Azaril/screeps-sim-core" }
 # the fatigue-field oracle (oracle::optimal_path over rover's room_grid_dijkstra — NO new
 # pathfinding algorithms), and stats.rs (H + seeded bootstrap CI) — verbatim via the lib.
 screeps-rover-eval = { path = "../screeps-rover-eval" }
+# ADR 0044 P2: the REAL rover multi-room pathfinder (`LocalPathfinder::search` — offline/no-JS,
+# multi-room A*) backing the `RoverMover` for Family R. Git dep redirected by the root [patch].
+screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
 # The verified column-major terrain decoder (harness::terrain_import::decode_terrain) — the same
 # §D2 reuse rover-eval leans on. Git dep redirected by the root [patch].
 screeps-combat-eval = { git = "https://github.com/Azaril/screeps-combat-eval" }

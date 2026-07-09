@@ -327,7 +327,7 @@ pub fn run_world(
 
         // ── 1. Re-price the movement field if the road SET changed (death OR construction). ────
         if world.roads.len() != roads_before {
-            mover.invalidate_from(&world.movement.terrain);
+            mover.invalidate_from(&world.movement);
             roads_before = world.roads.len();
         }
 
@@ -479,7 +479,7 @@ pub fn run_world(
                     new_walls.push(p);
                 }
             }
-            mover.invalidate_from(&world.movement.terrain);
+            mover.invalidate_from(&world.movement);
             roads_before = world.roads.len();
             // Review B9 — the memo purge alone leaves IN-FLIGHT `Rc` traces walking through the
             // new wall: force any worker whose REMAINING trace crosses a fresh obstacle back to
