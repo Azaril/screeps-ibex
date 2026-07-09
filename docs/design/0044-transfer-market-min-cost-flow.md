@@ -102,6 +102,10 @@ Among admitted arcs, maximize the **existing** density `Σ bid_sink·flow / serv
 5. **Arms A0–A3** — `MarketArmCfg` flags (`admission`, `all_sinks_ev`), default off. A0=baseline, A1=market(admission off), A2=+admission, A3=+all-sinks. ⬜
 6. **Validate** — success gate + no single-room regression + CPU benchmark. ⬜
 
+**Deferred P2+ / future validation (operator notes, 2026-07-08/09):**
+- **Foreman-generated room plans across RCL stages** — eventually run REAL foreman room plans at a variety of RCL stages through the economy + transfer sim, to prove the economy/transfer model on realistic layouts (not just the healthy-home + synthetic-remote corridor). A stronger end-to-end validation than the hand-built corpora.
+- **Realistic terrain generation (also blocks a real combat-sim result).** The current sim rooms are too easy — open corridors + captured layouts don't stress pathfinding/positioning enough to generalize behavior and *prove* it works. Need EITHER a terrain generator matching the engine's (procedural walls/swamps with the engine's characteristics) OR a curated set of interesting/varied challenging layouts. This matters for the COMBAT sim too (its rooms are likewise too easy — positioning/pathing behavior can't be proven on trivial terrain). The Family-R synthetic remotes use open terrain today (predictable `d`); realistic terrain would make `routed ≫ Chebyshev`, which is exactly the regime the true-distance migration must handle — so this feeds directly into a credible step-2 validation.
+
 **Key resume facts (file:line):**
 - Shared movement primitives: `screeps-sim-core/src/rover_driver.rs:248` `resolve_moves_via_system_with(movement_state, &[SimMoveRequest], cache, cost_source, config)`; `SimMoveRequest` at `rover_driver.rs:86`; `resolve_movement` edge-exit relocation in `screeps-sim-core/src/tick.rs:25`. `EconWorld.movement` is already the shared multi-room `MovementState`.
 - Rover traits: `screeps-rover/src/traits.rs:76` `CostMatrixDataSource {get_structure_costs, get_construction_site_costs, get_creep_costs}`; `PathfindingProvider` at `traits.rs:20`.

@@ -427,6 +427,145 @@ pub fn steady_catalog(seed: u32) -> Vec<SteadyScenario> {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
+// Family R — REMOTE MINING (ADR 0044 P2). A healthy home plus synthetic remote sources at
+// controlled TRUE path-distances (open corridor rooms east of home), so the reduced-cost admission
+// can be measured serving/declining remote hauls by distance. The runner drives creeps with the
+// multi-room `RoverMover` (selected when `remote_distances` is non-empty).
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// One remote-mining scenario: a healthy home + remote sources at the given true path distances.
+#[derive(Clone, Debug)]
+pub struct FamilyRScenario {
+    pub name: String,
+    pub layout_room: String,
+    pub rcl: u8,
+    /// True path-distances (tiles east of the home spawn) of the remote sources, e.g.
+    /// `[10,40,90,150,210,260]` — spanning same-room (10) to ~5 rooms out (260).
+    pub remote_distances: Vec<u32>,
+    pub tick_cap: u32,
+    pub seed: u32,
+}
+
+impl FamilyRScenario {
+    pub fn new(room: &str, rcl: u8, remote_distances: Vec<u32>, seed: u32) -> Self {
+        FamilyRScenario {
+            name: format!("R-{room}-rcl{rcl}#s{seed}"),
+            layout_room: room.to_string(),
+            rcl,
+            remote_distances,
+            tick_cap: DEFAULT_S_TICK_CAP,
+            seed,
+        }
+    }
+
+    /// Instantiate the multi-room world: a healthy home (mirrors [`SteadyScenario::instantiate`]) +
+    /// synthetic remotes. Each remote is a `SimSource` (+ drop container one tile toward home) placed
+    /// `d` tiles east of the home spawn over OPEN corridor rooms, so the true routed distance ≈ `d`.
+    /// The home room keeps its realized terrain (structure walls); only the corridor rooms are open.
+    pub fn instantiate(&self) -> (EconWorld, SimTerrain, LayoutInfo) {
+        let layouts = captured_layouts();
+        let layout: &CapturedLayout = layouts
+            .iter()
+            .find(|l| l.room == self.layout_room)
+            .unwrap_or_else(|| panic!("family-R layout `{}` not in the captured cache", self.layout_room));
+        let realized = realize(layout, &RealizeParams { rcl: self.rcl, road_health_pct: 100, seed: self.seed });
+        let mut world = realized.world;
+        let info = realized.info;
+
+        // Healthy home stores: full spawn lane + stocked storage (RCL ≥ 4 by construction).
+        for i in 0..world.extensions.len() {
+            world.extensions[i].store_energy = world.extensions[i].capacity;
+        }
+        if let Some(storage) = world.storage.as_mut() {
+            storage.store.add(SimResource::Energy, 200_000);
+        }
+
+        // Synthetic remotes over an OPEN corridor east of home.
+        let home_spawn = world.spawns[0].pos;
+        let home_room = home_spawn.room_name();
+        // Carve a guaranteed east exit channel along the spawn's row: captured rooms need not have
+        // an east exit (E11N1 has none), so clear the home terrain's walls on that row from the
+        // spawn to the east border, connecting to the open corridor. A synthetic "remote highway"
+        // — a deterministic modeling stopgap until realistic terrain generation lands (ADR deferred
+        // note); the structures still exist as world objects, only their pathing-wall tiles on this
+        // one row are cleared.
+        let (sx, sy) = (home_spawn.x().u8(), home_spawn.y().u8());
+        for x in sx..50 {
+            world.movement.terrain.walls.remove(&(x, sy));
+        }
+        // Register the HOME room as a known world room (with its carved terrain) so the multi-room
+        // mover treats every OTHER room as impassable and never wanders off the corridor.
+        world.movement.rooms.insert(home_room, world.movement.terrain.clone());
+        // The corridor rooms are a 3-wide horizontal CHANNEL at the spawn's row (walled elsewhere):
+        // this forces the multi-room search onto a straight highway — no diagonal room-CORNER
+        // crossings (which the single-step walk cannot follow) — while leaving room for the remote
+        // harvester + container beside the source.
+        let mut channel = SimTerrain::default();
+        let (lo, hi) = (sy.saturating_sub(1), (sy + 1).min(49));
+        for x in 0..50u8 {
+            for y in 0..50u8 {
+                if y < lo || y > hi {
+                    channel.walls.insert((x, y));
+                }
+            }
+        }
+        let max_d = self.remote_distances.iter().copied().max().unwrap_or(0);
+        for step in 1..=max_d {
+            if let Ok(p) = home_spawn.checked_add((step as i32, 0)) {
+                if p.room_name() != home_room {
+                    world.movement.rooms.entry(p.room_name()).or_insert_with(|| channel.clone());
+                }
+            }
+        }
+        for &d in &self.remote_distances {
+            let Ok(src_pos) = home_spawn.checked_add((d as i32, 0)) else {
+                continue;
+            };
+            world.add_source(src_pos, crate::layout::SOURCE_CAPACITY);
+            if let Ok(cont_pos) = src_pos.checked_add((-1, 0)) {
+                world.add_container(
+                    cont_pos,
+                    crate::layout::CONTAINER_CAPACITY,
+                    screeps_econ_engine::constants::CONTAINER_HITS,
+                );
+            }
+        }
+
+        // Seed the fleet AFTER the remotes so every source (home + remote) gets shuttle harvesters;
+        // extra haulers for the remote lanes.
+        let mut rng = Rng::seeded(self.seed.wrapping_mul(6151).wrapping_add(29));
+        let capacity = crate::baseline::spawn_lane_capacity(&world);
+        let harvester = crate::baseline::harvester_body(capacity).expect("capacity ≥ 300");
+        let hauler = crate::baseline::hauler_body(capacity).expect("capacity ≥ 300");
+        let n_sources = world.sources.len();
+        let mut placed = 0u8;
+        for _ in 0..n_sources {
+            for _ in 0..2 {
+                let tile = fleet_tile(&world, home_spawn, placed);
+                placed = placed.wrapping_add(1);
+                let ttl = rng.range(200, 1400);
+                world.add_creep(tile, &harvester, ttl);
+            }
+        }
+        let n_haulers = 2 + self.remote_distances.len();
+        for _ in 0..n_haulers {
+            let tile = fleet_tile(&world, home_spawn, placed);
+            placed = placed.wrapping_add(1);
+            let ttl = rng.range(200, 1400);
+            world.add_creep(tile, &hauler, ttl);
+        }
+
+        (world, realized.terrain, info)
+    }
+}
+
+/// The R corpus: one healthy home + the ADR 0044 remote distance ladder (straddling the
+/// break-even).
+pub fn remote_catalog(seed: u32) -> Vec<FamilyRScenario> {
+    vec![FamilyRScenario::new("E11N1", 6, vec![10, 40, 90, 150, 210, 260], seed)]
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
 // Family M — CONTENDED matching (M4 review #2). The §D3 matching-frontier / §D8 #4 escalation
 // question and the M5a CPU budget cannot be ratified on home-room floors (~1.1 edges/pass, a
 // FEW carriers): the greedy's myopia only bites when a pass generates MANY candidate edges into
@@ -622,6 +761,40 @@ fn skeleton_tile(world: &EconWorld, spawn_pos: Position) -> Position {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR 0044 P2: Family R instantiates a MULTI-ROOM world — a healthy home plus remote sources
+    /// at controlled distances over open corridor rooms — and the multi-room `RoverMover` reaches
+    /// the farthest remote at ≈ the requested TRUE routed distance (the axis the admission prices).
+    #[test]
+    fn family_r_instantiates_multiroom_and_remotes_reachable() {
+        let sc = FamilyRScenario::new("E11N1", 6, vec![40, 150], 7);
+        let (world, _terrain, _info) = sc.instantiate();
+        // Corridor rooms populated (home stays default; E12/E13/E14 open) and remotes added.
+        assert!(!world.movement.rooms.is_empty(), "corridor rooms present (multi-room)");
+        assert!(world.sources.len() >= 2, "home + remote sources");
+        assert!(world.storage.as_ref().unwrap().store.amount(SimResource::Energy) >= 200_000, "healthy home");
+        // The home room is a known world room but keeps its REAL terrain (walls), not open corridor.
+        let home_room = world.spawns[0].pos.room_name();
+        assert!(
+            !world.movement.rooms.get(&home_room).unwrap().walls.is_empty(),
+            "home keeps its realized (walled) terrain, not open corridor"
+        );
+
+        // The mover routes home → the farthest remote at the true routed distance (~150 on open).
+        let home_spawn = world.spawns[0].pos;
+        let far = home_spawn.checked_add((150, 0)).unwrap();
+        use crate::movement::Mover;
+        let mut m = crate::movement::RoverMover::new(&world.movement);
+        let body = screeps_sim_core::SimBody::unboosted(&[Part::Carry, Part::Move]);
+        // Every remote is reachable at ≈ its requested true routed distance.
+        for &probe in &[40u32, 150] {
+            let g = home_spawn.checked_add((probe as i32, 0)).unwrap();
+            let d = m.travel_ticks(home_spawn, g, 1, &body, 0).unwrap_or_else(|| panic!("remote +{probe} unreachable"));
+            assert!((probe..=probe + 20).contains(&d), "remote +{probe}: true routed distance {d} ≈ {probe}");
+        }
+        let d = m.travel_ticks(home_spawn, far, 1, &body, 0).expect("remote reachable");
+        assert!((150..=170).contains(&d), "true routed distance ≈ 150: {d}");
+    }
 
     /// Catalog well-posedness: every scenario instantiates; the collapse drain holds; controls
     /// differ ONLY on the road axis; skeletons exist; RCL-3 scenarios carry no S0.

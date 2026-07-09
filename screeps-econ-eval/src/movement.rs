@@ -209,8 +209,9 @@ const MATRIX_ROAD_COST: u8 = 1;
 const MATRIX_PLAIN_COST: u8 = 2;
 const MATRIX_SWAMP_COST: u8 = 10;
 const MATRIX_IMPASSABLE: u8 = u8::MAX;
-/// Per-search op cap for the multi-room A* (best-effort past it ⇒ treated as unreachable).
-const SEARCH_MAX_OPS: u32 = 20_000;
+/// Per-search op cap for the multi-room A* — generous (this is the OFFLINE sim, not the live CPU
+/// budget), so a long multi-room corridor route completes rather than best-efforting to `incomplete`.
+const SEARCH_MAX_OPS: u32 = 2_000_000;
 
 /// Bake a room's terrain into a `LocalCostMatrix` for `LocalPathfinder::search`: walls impassable,
 /// swamp raised, roads lowered; plains left `0` (= `plain_cost`). Terrain-only — exactly the field
@@ -341,9 +342,16 @@ impl Mover for RoverMover {
             let result = {
                 let RoverMover { default_terrain, rooms, matrices, pathfinder, .. } = &mut *self;
                 let mut callback = |room: RoomName| -> Option<LocalCostMatrix> {
-                    let m = matrices
-                        .entry(room)
-                        .or_insert_with(|| room_cost_matrix(rooms.get(&room).unwrap_or(default_terrain)));
+                    // A room OUTSIDE the world (not in `rooms`) is IMPASSABLE (`None`) — otherwise the
+                    // A* on open corridor rooms wanders into undefined neighbours (which the walk then
+                    // can't follow across their corners). The single-room degenerate case (empty
+                    // `rooms`) falls back to `default_terrain` for the one room the search stays in.
+                    if rooms.is_empty() {
+                        let m = matrices.entry(room).or_insert_with(|| room_cost_matrix(default_terrain));
+                        return Some(m.clone());
+                    }
+                    let t = rooms.get(&room)?;
+                    let m = matrices.entry(room).or_insert_with(|| room_cost_matrix(t));
                     Some(m.clone())
                 };
                 pathfinder.search(from, to, range as u32, &mut callback, SEARCH_MAX_OPS, MATRIX_PLAIN_COST, MATRIX_SWAMP_COST)
@@ -413,6 +421,7 @@ mod tests {
         // The room one step east of home (W1N1), derived via `checked_add` (no hardcoded name).
         let east_room = pos(49, 25).checked_add((1, 0)).unwrap().room_name();
         let mut rooms = HashMap::new();
+        rooms.insert(pos(0, 0).room_name(), SimTerrain::default()); // home must be a KNOWN world room
         rooms.insert(east_room, SimTerrain::default());
         let movement = MovementState { terrain: SimTerrain::default(), rooms, ..Default::default() };
         let mut m = RoverMover::new(&movement);
