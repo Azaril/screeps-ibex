@@ -78,7 +78,15 @@ pub fn run_room_market(
 ) -> RoomMarketResult {
     let opportunity_floor = room_opportunity_floor(consts, &input.deposits);
     let top = top_unmet_bids(consts, &input.deposits, 3);
-    let out = market::market_pass(&input.carriers, &input.deposits, &input.pickups, same_structure);
+    // ADR 0044: live runs the reduced-cost admission ON — plains road factor for the haul
+    // subtraction (the shipped behavior; the sim toggles this per arm, live never does).
+    let out = market::market_pass(
+        &input.carriers,
+        &input.deposits,
+        &input.pickups,
+        screeps_econ_decision::sink_economics::HAUL_ROAD_Q_PLAINS_PERMILLE,
+        same_structure,
+    );
     RoomMarketResult {
         assignments: out.assignments,
         opportunity_floor,

@@ -2742,9 +2742,13 @@ mod tests {
             .collect();
         let deposit_targets: Vec<TransferTarget> = deposits.iter().map(|(t, ..)| *t).collect();
         let pickup_targets: Vec<TransferTarget> = pickups.iter().map(|(t, _)| *t).collect();
-        market_pass(&[carrier], &k_deposits, &k_pickups, |src, sink| {
-            pickup_targets[src as usize] == deposit_targets[sink as usize]
-        })
+        market_pass(
+            &[carrier],
+            &k_deposits,
+            &k_pickups,
+            screeps_econ_decision::sink_economics::HAUL_ROAD_Q_PLAINS_PERMILLE,
+            |src, sink| pickup_targets[src as usize] == deposit_targets[sink as usize],
+        )
         .assignments
         .into_iter()
         .next()

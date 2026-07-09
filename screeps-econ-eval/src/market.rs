@@ -66,6 +66,11 @@ pub struct MarketArmCfg {
     /// `oracle_period` ticks). Off in sweeps (cost), on in the adjudication runs.
     pub measure_gap: bool,
     pub oracle_period: u32,
+    /// ADR 0044 — the reduced-cost ADMISSION (stage-1 `source_floor` + `haul(d)` subtraction). OFF
+    /// (default) reproduces the pre-0044 e/t market (haul as the `service_ticks` divisor only) — the
+    /// A1 arm; ON is A2. Gated so the existing ADR-0040 arms stay byte-identical (P0-core made the
+    /// sim populate these unconditionally; this restores the gate).
+    pub admission: bool,
 }
 
 impl Default for MarketArmCfg {
@@ -75,6 +80,7 @@ impl Default for MarketArmCfg {
             k4_bodies: true,
             measure_gap: false,
             oracle_period: 25,
+            admission: false,
         }
     }
 }
@@ -383,11 +389,16 @@ impl MarketRuntime {
                 src: i as u32,
                 pos: p.pos,
                 available: p.available,
-                source_floor_milli: src_floor_milli(p.src),
+                // ADR 0044: gate the stage-1 admission on the arm — OFF (A0/A1) prices the pre-0044
+                // market (haul as divisor only); ON (A2/A3) applies the reduced-cost source_floor.
+                source_floor_milli: if self.cfg.admission { src_floor_milli(p.src) } else { 0 },
             })
             .collect();
 
-        let out = mk::market_pass(&k_carriers, &k_deposits, &k_pickups, |src_idx, sink_idx| {
+        // `haul_road_q = 0` disables the stage-1 haul subtraction (with source_floor 0 above) — the
+        // admission-OFF arm; plains factor is the reduced-cost ON arm (ADR 0044).
+        let haul_road_q = if self.cfg.admission { econ::HAUL_ROAD_Q_PLAINS_PERMILLE } else { 0 };
+        let out = mk::market_pass(&k_carriers, &k_deposits, &k_pickups, haul_road_q, |src_idx, sink_idx| {
             same_structure(pickups[src_idx as usize].src, deposits[sink_idx as usize].sink)
         });
 

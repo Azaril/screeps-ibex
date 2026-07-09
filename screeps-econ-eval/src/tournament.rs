@@ -44,11 +44,17 @@ pub fn arms(consts: MarketConsts, measure_gap: bool, oracle_period: u32) -> Vec<
         Arm { name: "ptrp", cfg: PolicyConfig::ptrp() },
         Arm {
             name: "market-k4off",
-            cfg: PolicyConfig::market(MarketArmCfg { consts, k4_bodies: false, measure_gap: false, oracle_period }),
+            cfg: PolicyConfig::market(MarketArmCfg { consts, k4_bodies: false, measure_gap: false, oracle_period, admission: false }),
         },
         Arm {
             name: "market",
-            cfg: PolicyConfig::market(MarketArmCfg { consts, k4_bodies: true, measure_gap, oracle_period }),
+            cfg: PolicyConfig::market(MarketArmCfg { consts, k4_bodies: true, measure_gap, oracle_period, admission: false }),
+        },
+        // ADR 0044 A2: the reduced-cost ADMISSION arm — identical to `market` (A1) but with the
+        // stage-1 `source_floor` + `haul(d)` subtraction ON. The A1→A2 delta isolates the admission.
+        Arm {
+            name: "market-adm",
+            cfg: PolicyConfig::market(MarketArmCfg { consts, k4_bodies: true, measure_gap, oracle_period, admission: true }),
         },
     ]
 }
@@ -611,7 +617,7 @@ pub fn evaluate_point(
 ) -> SweepScore {
     let arm = Arm {
         name: "market",
-        cfg: PolicyConfig::market(MarketArmCfg { consts: consts_point, k4_bodies: true, measure_gap: false, oracle_period: 25 }),
+        cfg: PolicyConfig::market(MarketArmCfg { consts: consts_point, k4_bodies: true, measure_gap: false, oracle_period: 25, admission: false }),
     };
     SweepScore { result: run_arm(&arm, spec, recover, Some(baseline_t), s_baseline).0 }
 }

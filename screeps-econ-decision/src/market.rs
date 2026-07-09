@@ -160,6 +160,11 @@ pub fn market_pass(
     carriers: &[MarketCarrier],
     deposits: &[MarketDeposit],
     pickups: &[MarketPickup],
+    // ADR 0044: the per-mille road factor for the stage-1 haul subtraction (`haul_milli(d, q)`);
+    // `HAUL_ROAD_Q_PLAINS_PERMILLE` = plains (live default). `0` disables the haul subtraction
+    // (`haul_milli(d,0)=0`) — the config-gate the sim's admission-OFF arm uses (with source_floor
+    // also 0) to reproduce the pre-reduced-cost market (haul as the `service_ticks` divisor only).
+    haul_road_q: u32,
     same_structure: impl Fn(u32, u32) -> bool,
 ) -> MarketPassResult {
     let mut result = MarketPassResult::default();
@@ -268,7 +273,7 @@ pub fn market_pass(
                         bid_milli: bid,
                         service_ticks: service,
                         source_floor_milli: pickups[pi].source_floor_milli,
-                        haul_cost_milli: econ::haul_milli(haul_d, econ::HAUL_ROAD_Q_PLAINS_PERMILLE),
+                        haul_cost_milli: econ::haul_milli(haul_d, haul_road_q),
                     });
                 }
             }
@@ -371,7 +376,7 @@ mod tests {
             // a stressed container close, high bid.
             MarketDeposit { sink: 1, pos: pos(11, 10), bid_milli: 5000, unfulfilled: 100, is_refill: false },
         ];
-        let res = market_pass(&carriers, &deposits, &[], |_, _| false);
+        let res = market_pass(&carriers, &deposits, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false);
         assert_eq!(res.assignments.len(), 1);
         assert_eq!(res.assignments[0].carrier, 7);
         match res.assignments[0].task {
@@ -394,7 +399,7 @@ mod tests {
             MarketDeposit { sink: 11, pos: pos(25, 20), bid_milli: 6000, unfulfilled: 50, is_refill: true },
         ];
         let pickups = [MarketPickup { src: 99, pos: pos(20, 21), available: 500, source_floor_milli: 0 }];
-        let res = market_pass(&carriers, &deposits, &pickups, |_, _| false);
+        let res = market_pass(&carriers, &deposits, &pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false);
         assert_eq!(res.assignments.len(), 1);
         match res.assignments[0].task {
             MarketTask::PickupDeliver { src, sink, take, give, .. } => {
@@ -413,10 +418,10 @@ mod tests {
         let harvester = [MarketCarrier { id: 3, pos: pos(10, 10), free: 0, held: 50, opportunity_milli: 2000 }];
         // par storage: surplus 0 — the harvester keeps harvesting (no assignment).
         let par = [MarketDeposit { sink: 0, pos: pos(11, 10), bid_milli: 1000, unfulfilled: 500, is_refill: false }];
-        assert!(market_pass(&harvester, &par, &[], |_, _| false).assignments.is_empty());
+        assert!(market_pass(&harvester, &par, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false).assignments.is_empty());
         // stressed refill at 12×: surplus (11000)·50 ≫ 2000·(range+1) — it delivers.
         let stress = [MarketDeposit { sink: 0, pos: pos(11, 10), bid_milli: 12_000, unfulfilled: 500, is_refill: true }];
-        assert_eq!(market_pass(&harvester, &stress, &[], |_, _| false).assignments.len(), 1);
+        assert_eq!(market_pass(&harvester, &stress, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false).assignments.len(), 1);
     }
 
     /// `same_structure` blocks a self-withdraw: a carrier cannot be told to withdraw from the
@@ -427,15 +432,15 @@ mod tests {
         let deposits = [MarketDeposit { sink: 5, pos: pos(11, 10), bid_milli: 3000, unfulfilled: 100, is_refill: false }];
         // The only pickup IS sink 5 (src index 5 maps to sink 5).
         let pickups = [MarketPickup { src: 5, pos: pos(11, 10), available: 100, source_floor_milli: 0 }];
-        let res = market_pass(&carriers, &deposits, &pickups, |src, sink| src == sink);
+        let res = market_pass(&carriers, &deposits, &pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |src, sink| src == sink);
         assert!(res.assignments.is_empty(), "no self-withdraw edge is generated");
     }
 
     /// Empty world / no carriers ⇒ empty result, no panic.
     #[test]
     fn empty_inputs_are_safe() {
-        assert!(market_pass(&[], &[], &[], |_, _| false).assignments.is_empty());
+        assert!(market_pass(&[], &[], &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false).assignments.is_empty());
         let c = [MarketCarrier { id: 1, pos: pos(1, 1), free: 100, held: 0, opportunity_milli: 0 }];
-        assert!(market_pass(&c, &[], &[], |_, _| false).assignments.is_empty());
+        assert!(market_pass(&c, &[], &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, |_, _| false).assignments.is_empty());
     }
 }
