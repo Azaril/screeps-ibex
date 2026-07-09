@@ -148,6 +148,8 @@ pub struct RunOutcome {
     pub self_sufficient_at: Option<u32>,
     /// Construction sites completed during the run, by kind (road rebuilds show here).
     pub sites_built: BTreeMap<&'static str, u32>,
+    /// ADR 0044 P2 remote-haul instruments (Family R; zero on single-room families).
+    pub remote: crate::metrics::RemoteInstruments,
 }
 
 impl RunOutcome {
@@ -315,6 +317,7 @@ pub fn run_world(
     let mut tracker = RecoveryTracker::new(opts.consts, world.sources.len() as u32);
     let mut sentinel = DeadlockSentinel::default();
     let mut diagnostics = Diagnostics::default();
+    let mut remote_instr = crate::metrics::RemoteInstruments::default();
     let mut report_digest: u64 = 0xcbf2_9ce4_8422_2325;
     let mut ticks_run = 0u32;
     let mut roads_before = world.roads.len();
@@ -520,6 +523,13 @@ pub fn run_world(
             }
         }
 
+        // ADR 0044 P2 remote-haul instruments: in-flight energy (Σ creep carry), carrier
+        // utilization (creeps with energy aboard), and dropped/wasted energy present this tick.
+        let in_flight: u32 = world.movement.creeps.iter().map(|c| c.carry_used).sum();
+        let carrying = world.movement.creeps.iter().filter(|c| c.carry_used > 0).count() as u32;
+        let dropped: u32 = world.dropped.iter().map(|d| d.amount).sum();
+        remote_instr.sample(in_flight, carrying, dropped);
+
         // Diagnostics + recovery + the sentinel.
         let capacity = baseline::spawn_lane_capacity(world);
         let lane_energy = world.room_spawn_energy();
@@ -649,6 +659,7 @@ pub fn run_world(
         match_passes,
         match_max_edges,
         match_gap,
+        remote: remote_instr,
     }
 }
 
@@ -1829,9 +1840,14 @@ mod tests {
         let mut mover = crate::movement::RoverMover::new(&world.movement);
         let mut opts = RunOptions::new(PolicyConfig::default(), RecoverConsts::default(), 2_000);
         opts.goal = RunGoal::Horizon;
-        let _out = run_world(&sc.shell(), &mut world, &mut mover, &info, &opts);
+        let out = run_world(&sc.shell(), &mut world, &mut mover, &info, &opts);
         let creep_in_remote = world.movement.creeps.iter().any(|c| c.pos.room_name() != home_room);
         assert!(creep_in_remote, "a creep reached a remote room — cross-room movement is live");
+        // ADR 0044 P2 instruments fire: energy IS in flight (carriers hauling remote energy) and
+        // carriers spend real transit time (the remote-haul signature).
+        assert!(out.remote.mean_in_flight() > 0, "in-flight energy > 0 (remote hauling active)");
+        assert!(out.remote.in_flight_max > 0);
+        assert!(out.remote.carrier_ticks > 0, "carriers are utilized");
     }
 
     /// ADR 0044 P2 validation (observation): run the MARKET arm with the reduced-cost admission OFF

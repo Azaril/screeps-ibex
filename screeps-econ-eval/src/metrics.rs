@@ -202,6 +202,45 @@ impl Diagnostics {
     }
 }
 
+/// ADR 0044 P2 remote-haul instruments (Family R). All zero on single-room families (nothing is
+/// carried far). Accumulated once per tick in `run_world`; reported off `RunOutcome`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RemoteInstruments {
+    /// Σ over ticks of the total energy carried by all live creeps (in-flight energy — ADR 0044
+    /// instrument C / Little's-Law diagnostic). Mean = this / `ticks`.
+    in_flight_sum: u64,
+    /// Peak single-tick in-flight energy.
+    pub in_flight_max: u32,
+    /// Carrier-ticks: Σ over ticks of the count of creeps carrying energy (utilization — instrument
+    /// C; higher on remote lanes where carriers spend longer in transit per delivery).
+    pub carrier_ticks: u64,
+    ticks: u32,
+    /// Energy present each tick in DROPPED piles, summed over ticks (a decay/waste proxy —
+    /// instrument E; dropped energy that lingers is being wasted to decay).
+    pub dropped_tick_integral: u64,
+}
+
+impl RemoteInstruments {
+    /// One tick's sample: `in_flight` = Σ creep carry, `carrying` = creeps with energy aboard,
+    /// `dropped` = Σ dropped-pile energy present.
+    pub fn sample(&mut self, in_flight: u32, carrying: u32, dropped: u32) {
+        self.in_flight_sum += in_flight as u64;
+        self.in_flight_max = self.in_flight_max.max(in_flight);
+        self.carrier_ticks += carrying as u64;
+        self.dropped_tick_integral += dropped as u64;
+        self.ticks += 1;
+    }
+
+    /// Mean in-flight energy over the run.
+    pub fn mean_in_flight(&self) -> u32 {
+        if self.ticks == 0 {
+            0
+        } else {
+            (self.in_flight_sum / self.ticks as u64) as u32
+        }
+    }
+}
+
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 // H over Family C — rover-eval stats verbatim; W = T* with the 25%-per-family single-scenario
 // weight cap (ADR §D7: one scenario may not dominate its family's H).
