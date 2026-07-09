@@ -960,6 +960,7 @@ fn create_environment() -> GameEnvironment {
     world.insert(EconomySnapshot::default());
     world.insert(SpawnQueueSnapshot::default());
     world.insert(crate::pathing::pathfinderservice::PathfinderService::default());
+    world.insert(crate::pathing::hauldistance::HaulDistanceService::default());
     // Explicit (not just setup-derived): the metrics state must exist
     // before deserialize_world's run_now, whose SystemData is never
     // setup() (M3 — deser failures count into it).

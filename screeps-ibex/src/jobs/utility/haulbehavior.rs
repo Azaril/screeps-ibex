@@ -149,6 +149,7 @@ pub fn get_new_market_pickup_and_delivery_state<TF, PF, DF, R>(
     pickup_rooms: &[&RoomData],
     delivery_rooms: &[&RoomData],
     transfer_queue: &mut TransferQueue,
+    dist: &mut dyn crate::transfer::market_adapter::HaulDistance,
     target_filter: TF,
     pickup_state: PF,
     delivery_state: DF,
@@ -177,6 +178,7 @@ where
         creep.pos(),
         free_capacity,
         carried_energy,
+        dist,
         target_filter,
     )?;
 

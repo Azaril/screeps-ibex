@@ -275,6 +275,17 @@ pub struct PathingMetrics {
     /// Mission-side ops consumed from the pool this tick.
     #[serde(default)]
     pub mission_ops_used: u32,
+    /// ADR 0044 step 2 — haul-distance oracle PATHFINDS this tick (cache misses that ran a rover
+    /// search). The ship-gate CPU signal: this should fall to ~0 in steady state (static structure
+    /// pairs), spiking only on new lanes / layout change.
+    #[serde(default)]
+    pub haul_dist_computes: u32,
+    /// Haul-distance oracle cache HITS this tick (memoized pairs served without a search).
+    #[serde(default)]
+    pub haul_dist_hits: u32,
+    /// Cached `(pickup, sink)` distance pairs resident in the memo.
+    #[serde(default)]
+    pub haul_dist_cached_pairs: u32,
 }
 
 impl MetricsBlock {

@@ -324,6 +324,7 @@ pub struct MetricsSystemData<'a> {
     memory_arbiter: WriteExpect<'a, MemoryArbiter>,
     governor: Read<'a, GovernorSnapshot>,
     pathfinder: Read<'a, PathfinderService>,
+    haul_distance: Read<'a, crate::pathing::hauldistance::HaulDistanceService>,
     intents: Read<'a, crate::intents::IntentRecorder>,
     squad_contexts: ReadStorage<'a, crate::military::squad::SquadContext>,
     energy_leak: Read<'a, crate::energy_stress::EnergyLeakStats>,
@@ -432,6 +433,7 @@ impl MetricsSystem {
             }),
             pathing: Some({
                 let (mission_pool, mission_used) = data.pathfinder.snapshot();
+                let (haul_computes, haul_hits, haul_pairs) = data.haul_distance.snapshot();
                 PathingMetrics {
                     ops_used: data.state.movement_ops_consumed,
                     ops_pool: data.state.movement_ops_cap,
@@ -440,6 +442,9 @@ impl MetricsSystem {
                     wasted_moves: data.state.movement_wasted,
                     mission_ops_pool: mission_pool,
                     mission_ops_used: mission_used,
+                    haul_dist_computes: haul_computes,
+                    haul_dist_hits: haul_hits,
+                    haul_dist_cached_pairs: haul_pairs as u32,
                 }
             }),
             intents: Some({

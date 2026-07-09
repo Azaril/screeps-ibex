@@ -8,6 +8,7 @@ use crate::features::Features;
 use crate::intents::IntentRecorder;
 use crate::military::economy::EconomySnapshot;
 use crate::military::squad::SquadContext;
+use crate::pathing::hauldistance::HaulDistanceService;
 use crate::pathing::pathfinderservice::PathfinderService;
 use crate::repairqueue::RepairQueue;
 use crate::room::data::*;
@@ -36,6 +37,12 @@ pub struct JobSystemData<'a> {
     energy_leak: Write<'a, EnergyLeakStats>,
     visibility_queue: Write<'a, VisibilityQueue>,
     pathfinder: Write<'a, PathfinderService>,
+    /// ADR 0044 step 2 — the shared per-room cost-matrix cache (also driven by `MovementUpdateSystem`;
+    /// segment-loaded, structures built once/tick) + the `(pickup,sink)` routed-distance memo. The
+    /// hauler market pass prices the haul leg on the true routed distance through these (via a
+    /// `RoverDistanceOracle`), matching the sim mover.
+    cost_matrix_cache: WriteExpect<'a, CostMatrixCache>,
+    haul_distance_service: Write<'a, HaulDistanceService>,
     intent_recorder: Write<'a, IntentRecorder>,
     breach_cache: Write<'a, BreachPlanCache>,
     /// The tick's CPU-pressure view (ADR 0004) — read by the hauler re-match cadence
@@ -67,6 +74,10 @@ pub struct JobExecutionRuntimeData<'a> {
     pub movement_results: &'a MovementResults<Entity>,
     pub visibility_queue: &'a mut VisibilityQueue,
     pub pathfinder: &'a mut PathfinderService,
+    /// ADR 0044 step 2 — the pieces the hauler market pass builds a `RoverDistanceOracle` from to
+    /// price the haul leg on true routed distance (shared cost matrices + the distance memo).
+    pub cost_matrix_cache: &'a mut CostMatrixCache,
+    pub haul_distance_service: &'a mut HaulDistanceService,
     pub intent_recorder: &'a mut IntentRecorder,
     pub breach_cache: &'a mut BreachPlanCache,
     /// Repair-leak telemetry counters (ADR 0040 §D6 `repair_leak_e` — always-on).
@@ -121,6 +132,8 @@ impl<'a> System<'a> for PreRunJobSystem {
                     movement_results: &data.movement_results,
                     visibility_queue: &mut data.visibility_queue,
                     pathfinder: &mut data.pathfinder,
+                    cost_matrix_cache: &mut data.cost_matrix_cache,
+                    haul_distance_service: &mut data.haul_distance_service,
                     intent_recorder: &mut data.intent_recorder,
                     breach_cache: &mut data.breach_cache,
                     energy_leak: &mut data.energy_leak,
@@ -155,6 +168,8 @@ impl<'a> System<'a> for RunJobSystem {
             // deposit keys is the same quantity every hauler selection admits against this tick.
             data.transfer_queue.publish_market_floor(&mut data.market_bids);
         }
+        // ADR 0044 step 2: start the haul-distance CPU-benchmark window for this tick (the ship gate).
+        data.haul_distance_service.reset_tick_counters();
 
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
@@ -178,6 +193,8 @@ impl<'a> System<'a> for RunJobSystem {
                     movement_results: &data.movement_results,
                     visibility_queue: &mut data.visibility_queue,
                     pathfinder: &mut data.pathfinder,
+                    cost_matrix_cache: &mut data.cost_matrix_cache,
+                    haul_distance_service: &mut data.haul_distance_service,
                     intent_recorder: &mut data.intent_recorder,
                     breach_cache: &mut data.breach_cache,
                     energy_leak: &mut data.energy_leak,

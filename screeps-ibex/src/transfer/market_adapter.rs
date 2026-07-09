@@ -23,6 +23,29 @@
 use screeps_econ_decision::market::{self, MarketAssignment, MarketCarrier, MarketDeposit, MarketPickup};
 use screeps_econ_decision::sink_economics::{self as econ, MarketConsts};
 
+/// ADR 0044 step 2 — the NARROW haul-distance seam. The transfer/market layer prices the
+/// pickup→sink haul leg through this trait ONLY; it never touches rover / `PathfinderService` /
+/// cost-matrix internals (the operator's loose-coupling constraint). The live job layer injects a
+/// rover-backed cached oracle (`crate::pathing::hauldistance::RoverDistanceOracle`) that computes
+/// the SAME full-tile routed distance the sim's `RoverMover` uses — so tournament tuning done on
+/// the sim transfers to live. Unit tests, the M5a parity fixture, and the incomplete-route fallback
+/// use [`ChebyshevDistance`].
+pub trait HaulDistance {
+    /// Routed tile-distance a hauler travels from `from` to `to` (the structural pickup→sink leg).
+    fn haul_distance(&mut self, from: screeps::Position, to: screeps::Position) -> u32;
+}
+
+/// The straight-line stand-in: same-room it ≈ the true routed distance (small error inside 50×50);
+/// cross-room it is the global-coordinate Chebyshev. Used by unit tests, the parity fixture, and as
+/// the live fallback when a rover route is incomplete/unreachable.
+pub struct ChebyshevDistance;
+
+impl HaulDistance for ChebyshevDistance {
+    fn haul_distance(&mut self, from: screeps::Position, to: screeps::Position) -> u32 {
+        from.get_range_to(to)
+    }
+}
+
 /// One room's market inputs for a tick — the priced deposits, the haul-lane pickups, and the
 /// idle carriers. Built by the caller from the live world (or by the parity test from a
 /// fixture); consumed by [`run_room_market`].
@@ -74,21 +97,22 @@ pub fn top_unmet_bids(consts: &MarketConsts, deposits: &[MarketDeposit], n: usiz
 pub fn run_room_market(
     consts: &MarketConsts,
     input: &RoomMarketInput,
+    dist: &mut dyn HaulDistance,
     same_structure: impl Fn(u32, u32) -> bool,
 ) -> RoomMarketResult {
     let opportunity_floor = room_opportunity_floor(consts, &input.deposits);
     let top = top_unmet_bids(consts, &input.deposits, 3);
     // ADR 0044: live runs the reduced-cost admission ON — plains road factor for the haul
-    // subtraction (the shipped behavior; the sim toggles this per arm, live never does).
-    // ADR 0044 step 2: live keeps Chebyshev `get_range_to` for the pickup→sink leg for now — the
-    // true-routed-distance wiring (a cached `PathfinderService` oracle) is a tracked follow-up
-    // (needs the CPU benchmark). The sim already uses true distance via the mover for the analysis.
+    // subtraction (the shipped behavior; always-on, no flag).
+    // ADR 0044 step 2: the pickup→sink haul leg is priced on the injected `HaulDistance` oracle —
+    // live backs it with the rover-cached full-tile routed distance (the SAME model the sim mover
+    // uses), so this pass and the tuned sim agree.
     let out = market::market_pass(
         &input.carriers,
         &input.deposits,
         &input.pickups,
         screeps_econ_decision::sink_economics::HAUL_ROAD_Q_PLAINS_PERMILLE,
-        &mut |a: screeps::Position, b: screeps::Position| a.get_range_to(b),
+        &mut |a: screeps::Position, b: screeps::Position| dist.haul_distance(a, b),
         same_structure,
     );
     RoomMarketResult {
@@ -174,7 +198,7 @@ mod tests {
         ];
         let carriers = vec![MarketCarrier { id: 5, pos: pos(10, 10), free: 0, held: 100, opportunity_milli: 0 }];
         let input = RoomMarketInput { deposits, pickups: vec![], carriers };
-        let res = run_room_market(&consts(), &input, |_, _| false);
+        let res = run_room_market(&consts(), &input, &mut ChebyshevDistance, |_, _| false);
         assert_eq!(res.assignments.len(), 1);
         assert_eq!(res.assignments[0].carrier, 5);
         // The stressed refill sink (6000) is the floor; the readout leads with it.

@@ -1877,6 +1877,7 @@ impl TransferQueue {
     /// are NOT registered here — the caller registers the returned tickets (the FSM's
     /// `register_pickup`/`register_delivery` contract, identical to the tier path).
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn select_market_pickup_and_delivery<TF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -1886,6 +1887,7 @@ impl TransferQueue {
         current_position: Position,
         free_capacity: u32,
         carried_energy: u32,
+        dist: &mut dyn crate::transfer::market_adapter::HaulDistance,
         target_filter: TF,
     ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
     where
@@ -2017,7 +2019,7 @@ impl TransferQueue {
         };
         // `same_structure(src_idx, sink_idx)`: never withdraw from the very structure being served
         // (the kernel's self-withdraw guard) — the bot's `TransferTarget` identity.
-        let result = crate::transfer::market_adapter::run_room_market(&consts, &input, |src_idx, sink_idx| {
+        let result = crate::transfer::market_adapter::run_room_market(&consts, &input, dist, |src_idx, sink_idx| {
             pickup_targets[src_idx as usize] == deposit_targets[sink_idx as usize]
         });
 
@@ -2784,6 +2786,7 @@ mod tests {
                 carrier_pos,
                 0,   // free
                 100, // carried energy
+                &mut crate::transfer::market_adapter::ChebyshevDistance,
                 target_filters::all,
             )
             .expect("the market assigns the loaded hauler a delivery");
@@ -2831,6 +2834,7 @@ mod tests {
                 carrier_pos,
                 100, // free
                 0,   // carried
+                &mut crate::transfer::market_adapter::ChebyshevDistance,
                 target_filters::all,
             )
             .expect("the market assigns the empty hauler a pickup+delivery");

@@ -100,12 +100,21 @@ impl Idle {
         // for BOTH a loaded hauler (delivers carried cargo) and an empty one (pickup+deliver). The
         // tier-interleave / nearest-wins path below is the fallback the market falls through to
         // (drained lane / non-market lanes) — it keeps the crate tier-capable for the sim's arms.
+        // ADR 0044 step 2: the haul leg is priced on TRUE routed distance via a rover-backed oracle
+        // (the SAME model the sim mover uses). Built here from the shared cost-matrix cache + the
+        // distance memo; the transfer layer sees only the `HaulDistance` trait.
+        let mut haul_dist = crate::pathing::hauldistance::RoverDistanceOracle::new(
+            tick_context.runtime_data.haul_distance_service,
+            tick_context.runtime_data.cost_matrix_cache,
+            game::time(),
+        );
         get_new_market_pickup_and_delivery_state(
             creep,
             &transfer_queue_data,
             &pickup_rooms,
             &delivery_rooms,
             tick_context.runtime_data.transfer_queue,
+            &mut haul_dist,
             target_filter,
             HaulState::pickup,
             HaulState::delivery,
