@@ -897,6 +897,50 @@ mod tests {
         assert!(routed > chebyshev, "realistic terrain: routed {routed} > Chebyshev {chebyshev} (the regime step 2 prices)");
     }
 
+    /// ADR 0044 step 2 (structure-SINK fix): `realize()` folds a refill sink (spawn/extension) into
+    /// `terrain.walls`, so its tile is IMPASSABLE. A range-0 distance query to it is UNREACHABLE — the
+    /// sim's `market_pass` would then silently fall back to Chebyshev, leaving the DOMINANT refill haul
+    /// priced straight-line and defeating the migration on realistic terrain. Range 1 (deliver-adjacent,
+    /// exactly what the market uses + where the hauler stands) routes to it. This pins that the sim
+    /// prices refill haul on the REAL routed distance.
+    #[test]
+    fn structure_sink_reachable_at_range_one_not_zero() {
+        use crate::movement::Mover;
+        let layouts = captured_layouts();
+        let layout = layouts.iter().find(|l| l.room == "E11N1").expect("E11N1 in the captured cache");
+        let world = realize(layout, &RealizeParams { rcl: 6, road_health_pct: 100, seed: 3 }).world;
+        let spawn = world.spawns[0].pos;
+        let (sx, sy) = (spawn.x().u8(), spawn.y().u8());
+        assert!(
+            world.movement.terrain.walls.contains(&(sx, sy)),
+            "the refill sink (spawn) tile is an impassable structure wall"
+        );
+        // Any walkable home tile a few steps away — the pickup end of a refill haul.
+        let (ox, oy) = (0..50u8)
+            .flat_map(|x| (0..50u8).map(move |y| (x, y)))
+            .find(|&(x, y)| {
+                !world.movement.terrain.walls.contains(&(x, y))
+                    && (x as i32 - sx as i32).abs().max((y as i32 - sy as i32).abs()) >= 5
+            })
+            .expect("a walkable home tile ≥5 from the spawn");
+        let origin = Position::new(
+            screeps::RoomCoordinate::new(ox).unwrap(),
+            screeps::RoomCoordinate::new(oy).unwrap(),
+            spawn.room_name(),
+        );
+        let mut m = crate::movement::RoverMover::new(&world.movement);
+        let body = screeps_sim_core::SimBody::unboosted(&[Part::Carry, Part::Move]);
+        assert_eq!(
+            m.travel_ticks(origin, spawn, 0, &body, 0),
+            None,
+            "range 0 onto the wall-tile sink is unreachable — the bug that fell back to Chebyshev"
+        );
+        assert!(
+            m.travel_ticks(origin, spawn, 1, &body, 0).is_some(),
+            "range 1 (deliver-adjacent) routes to the structure sink — the fix"
+        );
+    }
+
     /// ADR 0044 (operator correctness check): every OPEN room-edge tile in the realistic Family R
     /// world has a WALKABLE mirror in its neighbouring room — the engine's exit-alignment invariant
     /// the kernel's wall-blind edge relocation (`tick.rs:53-76`) relies on. A mismatched seam would

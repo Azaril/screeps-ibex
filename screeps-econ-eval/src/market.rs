@@ -388,9 +388,15 @@ impl MarketRuntime {
         // ADR 0044 end state: the stage-1 haul subtraction is ALWAYS on (plains road factor), priced
         // on TRUE routed distance for the pickup→sink leg via the multi-room mover — the real path
         // (`routed ≫ Chebyshev` on realistic terrain), not the optimistic straight line.
+        //
+        // Range 1 (deliver-ADJACENT), matching the live oracle: `realize()` folds every blocking
+        // structure (spawns/extensions/storage/towers) into `terrain.walls`, so a refill SINK tile is
+        // IMPASSABLE. A range-0 search to that wall is unreachable ⇒ it would silently fall back to
+        // Chebyshev — leaving the dominant (refill) haul priced straight-line, defeating the whole
+        // migration on realistic terrain. Adjacent-delivery is also where the hauler actually stands.
         let nominal = screeps_sim_core::SimBody::unboosted(&[screeps::Part::Carry, screeps::Part::Move]);
         let mut dist = |a: Position, b: Position| -> u32 {
-            mover.travel_ticks(a, b, 0, &nominal, 0).unwrap_or_else(|| a.get_range_to(b))
+            mover.travel_ticks(a, b, 1, &nominal, 0).unwrap_or_else(|| a.get_range_to(b))
         };
         let out = mk::market_pass(&k_carriers, &k_deposits, &k_pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut dist, |src_idx, sink_idx| {
             same_structure(pickups[src_idx as usize].src, deposits[sink_idx as usize].sink)
