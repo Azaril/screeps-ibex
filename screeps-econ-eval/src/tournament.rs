@@ -17,8 +17,8 @@ use crate::metrics::{family_h, percentile_u32, RecoverConsts};
 use crate::movement::AnalyticMover;
 use crate::runner::{run_scenario, run_world, RunGoal, RunOptions, RunOutcome};
 use crate::scenario::{
-    catalog, contended_catalog, downgrade_catalog, fast_catalog, fast_downgrade_catalog, generate,
-    rush_catalog, steady_catalog, ContendedScenario, EconScenario, RushScenario, SteadyScenario,
+    catalog, contended_catalog, downgrade_catalog, fast_catalog, fast_downgrade_catalog, foreman_rcl_sweep, generate,
+    rush_catalog, steady_catalog, ContendedScenario, EconScenario, RushScenario, SteadyScenario, DEFAULT_S_TICK_CAP,
 };
 use screeps_econ_decision::sink_economics::MarketConsts;
 use screeps_rover_eval::stats::{bootstrap_weighted_mean_ci, Summary};
@@ -719,6 +719,89 @@ pub fn print_arm(r: &ArmResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The end-state MARKET arm (structure-aware true routed distance + unreachable-arc exclusion)
+    /// at the default constants — what the foreman sweep validates and the constants sweep tunes.
+    fn end_state_market() -> PolicyConfig {
+        PolicyConfig::market(MarketArmCfg { consts: MarketConsts::default(), k4_bodies: true, measure_gap: false, oracle_period: 25 })
+    }
+
+    /// ADR 0044 P2 — the FOREMAN-LAYOUT × RCL validation sweep. Every captured foreman layout at the
+    /// requested RCL stages, run to a steady-state horizon under the END-STATE market. Asserts the
+    /// economy stays HEALTHY across the whole real-layout corpus (not just the curated guard rail):
+    /// it never freezes, roads hold, no permanent refill deficit, and — the structure-reachability
+    /// proof this workstream needs — at RCL ≥ 4 the market GENERATES edges (refill/haul sinks are
+    /// reachable at every real room, so nothing is wrongly excluded as unreachable).
+    fn foreman_sweep_check(scenarios: &[SteadyScenario], horizon: u32, verbose: bool) {
+        let cfg = end_state_market();
+        let recover = RecoverConsts::default();
+        assert!(!scenarios.is_empty(), "the sweep yields scenarios");
+        let mut failures = Vec::new();
+        for sc in scenarios {
+            let mut sc = sc.clone();
+            sc.tick_cap = horizon;
+            let sc = &sc;
+            let out = run_steady(sc, cfg, recover);
+            let road_ratio = out
+                .road_stock
+                .last()
+                .map(|&(_, h, m)| if m == 0 { 1.0 } else { h as f64 / m as f64 })
+                .unwrap_or(1.0);
+            let defp95 = percentile_u32(&out.deficit_episodes, 95.0);
+            let mut probs = Vec::new();
+            if out.deadlocked {
+                probs.push("DEADLOCKED".to_string());
+            }
+            if sc.rcl >= 4 && out.match_passes > 0 && out.match_edges == 0 {
+                probs.push("market ran but generated ZERO edges — a refill/haul sink is unreachable".to_string());
+            }
+            if road_ratio < 0.30 {
+                probs.push(format!("road stock collapsed to {road_ratio:.2}"));
+            }
+            // A PERMANENT open deficit is only a defect at RCL ≥ 4: stocked storage should always keep
+            // the spawn servable, so a stuck deficit there means a refill sink is unreachable / wrongly
+            // declined. Below RCL 4 the pre-storage container economy is inherently haul-tight — long
+            // deficit episodes are the norm (many healthy RCL-1..3 rooms show the same), so gating this
+            // avoids flagging that universal transitional behaviour as a failure.
+            if sc.rcl >= 4 && out.deficit_open_at_end.is_some_and(|open| open > horizon / 2) {
+                probs.push(format!("permanent refill deficit still open {}t at end", out.deficit_open_at_end.unwrap()));
+            }
+            if verbose || !probs.is_empty() {
+                eprintln!(
+                    "[foreman-sweep] {:<26} eff_t={:<6} defp95={:<5} edges={:<8} road={:.2} {}",
+                    sc.name,
+                    out.effective_t,
+                    defp95,
+                    out.match_edges,
+                    road_ratio,
+                    if probs.is_empty() { "ok".to_string() } else { probs.join("; ") }
+                );
+            }
+            if !probs.is_empty() {
+                failures.push(format!("{}: {}", sc.name, probs.join("; ")));
+            }
+        }
+        assert!(failures.is_empty(), "unhealthy foreman layout×RCL runs:\n{}", failures.join("\n"));
+    }
+
+    /// Fast gated SMOKE — the first few layouts at {4,6} for a short horizon: keeps the sweep harness
+    /// (and the structure-reachability health checks) from rotting without the full corpus cost. The
+    /// exhaustive corpus × every-RCL sweep is `foreman_rcl_sweep_full` (run on demand).
+    #[test]
+    fn foreman_layouts_healthy_across_rcls() {
+        let smoke: Vec<_> = foreman_rcl_sweep(1, &[4, 6]).into_iter().take(6).collect();
+        foreman_sweep_check(&smoke, 1_500, false);
+    }
+
+    /// The exhaustive sweep: every RCL 1..=full-build over the whole captured corpus at the guard-rail
+    /// horizon, with a per-run health table. This is the ADR 0044 P2 validation deliverable — proves
+    /// the structure-aware, unreachable-excluding market is healthy on every real foreman layout.
+    /// `cargo test --release -p screeps-econ-eval foreman_rcl_sweep_full -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn foreman_rcl_sweep_full() {
+        foreman_sweep_check(&foreman_rcl_sweep(1, &[1, 2, 3, 4, 5, 6, 7, 8]), DEFAULT_S_TICK_CAP, true);
+    }
 
     fn env_u32_list(key: &str, default: &[u32]) -> Vec<u32> {
         std::env::var(key)

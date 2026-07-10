@@ -426,6 +426,31 @@ pub fn steady_catalog(seed: u32) -> Vec<SteadyScenario> {
     out
 }
 
+/// The highest RCL at which a captured layout adds a structure — its full-build stage. Structures
+/// with no `required_rcl` (out-of-vocab furniture) are ignored; a plan always has an RCL-1 spawn.
+pub fn layout_max_rcl(layout: &CapturedLayout) -> u8 {
+    layout.structures.iter().filter_map(|s| s.required_rcl).max().unwrap_or(1).min(8)
+}
+
+/// ADR 0044 P2 — the FOREMAN-LAYOUT × RCL validation sweep. Every captured foreman layout realized at
+/// each requested RCL stage it supports (a real room's growth curve), as a healthy `SteadyScenario`.
+/// Proves the economy + transfer market — now structure-aware with true routed distance + the
+/// unreachable-arc exclusion — behaves across the whole corpus, not just the curated guard rail.
+/// `rcls` is the stage set to probe (capped per layout at its full-build RCL; stages above a layout's
+/// max are skipped, so a small room isn't given a phantom high-RCL controller with no structures).
+pub fn foreman_rcl_sweep(seed: u32, rcls: &[u8]) -> Vec<SteadyScenario> {
+    let mut out = Vec::new();
+    for layout in captured_layouts() {
+        let max_rcl = layout_max_rcl(&layout);
+        for &rcl in rcls {
+            if rcl >= 1 && rcl <= max_rcl {
+                out.push(SteadyScenario::new(&layout.room, rcl, seed));
+            }
+        }
+    }
+    out
+}
+
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 // Family R — REMOTE MINING (ADR 0044 P2). A healthy home plus synthetic remote sources at
 // controlled TRUE path-distances (open corridor rooms east of home), so the reduced-cost admission
