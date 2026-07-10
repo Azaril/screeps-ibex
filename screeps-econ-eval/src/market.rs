@@ -141,6 +141,13 @@ pub struct MarketRuntime {
     /// The most candidate edges any single pass generated (the contended worst case — review #2).
     pub match_max_edges: u64,
     pub gap: GapStats,
+    /// ADR 0044 instrument D (realized-haul-cost): Σ over realized assignments of
+    /// `haul_milli(routed_d)·amount` — the e/t the market actually SPENT on hauling. Paired with
+    /// [`Self::delivered_value_integral`], the ratio is the over-hauling detector (the ADR success
+    /// gate: if realized haul-e rises faster than delivered value, add a fleet/CPU cap).
+    pub haul_cost_integral: u64,
+    /// Σ over realized assignments of `bid_milli·amount` — the delivered value the haul cost buys.
+    pub delivered_value_integral: u64,
 }
 
 impl MarketRuntime {
@@ -157,6 +164,8 @@ impl MarketRuntime {
             match_passes: 0,
             match_max_edges: 0,
             gap: GapStats::default(),
+            haul_cost_integral: 0,
+            delivered_value_integral: 0,
         }
     }
 
@@ -405,6 +414,13 @@ impl MarketRuntime {
         self.match_edges += out.stats.edges;
         self.match_max_edges = self.match_max_edges.max(out.stats.edges);
         self.match_ops += out.stats.ops;
+
+        // Instrument D — realized haul cost vs delivered value, from the greedy's chosen edges.
+        for asg in &out.greedy {
+            let e = &out.edges[asg.edge];
+            self.haul_cost_integral += e.haul_cost_milli as u64 * asg.amount as u64;
+            self.delivered_value_integral += e.bid_milli as u64 * asg.amount as u64;
+        }
 
         // Resolve the kernel's index-scoped tasks + bookings back to sim keys.
         for a in &out.assignments {

@@ -528,7 +528,9 @@ pub fn run_world(
         let in_flight: u32 = world.movement.creeps.iter().map(|c| c.carry_used).sum();
         let carrying = world.movement.creeps.iter().filter(|c| c.carry_used > 0).count() as u32;
         let dropped: u32 = world.dropped.iter().map(|d| d.amount).sum();
-        remote_instr.sample(in_flight, carrying, dropped);
+        // Instrument B — energy waiting in containers (mined but not yet consumed/hauled).
+        let buffer: u32 = world.containers.iter().map(|c| c.store.amount(SimResource::Energy)).sum();
+        remote_instr.sample(in_flight, carrying, dropped, buffer);
 
         // Diagnostics + recovery + the sentinel.
         let capacity = baseline::spawn_lane_capacity(world);
@@ -631,6 +633,11 @@ pub fn run_world(
         Some(rt) => (rt.match_ops, rt.match_edges, rt.match_passes, rt.match_max_edges, rt.cfg.measure_gap.then_some(rt.gap)),
         None => (0, 0, 0, 0, None),
     };
+    // Instrument D — pull the realized haul-cost / delivered-value integrals off the market runtime.
+    if let Some(rt) = market_rt.as_ref() {
+        remote_instr.realized_haul_cost = rt.haul_cost_integral;
+        remote_instr.delivered_value = rt.delivered_value_integral;
+    }
     RunOutcome {
         scenario: sc.name.clone(),
         seed: sc.seed,
@@ -1866,6 +1873,12 @@ mod tests {
         // Cross-room hauling on realistic terrain is live: energy in flight, a creep reaches a remote.
         assert!(out.remote.mean_in_flight() > 0, "remote hauling active on realistic terrain");
         assert!(world.movement.creeps.iter().any(|c| c.pos.room_name() != home_room), "a creep reached a realistic remote room");
+        // ADR 0044 step 4 instruments populate: D (realized haul cost / delivered value) is measured
+        // and its ratio is finite; B (mined-waiting buffer) accrues.
+        assert!(out.remote.delivered_value > 0, "instrument D: value was delivered");
+        assert!(out.remote.realized_haul_cost > 0, "instrument D: haul cost was priced on real routed distance");
+        assert!(out.remote.haul_cost_permille() > 0 && out.remote.haul_cost_permille() < 1000, "instrument D ratio is sane (haul < delivered value)");
+        assert!(out.remote.buffer_tick_integral > 0, "instrument B: source buffers hold mined energy");
     }
 
     /// THE as-hauler regression pin (harvest.rs:104-125 mirrored): an EMPTY harvester with

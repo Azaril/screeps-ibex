@@ -218,16 +218,27 @@ pub struct RemoteInstruments {
     /// Energy present each tick in DROPPED piles, summed over ticks (a decay/waste proxy —
     /// instrument E; dropped energy that lingers is being wasted to decay).
     pub dropped_tick_integral: u64,
+    /// Instrument B (mined→used latency proxy): Σ over ticks of energy sitting in source/pickup
+    /// containers — energy that is MINED but not yet consumed. A rising integral means energy is
+    /// piling up at the source (haul-constrained / over-supplied); Little's Law pairs it with the
+    /// in-flight and carrier-tick measures.
+    pub buffer_tick_integral: u64,
+    /// Instrument D (realized-haul-cost, milli-e/t·amount): copied from the market runtime at run
+    /// end — Σ `haul_milli(routed_d)·amount` over realized assignments.
+    pub realized_haul_cost: u64,
+    /// The delivered value (Σ `bid·amount`) that haul cost bought — the D denominator.
+    pub delivered_value: u64,
 }
 
 impl RemoteInstruments {
     /// One tick's sample: `in_flight` = Σ creep carry, `carrying` = creeps with energy aboard,
-    /// `dropped` = Σ dropped-pile energy present.
-    pub fn sample(&mut self, in_flight: u32, carrying: u32, dropped: u32) {
+    /// `dropped` = Σ dropped-pile energy present, `buffer` = Σ source-container energy waiting.
+    pub fn sample(&mut self, in_flight: u32, carrying: u32, dropped: u32, buffer: u32) {
         self.in_flight_sum += in_flight as u64;
         self.in_flight_max = self.in_flight_max.max(in_flight);
         self.carrier_ticks += carrying as u64;
         self.dropped_tick_integral += dropped as u64;
+        self.buffer_tick_integral += buffer as u64;
         self.ticks += 1;
     }
 
@@ -237,6 +248,17 @@ impl RemoteInstruments {
             0
         } else {
             (self.in_flight_sum / self.ticks as u64) as u32
+        }
+    }
+
+    /// Instrument D as a permille ratio: realized haul cost per unit delivered value. The
+    /// over-hauling signal — rising = the market is spending more haul-e per delivered e/t. 0 when
+    /// nothing was delivered.
+    pub fn haul_cost_permille(&self) -> u32 {
+        if self.delivered_value == 0 {
+            0
+        } else {
+            (self.realized_haul_cost.saturating_mul(1000) / self.delivered_value) as u32
         }
     }
 }
