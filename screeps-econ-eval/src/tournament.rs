@@ -17,8 +17,8 @@ use crate::metrics::{family_h, percentile_u32, RecoverConsts};
 use crate::movement::AnalyticMover;
 use crate::runner::{run_scenario, run_world, RunGoal, RunOptions, RunOutcome};
 use crate::scenario::{
-    catalog, contended_catalog, downgrade_catalog, fast_catalog, fast_downgrade_catalog, foreman_rcl_sweep, generate,
-    rush_catalog, steady_catalog, ContendedScenario, EconScenario, RushScenario, SteadyScenario, DEFAULT_S_TICK_CAP,
+    catalog, contended_catalog, downgrade_catalog, fast_catalog, fast_downgrade_catalog, generate, rush_catalog,
+    steady_catalog, ContendedScenario, EconScenario, RushScenario, SteadyScenario,
 };
 use screeps_econ_decision::sink_economics::MarketConsts;
 use screeps_rover_eval::stats::{bootstrap_weighted_mean_ci, Summary};
@@ -719,6 +719,7 @@ pub fn print_arm(r: &ArmResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenario::{foreman_rcl_sweep, DEFAULT_S_TICK_CAP};
 
     /// The end-state MARKET arm (structure-aware true routed distance + unreachable-arc exclusion)
     /// at the default constants — what the foreman sweep validates and the constants sweep tunes.
