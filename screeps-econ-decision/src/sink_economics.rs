@@ -639,6 +639,31 @@ mod tests {
         assert_eq!(haul_milli(u32::MAX, 1000), u32::MAX);
     }
 
+    /// ADR 0044 haul road-factor CALIBRATION (2026-07-09) against the empirical remote break-even
+    /// curve (Overmind/field: remote net ≈ +8.7 e/t at the door, ≈ 0 past ~250 tiles). The break-even
+    /// distance for a sink worth `V` is where `haul_milli(d) = V`. Finding: the PHYSICALLY-DERIVED
+    /// plains factor (`road_q=1000`, slope 8d/3 from a 1:1 hauler's body-cost/capacity/life) lands the
+    /// PAR break-even at ~375 tiles and upgrade at ~750. The empirical ~250 sits BELOW the plains 375
+    /// (and well below the roaded 750 at `road_q=500`), i.e. real lanes behave plains-or-worse — so
+    /// `road_q=1000` is the conservative principled FLOOR, and the sim shows NO over-hauling at it
+    /// (`runner::saturated_family_r_declines_far_remotes_in_sim`: `haul_cost_permille≈0`). Conclusion:
+    /// keep the derived constant (tuning a first-principles coefficient to a fuzzy field number, with
+    /// unknown road/body assumptions, would be worse); the real refinement is per-lane ROAD-AWARENESS
+    /// — the dist oracle already routes the path, so `road_q` could scale with the path's road
+    /// fraction (roaded segments cheaper). Tracked as a follow-up.
+    #[test]
+    fn haul_road_factor_break_even_calibration() {
+        let q = HAUL_ROAD_Q_PLAINS_PERMILLE;
+        let break_even = |v: u32, road_q: u32| (1..3000u32).take_while(|&d| haul_milli(d, road_q) < v).last().unwrap_or(0);
+        let par = break_even(STORAGE_BID, q);
+        let upgrade = break_even(V_UPGRADE_MILLI, q);
+        let par_roaded = break_even(STORAGE_BID, 500);
+        eprintln!("[haul-calib] road_q={q}: par(1000)→{par}t upgrade(2000)→{upgrade}t | roaded par→{par_roaded}t");
+        assert!((360..=390).contains(&par), "plains par break-even ≈375 tiles (got {par})");
+        assert!((720..=780).contains(&upgrade), "plains upgrade break-even ≈750 tiles (got {upgrade})");
+        assert!(par_roaded > par, "a roaded lane extends the break-even (cheaper haul): {par_roaded} > {par}");
+    }
+
     /// ADR 0044 stage-1 reduced cost: par storage sink survives a short haul, is DECLINED past
     /// break-even; a high-ROI refill survives much farther; a saturating source (floor 0) is more
     /// permissive than lossless storage (floor par).
