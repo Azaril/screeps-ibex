@@ -228,6 +228,9 @@ pub struct RemoteInstruments {
     pub realized_haul_cost: u64,
     /// The delivered value (Σ `bid·amount`) that haul cost bought — the D denominator.
     pub delivered_value: u64,
+    /// Stage-1 admission rejects over the run (generated edges declined as beyond break-even) —
+    /// copied from the market runtime. >0 proves the reduced-cost decline fired in an actual run.
+    pub admission_declines: u64,
 }
 
 impl RemoteInstruments {

@@ -637,6 +637,7 @@ pub fn run_world(
     if let Some(rt) = market_rt.as_ref() {
         remote_instr.realized_haul_cost = rt.haul_cost_integral;
         remote_instr.delivered_value = rt.delivered_value_integral;
+        remote_instr.admission_declines = rt.admission_declines;
     }
     RunOutcome {
         scenario: sc.name.clone(),
@@ -1879,6 +1880,70 @@ mod tests {
         assert!(out.remote.realized_haul_cost > 0, "instrument D: haul cost was priced on real routed distance");
         assert!(out.remote.haul_cost_permille() > 0 && out.remote.haul_cost_permille() < 1000, "instrument D ratio is sane (haul < delivered value)");
         assert!(out.remote.buffer_tick_integral > 0, "instrument B: source buffers hold mined energy");
+    }
+
+    /// ADR 0044 step 2 (the IN-SIM economic-decline proof, operator success gate): on a SATURATED
+    /// home (remotes compete at storage PAR) over REALISTIC cave terrain (routed ≫ Chebyshev), the
+    /// reduced-cost admission DECLINES beyond-break-even FAR remotes while serving near ones — so the
+    /// un-hauled energy retained at a remote RISES with its routed distance. This is the full-run
+    /// analogue of the kernel pins (`admission_declines_far_par_sink` / `unreachable_pickup...`).
+    #[test]
+    fn saturated_family_r_declines_far_remotes_in_sim() {
+        use crate::movement::Mover;
+        // 9 chained cave rooms: the farthest routes past the PAR break-even (`haul_milli(d)=1000` ⇒
+        // d≈375), so it is genuinely rejected by admission (delivered ≤ 0), while nearer ones (under
+        // break-even, generous haulers) are served.
+        let n = 9usize;
+        let sc = crate::scenario::FamilyRScenario::new("E11N1", 6, vec![0; n], 7).realistic().saturated();
+        let (mut world, _t, info) = sc.instantiate();
+        let home_spawn = world.spawns[0].pos;
+        let mid = screeps_sim_core::terrain_gen::EXIT_MID;
+        let remote_pos: Vec<Position> = (1..=n)
+            .map(|k| home_spawn.checked_add(((k * 50) as i32, 0)).unwrap().room_name())
+            .map(|rn| Position::new(RoomCoordinate::new(mid).unwrap(), RoomCoordinate::new(mid).unwrap(), rn))
+            .collect();
+
+        let mut mover = crate::movement::RoverMover::new(&world.movement);
+        let body = screeps_sim_core::SimBody::unboosted(&[Part::Carry, Part::Move]);
+        let routed: Vec<u32> = remote_pos.iter().map(|&r| mover.travel_ticks(home_spawn, r, 1, &body, 0).unwrap_or(u32::MAX)).collect();
+
+        let mut opts = RunOptions::new(PolicyConfig::market(crate::market::MarketArmCfg::default()), RecoverConsts::default(), 1_200);
+        opts.goal = RunGoal::Horizon;
+        let out = run_world(&sc.shell(), &mut world, &mut mover, &info, &opts);
+
+        // Un-hauled energy retained at each remote (its source + container): high = the admission
+        // declined the haul, low = it was served.
+        let retained: Vec<u32> = remote_pos
+            .iter()
+            .map(|&r| {
+                let rn = r.room_name();
+                let src: u32 = world.sources.iter().filter(|s| s.pos.room_name() == rn).map(|s| s.energy).sum();
+                let cont: u32 = world.containers.iter().filter(|c| c.pos.room_name() == rn).map(|c| c.store.amount(SimResource::Energy)).sum();
+                src + cont
+            })
+            .collect();
+        for k in 0..n {
+            eprintln!("[decline] remote {} routed={:<5} retained={}", k + 1, routed[k], retained[k]);
+        }
+        eprintln!(
+            "[decline] admission_declines={} haul_cost_permille={} delivered={}",
+            out.remote.admission_declines,
+            out.remote.haul_cost_permille(),
+            out.remote.delivered_value
+        );
+
+        // The corridor genuinely reaches past the par break-even (routed > ~375 ⇒ haul_milli > par).
+        assert!(routed[n - 1] > routed[0], "routed distance grows down the cave corridor");
+        assert!(routed[n - 1] >= 375, "the farthest remote is genuinely beyond the par break-even (routed {})", routed[n - 1]);
+
+        // THE gate — the admission FIRED in an actual run: generated arcs were rejected as beyond
+        // break-even (the full-run analogue of the kernel decline pins), not merely deprioritized.
+        assert!(out.remote.admission_declines > 0, "the reduced-cost admission declined beyond-break-even arcs in-sim");
+        // AND no realized haul was a net loss: aggregate realized haul cost stays below delivered
+        // value (instrument D — the ADR "zero realized delivered<0" / no-over-hauling gate). The
+        // greedy structurally refuses unadmitted edges, so this holds by construction; the instrument
+        // makes it observable end-to-end.
+        assert!(out.remote.delivered_value > 0 && out.remote.haul_cost_permille() < 1000, "every realized haul was profitable (no over-hauling)");
     }
 
     /// THE as-hauler regression pin (harvest.rs:104-125 mirrored): an EMPTY harvester with

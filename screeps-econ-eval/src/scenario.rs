@@ -475,6 +475,12 @@ pub struct FamilyRScenario {
     /// mid-edge exits) instead of the synthetic open channel — so `routed ≫ Chebyshev` (the regime
     /// the true-distance migration must handle). One remote per corridor room at its centre.
     pub realistic: bool,
+    /// ADR 0044 step-2 economic-decline validation: SATURATE the home so refill demand doesn't make
+    /// every remote a bargain (the hungry-refill corridor "correctly serves all" — ADR success-gate
+    /// note). Seeds a long-lived fleet (no churn ⇒ no respawn ⇒ extensions stay topped ⇒ no refill
+    /// hunger) so the marginal sink is storage-at-PAR — the regime where the routed haul subtraction
+    /// can push a FAR remote past break-even and the admission DECLINES it in-sim.
+    pub saturated: bool,
 }
 
 impl FamilyRScenario {
@@ -487,6 +493,7 @@ impl FamilyRScenario {
             tick_cap: DEFAULT_S_TICK_CAP,
             seed,
             realistic: false,
+            saturated: false,
         }
     }
 
@@ -494,6 +501,14 @@ impl FamilyRScenario {
     pub fn realistic(mut self) -> Self {
         self.realistic = true;
         self.name = format!("{}-realistic", self.name);
+        self
+    }
+
+    /// Saturate the home so remotes price at PAR (see [`Self::saturated`]) — the regime that exposes
+    /// the admission's beyond-break-even DECLINE in-sim.
+    pub fn saturated(mut self) -> Self {
+        self.saturated = true;
+        self.name = format!("{}-sat", self.name);
         self
     }
 
@@ -615,22 +630,34 @@ impl FamilyRScenario {
         let capacity = crate::baseline::spawn_lane_capacity(&world);
         let harvester = crate::baseline::harvester_body(capacity).expect("capacity ≥ 300");
         let hauler = crate::baseline::hauler_body(capacity).expect("capacity ≥ 300");
+        // Saturated: long-lived creeps (outlast the run) so nothing dies → nothing respawns → the
+        // spawn lane stays topped → refill demand vanishes → remotes compete at storage PAR.
+        let ttl = |rng: &mut Rng| {
+            if self.saturated {
+                self.tick_cap + 500
+            } else {
+                rng.range(200, 1400)
+            }
+        };
         let n_sources = world.sources.len();
         let mut placed = 0u8;
         for _ in 0..n_sources {
             for _ in 0..2 {
                 let tile = fleet_tile(&world, home_spawn, placed);
                 placed = placed.wrapping_add(1);
-                let ttl = rng.range(200, 1400);
-                world.add_creep(tile, &harvester, ttl);
+                let t = ttl(&mut rng);
+                world.add_creep(tile, &harvester, t);
             }
         }
-        let n_haulers = 2 + self.remote_distances.len();
+        // Saturated runs seed GENEROUS haulers (3× per remote) so haul CAPACITY never bottlenecks —
+        // a remote left un-hauled is then a genuine admission DECLINE (delivered ≤ 0), not carriers
+        // simply being busy elsewhere.
+        let n_haulers = if self.saturated { 2 + 3 * self.remote_distances.len() } else { 2 + self.remote_distances.len() };
         for _ in 0..n_haulers {
             let tile = fleet_tile(&world, home_spawn, placed);
             placed = placed.wrapping_add(1);
-            let ttl = rng.range(200, 1400);
-            world.add_creep(tile, &hauler, ttl);
+            let t = ttl(&mut rng);
+            world.add_creep(tile, &hauler, t);
         }
 
         (world, realized.terrain, info)

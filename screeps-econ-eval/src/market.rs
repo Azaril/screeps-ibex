@@ -148,6 +148,11 @@ pub struct MarketRuntime {
     pub haul_cost_integral: u64,
     /// Σ over realized assignments of `bid_milli·amount` — the delivered value the haul cost buys.
     pub delivered_value_integral: u64,
+    /// ADR 0044 stage-1 in-sim proof: Σ over passes of the GENERATED edges the reduced-cost admission
+    /// REJECTED (`!admitted()` — `bid − source_floor − haul ≤ 0`). An edge is only generated when
+    /// flow was available, so each is a viable arc the market DECLINED as beyond break-even. >0 proves
+    /// the admission fired end-to-end (the full-run analogue of the kernel decline pins).
+    pub admission_declines: u64,
 }
 
 impl MarketRuntime {
@@ -166,6 +171,7 @@ impl MarketRuntime {
             gap: GapStats::default(),
             haul_cost_integral: 0,
             delivered_value_integral: 0,
+            admission_declines: 0,
         }
     }
 
@@ -421,6 +427,8 @@ impl MarketRuntime {
             self.haul_cost_integral += e.haul_cost_milli as u64 * asg.amount as u64;
             self.delivered_value_integral += e.bid_milli as u64 * asg.amount as u64;
         }
+        // Stage-1 admission in-sim: generated edges the reduced-cost gate rejected as beyond break-even.
+        self.admission_declines += out.edges.iter().filter(|e| !e.admitted()).count() as u64;
 
         // Resolve the kernel's index-scoped tasks + bookings back to sim keys.
         for a in &out.assignments {
