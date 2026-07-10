@@ -222,6 +222,15 @@ pub fn market_pass(
         }
         for &(node, unmet, bid, dpos) in &targets {
             if c.held > 0 {
+                // A LOADED carrier can only deliver to a REACHABLE sink — if no path exists it cannot
+                // physically make the delivery, so it is not a transfer option (the ADR follow-up
+                // gate closing the loaded-leg gap). Reuses the `dist` oracle for the reachability
+                // boolean only (once per loaded-carrier decision — a loaded carrier is not re-decided
+                // while it executes, so this is not a per-tick cost); the service PRICE keeps the
+                // cheap dynamic Chebyshev approach leg.
+                if dist(c.pos, dpos).is_none() {
+                    continue;
+                }
                 let amount = c.held.min(unmet);
                 let service = c.pos.get_range_to(dpos) + 1;
                 if amount == 0 || !carrier_gate(c.opportunity_milli, bid, amount, service) {
@@ -420,6 +429,22 @@ mod tests {
 
         let reachable = market_pass(&carriers, &deposits, &pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |a: Position, b: Position| Some(a.get_range_to(b)), |_, _| false);
         assert_eq!(reachable.assignments.len(), 1, "reachable ⇒ the empty carrier picks up + delivers");
+    }
+
+    /// ADR 0044 follow-up: a LOADED carrier is not offered an UNREACHABLE sink either — if `dist`
+    /// returns `None` (no path from the carrier to the sink) the delivery is skipped, mirroring the
+    /// empty-carrier pickup gate (closes the loaded-leg reachability gap).
+    #[test]
+    fn loaded_carrier_unreachable_sink_is_declined() {
+        let sink = pos(25, 25);
+        let carriers = [MarketCarrier { id: 0, pos: pos(10, 10), free: 0, held: 100, opportunity_milli: 0 }];
+        let deposits = [MarketDeposit { sink: 0, pos: sink, bid_milli: 6000, unfulfilled: 100, is_refill: false }];
+
+        let unreachable = market_pass(&carriers, &deposits, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |_, _| None, |_, _| false);
+        assert!(unreachable.assignments.is_empty(), "a loaded carrier cannot deliver to an unreachable sink");
+
+        let reachable = market_pass(&carriers, &deposits, &[], econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut |a: Position, b: Position| Some(a.get_range_to(b)), |_, _| false);
+        assert_eq!(reachable.assignments.len(), 1, "reachable ⇒ the loaded carrier delivers");
     }
 
     fn pos(x: u8, y: u8) -> Position {
