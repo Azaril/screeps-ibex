@@ -29,8 +29,9 @@ use std::collections::HashMap;
 const DIST_TTL: u32 = 1500;
 
 /// Per-search op cap (live CPU budget). Generous for a structure-to-structure route across a handful
-/// of rooms, but bounds a pathological long/blocked search to a best-effort result → the pass then
-/// falls back to Chebyshev for that pair rather than burning the budget.
+/// of rooms, but bounds a pathological long/blocked search: an exhausted search returns `incomplete`
+/// ⇒ the pair is treated as unreachable (`None`) and the arc is DECLINED. That is the correct outcome
+/// — a haul so long it blows 20k ops is beyond break-even anyway, so declining ≈ what admission does.
 const SEARCH_MAX_OPS: u32 = 20_000;
 
 const PLAIN_COST: u8 = 2;
@@ -65,7 +66,10 @@ fn should_recompute(missing: bool, age: u32) -> bool {
 }
 
 struct CachedDist {
-    ticks: u32,
+    /// Routed ticks, or `None` when there is NO PATH (unreachable / beyond the op budget). Caching
+    /// the `None` matters: it stops us re-running a doomed (or pathologically long) search every tick
+    /// for the TTL window — a genuinely unreachable pair only becomes reachable on a layout change.
+    dist: Option<u32>,
     cached_at: u32,
 }
 
@@ -90,31 +94,33 @@ impl HaulDistanceService {
         (self.computes_this_tick, self.hits_this_tick, self.cache.len())
     }
 
-    /// Routed tile-distance from `from` to `to` (the pickup→sink leg), memoized per static pair. On
-    /// a miss it pathfinds via rover's engine-backed provider (terrain native; structures from the
-    /// shared cache); an incomplete/unreachable route falls back to Chebyshev.
-    pub fn haul_distance(&mut self, from: Position, to: Position, tick: u32, cost_matrix_cache: &mut CostMatrixCache) -> u32 {
+    /// Routed tile-distance from `from` to `to` (the pickup→sink leg), memoized per static pair, or
+    /// `None` when there is NO PATH — a creep cannot make that delivery, so the market drops the arc
+    /// (never a fabricated straight-line price for an unservable haul). On a miss it pathfinds via
+    /// rover's engine-backed provider (terrain native; structures from the shared cache).
+    pub fn haul_distance(&mut self, from: Position, to: Position, tick: u32, cost_matrix_cache: &mut CostMatrixCache) -> Option<u32> {
         if from == to {
-            return 0;
+            return Some(0);
         }
         let key = (from, to);
         if let Some(c) = self.cache.get(&key) {
             if !should_recompute(false, tick.saturating_sub(c.cached_at)) {
                 self.hits_this_tick += 1;
-                return c.ticks;
+                return c.dist;
             }
         }
         self.computes_this_tick += 1;
-        let ticks = compute_routed(from, to, cost_matrix_cache).unwrap_or_else(|| from.get_range_to(to));
-        self.cache.insert(key, CachedDist { ticks, cached_at: tick });
-        ticks
+        let dist = compute_routed(from, to, cost_matrix_cache);
+        self.cache.insert(key, CachedDist { dist, cached_at: tick });
+        dist
     }
 }
 
-/// One rover search (engine-backed) → path tile count. Range 1: a hauler delivers ADJACENT to the
-/// sink (whose own tile the structure blocks); this is within ~1 tile of the sim's center-to-center
-/// distance (negligible in `haul_milli`). Terrain is read natively by the engine; the structure
-/// overlay comes from `CostMatrixCache`.
+/// One rover search (engine-backed) → path tile count, or `None` when the sink is unreachable (or
+/// beyond the op budget) — the market then declines the arc. Range 1: a hauler delivers ADJACENT to
+/// the sink (whose own tile the structure blocks); this is within ~1 tile of the sim's
+/// center-to-center distance (negligible in `haul_milli`). Terrain is read natively by the engine;
+/// the structure overlay comes from `CostMatrixCache`.
 fn compute_routed(from: Position, to: Position, cost_matrix_cache: &mut CostMatrixCache) -> Option<u32> {
     let mut cms = CostMatrixSystem::new(cost_matrix_cache, Box::new(ScreepsCostMatrixDataSource));
     let opts = haul_cost_matrix_options();
@@ -148,7 +154,7 @@ impl<'a> RoverDistanceOracle<'a> {
 }
 
 impl HaulDistance for RoverDistanceOracle<'_> {
-    fn haul_distance(&mut self, from: Position, to: Position) -> u32 {
+    fn haul_distance(&mut self, from: Position, to: Position) -> Option<u32> {
         self.service.haul_distance(from, to, self.tick, self.cost_matrix_cache)
     }
 }

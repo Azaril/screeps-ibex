@@ -394,10 +394,10 @@ impl MarketRuntime {
         // IMPASSABLE. A range-0 search to that wall is unreachable ⇒ it would silently fall back to
         // Chebyshev — leaving the dominant (refill) haul priced straight-line, defeating the whole
         // migration on realistic terrain. Adjacent-delivery is also where the hauler actually stands.
+        // `None` (no path to the sink) propagates to the kernel, which SKIPS the arc — an unreachable
+        // delivery is not a transfer option, never a Chebyshev-priced phantom haul.
         let nominal = screeps_sim_core::SimBody::unboosted(&[screeps::Part::Carry, screeps::Part::Move]);
-        let mut dist = |a: Position, b: Position| -> u32 {
-            mover.travel_ticks(a, b, 1, &nominal, 0).unwrap_or_else(|| a.get_range_to(b))
-        };
+        let mut dist = |a: Position, b: Position| -> Option<u32> { mover.travel_ticks(a, b, 1, &nominal, 0) };
         let out = mk::market_pass(&k_carriers, &k_deposits, &k_pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut dist, |src_idx, sink_idx| {
             same_structure(pickups[src_idx as usize].src, deposits[sink_idx as usize].sink)
         });

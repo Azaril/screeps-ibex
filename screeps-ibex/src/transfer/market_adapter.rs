@@ -31,18 +31,20 @@ use screeps_econ_decision::sink_economics::{self as econ, MarketConsts};
 /// the sim transfers to live. Unit tests, the M5a parity fixture, and the incomplete-route fallback
 /// use [`ChebyshevDistance`].
 pub trait HaulDistance {
-    /// Routed tile-distance a hauler travels from `from` to `to` (the structural pickup→sink leg).
-    fn haul_distance(&mut self, from: screeps::Position, to: screeps::Position) -> u32;
+    /// Routed tile-distance a hauler travels from `from` to `to` (the structural pickup→sink leg), or
+    /// `None` when there is NO PATH — a creep cannot make that delivery, so the market must not offer
+    /// it as an option (the kernel skips the arc rather than inventing a straight-line price).
+    fn haul_distance(&mut self, from: screeps::Position, to: screeps::Position) -> Option<u32>;
 }
 
 /// The straight-line stand-in: same-room it ≈ the true routed distance (small error inside 50×50);
-/// cross-room it is the global-coordinate Chebyshev. Used by unit tests, the parity fixture, and as
-/// the live fallback when a rover route is incomplete/unreachable.
+/// cross-room it is the global-coordinate Chebyshev. Always `Some` (it never proves unreachability).
+/// Used by unit tests and the parity fixture.
 pub struct ChebyshevDistance;
 
 impl HaulDistance for ChebyshevDistance {
-    fn haul_distance(&mut self, from: screeps::Position, to: screeps::Position) -> u32 {
-        from.get_range_to(to)
+    fn haul_distance(&mut self, from: screeps::Position, to: screeps::Position) -> Option<u32> {
+        Some(from.get_range_to(to))
     }
 }
 

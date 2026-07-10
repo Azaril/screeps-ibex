@@ -137,7 +137,7 @@ fn live_adapter_dtos_match_sim_market_pass() {
         &k_deposits,
         &k_pickups,
         screeps_econ_decision::sink_economics::HAUL_ROAD_Q_PLAINS_PERMILLE,
-        &mut |a: Position, b: Position| a.get_range_to(b),
+        &mut |a: Position, b: Position| Some(a.get_range_to(b)),
         |src, sink| same_structure(&pick_set, &dep_set, src, sink),
     );
 
