@@ -306,4 +306,56 @@ The 0008a Tier 0–3 build order stands, with these amendments from this review:
 
 ---
 
-*Review artifacts: five deep-read passes + adversarial verification, 2026-07-09. Finding IDs (D=defect, R=risk, O=opportunity) are stable for follow-up tracking.*
+## 7. Live-MMO root cause addendum (2026-07-10, re-confirmed 2026-07-28): why combat creeps sit near spawns and drain the empire
+
+> **Operator symptom:** combat creeps on shardX "generally just being a drain on the MMO and mostly sitting in rooms near a spawn," resistant to weeks of fixes including simulation. **Method:** live census of every owned room (creep bodies/positions/TTL via `game/room-objects`), seg-57, and a console tail of `[Lifecycle]`/`[SquadTrace]`/`[SpawnQueue]` with `military.debug_log` enabled at runtime — via a new generalized console-tail tool (`screeps-rest-api/examples/tail.rs`, token-auth + shard-filtered, reusing the kit's `ConsoleSocket` protocol). Every link below is live-observed, then re-confirmed two weeks later.
+
+### 7.0 The observed failure (both dates)
+
+- **2026-07-10** (10 rooms): 8 combat creeps, all in home rooms, 6 of 8 within 2 tiles of a spawn, zero hostiles anywhere; several at TTL 33–102 of 1500 — they lived their entire lives at the rally. Bodies are the GarrisonDefense floor shapes (4×HEAL+4×MOVE / 4×RA+4×MOVE) plus 11×RA+11×MOVE seats. CPU 87.7/130, **bucket 9632 draining at −3.3/tick**.
+- **2026-07-28** (now **5** rooms — W13N57/W13N53/W11N57/W11N55/W16N51 lost in the interval): the identical pattern persists — 7 combat creeps, same bodies, one 11RA creep at `d_spawn=1` with TTL 120, two on exit tiles. The same squad entities now log **Generation(28), Generation(32), Generation(23)** — dozens of complete field→stall→give-up→re-field cycles — and one squad rallies to `Secure{W13N53}`, a room no longer ours. (Empire contraction is noted as context, not causally attributed; the drain persisted through whatever defense those rooms needed.)
+
+Representative telemetry (repeating **every tick**):
+
+```
+[Lifecycle] TRAVEL squad=Entity(224, Generation(28)) room=W12N51 rally=(W12N51,25,25) gathered=true uncontested=true (assault: anchor rally->target)
+[SquadTrace] TRAVEL squad=Entity(224, ..) obj=ObjectiveId(3423) room=W12N51 d=Some(1) (stalled)
+[Lifecycle] ESCALATE-BLOCK squad=.. member=.. stalled>=100 → re-assessed OUT of the gather quorum (reachable subset proceeds)
+[SquadTrace] GIVEUP squad=.. deadline_lapsed=true .. departed_at=None
+[SpawnQueue] slot=7 role=RangedDPS target=W12N51 parts=22 cost=2200 prio=77591 homes_in_range=5   (re-queued every other tick)
+[War] Secure objective for NEIGHBOUR threat room W18N53 prio=50 (dps=0, tower_dps=-0, towers=0, adjacent=false)
+```
+
+### 7.1 The causal chain
+
+**Demand — why phantom squads exist** (offense is feature-flagged OFF; everything observed is defense-owned):
+
+- **D25 — Zombie objectives: claimed/deadline-committed objectives are TTL-exempt, and the give-up→instant-re-claim cycle re-arms the exemption forever — VERIFIED.** `DEFEND_OBJECTIVE_TTL = 60` (war.rs:35), but `expire()` retains any objective that is claimed *or* carries a manager deadline ([objective_queue.rs:461-467](../../screeps-ibex/src/military/objective_queue.rs)). A transient hostile mints `Secure{own room}`; the squad claims it and gets a 400t lease; the hostile leaves; the producer stops re-asserting (obj 842→W11N51 and obj 855→W13N57 logged **zero** producer re-asserts across a 300s window while `uncontested=true` every tick); on `GaveUp` the claim releases but Phase C re-claims within a tick (defense skips the unwinnable backoff, lifecycle.rs:289-300 — the R6 exemption) and re-stamps the deadline. The objective is immortal without any producer believing in it. Two weeks later the same rooms carry objective IDs in the 3400s — thousands of mints — with squads at Generation 28+.
+- **D27 — Neighbour-intercept over-breadth: `Secure` intercepts fire for zero-threat rooms and un-owned lost rooms — VERIFIED.** `[War] Secure objective for NEIGHBOUR threat room W18N53 prio=50 (dps=0, towers=0, adjacent=false)` — the "armed" trigger admits WORK-part remote miners, so the bot stands up intercept squads against an active RCL8 neighbour's harmless miners across the leash radius, despite `attack_players=false` (the defense-owned path never consults it). By 2026-07-28 this includes `Secure{W13N53}` — a floor duo queued at prio 79480 to "intercept" in a colony we lost. Producers at war.rs:721-778 (neighbour), :645-719 (owned-room). This also compounds review **R13a**: these intercepts are sized from `EnemyForce{dps, heal:0, hits:0}`.
+
+**Supply — why the squads never fight:**
+
+- **D24 — Frozen-anchor deploy deadlock for multi-home rosters (the core mechanical root) — VERIFIED.** Multi-home spawning scatters a roster across homes (July 10: one 8-slot squad across **five** rooms; `homes_in_range=10`). For gathered/uncontested targets the DEPLOY path marches a formation **anchor** home→target (`advance_squad_virtual_position`, [squad_manager.rs:3294-3297](../../screeps-ibex/src/military/squad_manager.rs)). But the anchor's boundary-cohesion gate needs members massed near the virtual position ([formation.rs:135-207](../../screeps-ibex/src/military/formation.rs)) while `cross_room_formation_target` **holds any member whose room is already closer to the destination than the anchor's room** ("don't get expelled backward", [squad_combat.rs:1274-1289](../../screeps-ibex/src/jobs/squad_combat.rs)) — a circular wait. Live signature: `d=Some(1) (stalled)` every tick for the whole 400t lease; members parked at their own spawns; `GIVEUP … departed_at=None`. The known "frozen anchor" pathology (the code comment at squad_manager.rs:3141 describes it verbatim) was fixed only for the contested/`!gathered` branch (solo-travel); `gathered=true` — reached via the uncontested quorum or FIX A's one-in-room-fighter rule — routes scattered squads straight back into it. RALLY-holding squads (`present=1/2 holding`) are the same shape one stage earlier (review **R8**), and RENEW now keeps these going-nowhere rosters alive (`RENEW … ttl=105 (forming/holding)`).
+- **D26 — Threat-blind rally/staging placement — VERIFIED.** The ADR 0034 scatter-robust rally kernel is purely geometric: for target W12N53 it staged the squad at **(W11N54, 25, 25) — the centre of the RCL8 defender's fortress home room (6 towers, 30 ramparts, 3 spawns)**. Any member that actually arrived would be shredded. In practice none arrive, because —
+- **D11 confirmed live as the stall mechanism.** Members routing toward a hostile-flagged rally/target room inherit `HostileBehavior::Deny` (review D11) → no route → `solo_stall≥100` → `ESCALATE-BLOCK` excludes the member. When the excluded member is the squad's only *fighter*, the "no healer-only assault" rule holds `gathered=false` permanently (squad_manager.rs:3200-3230) — observed as squad 160 flapping between solo-travel and assault across 32 generations.
+
+**The loop — why it never ends:**
+
+- **R22 — No never-departed circuit breaker — VERIFIED (upgraded from the review's R6/R8 analysis).** `GIVEUP … deadline_lapsed=true, departed_at=None` carries exactly the signal needed ("this squad never even left home") and nothing consumes it: defense objectives skip `mark_unwinnable`, D25 keeps the objective alive, Phase C re-claims, and Phase B re-queues the slots — `[SpawnQueue]` lines at prio ~75-79k re-emitted every other tick, indefinitely. Generation counters 23/28/32 after two weeks are the proof. Cost: continuous spawn energy + renew across all rooms, head-of-line pressure from ~77k-priority combat bids, and (July 10, at 10 rooms) the full per-squad tactical pipeline burning CPU 87/130 with the bucket draining −3.3/tick — review **R9** live. After the empire halved, CPU recovered (30/130, bucket full) but the energy/spawn loop continues.
+
+### 7.2 Recommended fixes (ranked; ties into §6's Tier −1)
+
+1. **Circuit-break never-departed give-ups (R22, new).** N consecutive `GaveUp` generations with `departed_at=None` on the same objective ⇒ apply the unwinnable-style backoff *even for defense* (or drop the objective and force the producer to re-justify it). Cheapest single change that stops the bleed for every downstream cause.
+2. **Kill objective zombies (D25, new).** A claim/deadline must not indefinitely exempt an objective from TTL: on claim-release (give-up), an objective past `expires_at` with no fresh producer assert is dropped, not re-claimable. (Keep the exemption *during* an active lease — that property legitimately bridges VM resets.)
+3. **Route ALL multi-home deploys through solo-travel-to-rally (D24, new).** The anchor formation march should begin only once members are massed (gather quorum at the rally), regardless of `gathered` fast-paths — i.e., the uncontested DEPLOY and FIX A paths must not re-enter the anchor march with a scattered roster. This is the fix the code's own :3141 comment already prescribes for the branch it was applied to.
+4. **Threat-aware staging (D26, new) + D11 fix.** Veto hostile-owned/towered rooms as rally rooms (the threat intel exists); stamp `HostileBehavior::HighCost`/`Allow` on squad movement orders (review D11) so members can actually route to contested targets.
+5. **Tighten the intercept trigger (D27, new).** Require actual combat threat (dps>0 or armed-with-combat-parts) and ownership sanity (never `Secure` a room another player owns/has taken unless a deliberate offense decision — consult `attack_players` for player-owned threats); drop the non-adjacent leash cases or price them honestly through the offense EV path.
+6. **Operator stopgap (no deploy needed):** `Memory._features.military.defense=false` stops the defense-scan producers (towers/safe-mode are separate missions and keep running) — an immediate off-switch for the drain while fixes land, at the cost of no squad defense. `military.debug_log` was enabled during this investigation and has been turned back off.
+
+### 7.3 Review reconciliation
+
+Live-confirmed from the §1–2 list: **D11** (Deny — the routing stall), **R8** (rally-hold), **R6** (defense re-field loop — its lifecycle exemption is the enabler of R22), **R13a** (heal:0/hits:0 intercept sizing — the flimsy floor duos observed), **R9** (CPU cluster — the pre-contraction bucket drain). New IDs minted by this addendum: **D24** (frozen-anchor deploy deadlock), **D25** (zombie claimed objectives), **D26** (threat-blind rally placement), **D27** (intercept over-breadth), **R22→defect-grade** (no never-departed circuit breaker). Note the July private-server validation (ADR 0042: "RALLY-hold 153→12") measured the *forming* half; the deploy-phase deadlock (D24) begins after the rally gate releases, which is why simulation-side wins did not translate to MMO — the sim's `ManagedSimSquad` pre-places members and bypasses travel entirely (the known lifecycle-harness gap).
+
+---
+
+*Review artifacts: five deep-read passes + adversarial verification, 2026-07-09; live-MMO root-cause investigation 2026-07-10, re-confirmed 2026-07-28. Finding IDs (D=defect, R=risk, O=opportunity) are stable for follow-up tracking.*
