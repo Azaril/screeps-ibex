@@ -44,14 +44,44 @@ pub fn arms(consts: MarketConsts, measure_gap: bool, oracle_period: u32) -> Vec<
         Arm { name: "ptrp", cfg: PolicyConfig::ptrp() },
         Arm {
             name: "market-k4off",
-            cfg: PolicyConfig::market(MarketArmCfg { consts, k4_bodies: false, measure_gap: false, oracle_period, deposit_reselect: true }),
+            cfg: PolicyConfig::market(MarketArmCfg {
+                consts,
+                k4_bodies: false,
+                measure_gap: false,
+                oracle_period,
+                deposit_reselect: true,
+                a3_live_control: false,
+            }),
         },
         // The END-STATE market (ADR 0044): the reduced-cost admission (source_floor + haul
         // subtraction) priced on TRUE routed distance are always on — this arm IS the shipped design;
-        // the sweep tunes the constants around it.
+        // the sweep tunes the constants around it. This is ALSO Arm B of the ADR 0044 A3 validation
+        // (EV controller-container deposit + live Use-lane admission — the proposed-live behavior).
         Arm {
             name: "market",
-            cfg: PolicyConfig::market(MarketArmCfg { consts, k4_bodies: true, measure_gap, oracle_period, deposit_reselect: true }),
+            cfg: PolicyConfig::market(MarketArmCfg {
+                consts,
+                k4_bodies: true,
+                measure_gap,
+                oracle_period,
+                deposit_reselect: true,
+                a3_live_control: false,
+            }),
+        },
+        // ADR 0044 A3 — Arm A ("live-today" control): reverts BOTH A3 defects (flat-tier controller
+        // container deposit + bypassed Use-lane admission) to reproduce the shipped-live behavior.
+        // The A/B against "market" (Arm B) on Family-C (benefit) + Family-S (regression guard)
+        // measures whether shipping A3 live moves the corpus. SIM-VALIDATION-ONLY — never live.
+        Arm {
+            name: "market-a3-control",
+            cfg: PolicyConfig::market(MarketArmCfg {
+                consts,
+                k4_bodies: true,
+                measure_gap: false,
+                oracle_period,
+                deposit_reselect: true,
+                a3_live_control: true,
+            }),
         },
     ]
 }
@@ -614,7 +644,14 @@ pub fn evaluate_point(
 ) -> SweepScore {
     let arm = Arm {
         name: "market",
-        cfg: PolicyConfig::market(MarketArmCfg { consts: consts_point, k4_bodies: true, measure_gap: false, oracle_period: 25, deposit_reselect: true }),
+        cfg: PolicyConfig::market(MarketArmCfg {
+            consts: consts_point,
+            k4_bodies: true,
+            measure_gap: false,
+            oracle_period: 25,
+            deposit_reselect: true,
+            a3_live_control: false,
+        }),
     };
     SweepScore { result: run_arm(&arm, spec, recover, Some(baseline_t), s_baseline).0 }
 }
@@ -724,7 +761,14 @@ mod tests {
     /// The end-state MARKET arm (structure-aware true routed distance + unreachable-arc exclusion)
     /// at the default constants — what the foreman sweep validates and the constants sweep tunes.
     fn end_state_market() -> PolicyConfig {
-        PolicyConfig::market(MarketArmCfg { consts: MarketConsts::default(), k4_bodies: true, measure_gap: false, oracle_period: 25, deposit_reselect: true })
+        PolicyConfig::market(MarketArmCfg {
+            consts: MarketConsts::default(),
+            k4_bodies: true,
+            measure_gap: false,
+            oracle_period: 25,
+            deposit_reselect: true,
+            a3_live_control: false,
+        })
     }
 
     /// ADR 0044 P2 — the FOREMAN-LAYOUT × RCL validation sweep. Every captured foreman layout at the

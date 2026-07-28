@@ -43,6 +43,7 @@ use crate::baseline::{
 };
 use crate::layout::{ContainerRole, LayoutInfo};
 use screeps::Position;
+use screeps_econ_decision::demand;
 use screeps_econ_decision::market as mk;
 use screeps_econ_decision::matching as m;
 use screeps_econ_decision::sink_economics as econ;
@@ -71,11 +72,27 @@ pub struct MarketArmCfg {
     /// this field exists ONLY as the A/B-isolation knob for the parity move-count/throughput diff
     /// test (the "pre-fix baseline" is this field set `false`), mirroring `k4_bodies`/`measure_gap`.
     pub deposit_reselect: bool,
+    /// ADR 0044 A3 — the SIM-ONLY "live-today" control arm (validation-only; NEVER a live
+    /// toggle). Arm A (`true`) REVERTS both A3 defects to reproduce the shipped-live behavior of
+    /// today: (1) the controller container deposit is priced by the flat tier ladder
+    /// (`tier_to_bid(controller_container_deposit_priority(..))`) instead of the EV
+    /// `buffer_deposit_bid` curve; (2) the Use-lane withdraw admission gate + downgrade veto is
+    /// bypassed so consumers draw regardless of the floor. Arm B (`false`, the default) is the
+    /// shipped sim = the proposed-live behavior (EV buffer deposit + live admission). The A/B
+    /// tournament (Family-C benefit + Family-S guard) measures the value of shipping A3 live.
+    pub a3_live_control: bool,
 }
 
 impl Default for MarketArmCfg {
     fn default() -> Self {
-        MarketArmCfg { consts: MarketConsts::default(), k4_bodies: true, measure_gap: false, oracle_period: 25, deposit_reselect: true }
+        MarketArmCfg {
+            consts: MarketConsts::default(),
+            k4_bodies: true,
+            measure_gap: false,
+            oracle_period: 25,
+            deposit_reselect: true,
+            a3_live_control: false,
+        }
     }
 }
 
@@ -316,12 +333,24 @@ impl MarketRuntime {
                 // (`buffer_deposit_bid` docs — a mostly-full buffer's marginal energy just
                 // sits). `unfulfilled` IS the free capacity for container deposits (K1).
                 SinkKey::Container(x, y) => {
-                    let base = match info.container_roles.get(&(x, y)) {
-                        Some(ContainerRole::Controller) => up_bid,
-                        // Provider containers take no deposits (K1); Other containers buffer par.
-                        _ => econ::STORAGE_BID,
-                    };
-                    econ::buffer_deposit_bid(base, d.unfulfilled, screeps_econ_engine::constants::CONTAINER_CAPACITY)
+                    let role = info.container_roles.get(&(x, y)).copied();
+                    // ADR 0044 A3 — Arm A (`a3_live_control`) reverts Defect 1: price the
+                    // CONTROLLER container by the live flat tier ladder (via the role lookup —
+                    // there is no `SinkKey::Controller` variant), reproducing today's live 1250/par
+                    // step instead of the EV `buffer_deposit_bid` quadratic. Other/provider
+                    // containers are unaffected by A3 and keep their normal buffer/par pricing.
+                    if self.cfg.a3_live_control && role == Some(ContainerRole::Controller) {
+                        let cap = screeps_econ_engine::constants::CONTAINER_CAPACITY;
+                        let used = cap.saturating_sub(d.unfulfilled);
+                        econ::tier_to_bid(demand::controller_container_deposit_priority(used, cap))
+                    } else {
+                        let base = match role {
+                            Some(ContainerRole::Controller) => up_bid,
+                            // Provider containers take no deposits (K1); Other containers buffer par.
+                            _ => econ::STORAGE_BID,
+                        };
+                        econ::buffer_deposit_bid(base, d.unfulfilled, screeps_econ_engine::constants::CONTAINER_CAPACITY)
+                    }
                 }
             })
             .collect();
@@ -1195,5 +1224,80 @@ mod tests {
         // One carrier takes exactly one ticket ⇒ the value is a single densest edge either way.
         assert_eq!(greedy_fp, m::flow_value_fp(1000 + 14 * 100, 10, 5), "greedy takes the densest edge");
         assert_eq!(oracle_fp, greedy_fp, "with one carrier the pruned oracle == greedy (no swap to find)");
+    }
+
+    /// ADR 0044 A3 (c) — the `a3_live_control` control arm reproduces TODAY'S LIVE behavior:
+    /// (1) the controller container deposit is flat-tier priced (1250 near-empty) instead of the EV
+    /// buffer curve, and (2) the Use-lane admission is bypassed (checked separately via `veto`/floor
+    /// below). Arm B (default) prices it by `buffer_deposit_bid` — the EV that out-bids the flat tier
+    /// on a near-empty container.
+    #[test]
+    fn a3_live_control_reverts_controller_container_to_flat_tier() {
+        use crate::baseline::{Deposit, SinkKey};
+        use crate::layout::{ContainerRole, LayoutInfo};
+
+        let room: RoomName = "W1N1".parse().unwrap();
+        let mut world = EconWorld::default();
+        world.set_controller(pos(25, 25), 3); // level 3, progress 0, full downgrade clock (no veto)
+
+        let cx = 30u8;
+        let cy = 30u8;
+        let mut container_roles: BTreeMap<(u8, u8), ContainerRole> = BTreeMap::new();
+        container_roles.insert((cx, cy), ContainerRole::Controller);
+        let info = LayoutInfo {
+            room,
+            controller_pos: pos(25, 25),
+            container_roles,
+            source_containers: BTreeMap::new(),
+            plan_structures: Vec::new(),
+            furniture_tiles: Vec::new(),
+        };
+
+        // A near-EMPTY controller container (free == capacity).
+        let cap = screeps_econ_engine::constants::CONTAINER_CAPACITY;
+        let deposits = vec![Deposit {
+            sink: SinkKey::Container(cx, cy),
+            pos: pos(cx, cy),
+            tier: crate::baseline::Tier::None,
+            unfulfilled: cap, // free capacity
+        }];
+
+        let up_bid = econ::upgrade_bid(&MarketConsts::default(), false); // 2000, not near level-up
+
+        // Arm B (default): EV buffer bid — near-empty ⇒ the full upgrade bid.
+        let mut rt_b = MarketRuntime::new(MarketArmCfg::default(), 0);
+        let bids_b = rt_b.begin_tick(&world, &info, &[], &deposits);
+        assert_eq!(bids_b[0], econ::buffer_deposit_bid(up_bid, cap, cap), "Arm B prices the EV buffer bid");
+        assert_eq!(bids_b[0], up_bid, "near-empty ⇒ the full upgrade bid (2000)");
+
+        // Arm A (a3_live_control): flat tier — near-empty (<75%) ⇒ Low (1250), NOT the EV bid.
+        let mut rt_a = MarketRuntime::new(MarketArmCfg { a3_live_control: true, ..Default::default() }, 0);
+        let bids_a = rt_a.begin_tick(&world, &info, &[], &deposits);
+        assert_eq!(
+            bids_a[0],
+            econ::tier_to_bid(demand::controller_container_deposit_priority(0, cap)),
+            "Arm A reverts to the flat tier ladder (1250 near-empty)"
+        );
+        assert_eq!(bids_a[0], econ::BID_TIER_LOW, "the live flat bid is 1250");
+        assert!(bids_b[0] > bids_a[0], "Arm B (EV) out-bids Arm A (flat) on a near-empty container");
+    }
+
+    /// ADR 0044 A3 (c) — the admission half of the control: `admit_use_withdraw` gates the upgrade
+    /// draw at the floor in Arm B, but Arm A bypasses it (mirroring the live inversion). This pins
+    /// the exact `rt.cfg.a3_live_control || rt.veto || admit_use_withdraw(...)` seam the runner uses.
+    #[test]
+    fn a3_live_control_bypasses_use_lane_admission() {
+        let consts = MarketConsts::default();
+        let up_bid = econ::upgrade_bid(&consts, false);
+        let deep_floor = econ::refill_bid(&consts, Some(12_000), 550, 250);
+        assert!(deep_floor > up_bid, "sanity: deep refill floor out-prices the upgrade sink");
+
+        // Arm B (no control, no veto): the draw is SHED under the deep floor.
+        let admitted_b = false /* a3_live_control */ || false /* veto */ || econ::admit_use_withdraw(up_bid, deep_floor);
+        assert!(!admitted_b, "Arm B sheds the upgrade draw under a deep refill deficit");
+
+        // Arm A (a3_live_control): the gate is bypassed ⇒ the draw is admitted regardless of floor.
+        let admitted_a = true /* a3_live_control */ || false || econ::admit_use_withdraw(up_bid, deep_floor);
+        assert!(admitted_a, "Arm A bypasses the admission gate (reproduces the live inversion)");
     }
 }

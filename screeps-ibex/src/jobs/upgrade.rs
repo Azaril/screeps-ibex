@@ -109,17 +109,26 @@ impl Idle {
             room_data: tick_context.system_data.room_data,
         };
 
-        get_new_nearby_pickup_state_fill_resource(
-            creep,
-            &transfer_queue_data,
-            &[home_room_data],
-            TransferPriorityFlags::ALL,
-            TransferTypeFlags::HAUL | TransferTypeFlags::USE,
-            ResourceType::Energy,
-            tick_context.runtime_data.transfer_queue,
-            pickup_range_anchor(creep, home_room_data),
-            UpgradeState::pickup,
-        )
+        // ADR 0044 A3 (Defect 2) — SHED the upgrader's Use-lane draw when its raw upgrade sink bid
+        // falls below the room's opportunity floor (unless the downgrade veto fires). This is the
+        // second-class-consumer behavior the sim runs live; the live bot previously never shed.
+        let pickup = if crate::jobs::utility::consumer_admission::upgrader_withdraw_admitted(home_room_data, tick_context.system_data.market_bids) {
+            get_new_nearby_pickup_state_fill_resource(
+                creep,
+                &transfer_queue_data,
+                &[home_room_data],
+                TransferPriorityFlags::ALL,
+                TransferTypeFlags::HAUL | TransferTypeFlags::USE,
+                ResourceType::Energy,
+                tick_context.runtime_data.transfer_queue,
+                pickup_range_anchor(creep, home_room_data),
+                UpgradeState::pickup,
+            )
+        } else {
+            None
+        };
+
+        pickup
         .or_else(|| {
             if should_allow_harvest(creep, home_room_data) {
                 get_new_harvest_state(creep, home_room_data, UpgradeState::harvest)
@@ -168,18 +177,24 @@ impl FinishedPickup {
             room_data: tick_context.system_data.room_data,
         };
 
-        get_new_nearby_pickup_state_fill_resource(
-            creep,
-            &transfer_queue_data,
-            &[home_room_data],
-            TransferPriorityFlags::ALL,
-            TransferTypeFlags::HAUL | TransferTypeFlags::USE,
-            ResourceType::Energy,
-            tick_context.runtime_data.transfer_queue,
-            pickup_range_anchor(creep, home_room_data),
-            UpgradeState::pickup,
-        )
-        .or_else(|| Some(UpgradeState::idle()))
+        // ADR 0044 A3 (Defect 2) — same Use-lane admission on the continuation pickup.
+        let pickup = if crate::jobs::utility::consumer_admission::upgrader_withdraw_admitted(home_room_data, tick_context.system_data.market_bids) {
+            get_new_nearby_pickup_state_fill_resource(
+                creep,
+                &transfer_queue_data,
+                &[home_room_data],
+                TransferPriorityFlags::ALL,
+                TransferTypeFlags::HAUL | TransferTypeFlags::USE,
+                ResourceType::Energy,
+                tick_context.runtime_data.transfer_queue,
+                pickup_range_anchor(creep, home_room_data),
+                UpgradeState::pickup,
+            )
+        } else {
+            None
+        };
+
+        pickup.or_else(|| Some(UpgradeState::idle()))
     }
 }
 
