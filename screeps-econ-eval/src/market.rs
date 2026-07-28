@@ -66,11 +66,16 @@ pub struct MarketArmCfg {
     /// `oracle_period` ticks). Off in sweeps (cost), on in the adjudication runs.
     pub measure_gap: bool,
     pub oracle_period: u32,
+    /// Move+deposit concurrency (design §4.4): the deposit-tick same-tick reselect that mirrors the
+    /// live reclaimed move. SHIPPED default is `true` (always-on — the live behavior has no toggle);
+    /// this field exists ONLY as the A/B-isolation knob for the parity move-count/throughput diff
+    /// test (the "pre-fix baseline" is this field set `false`), mirroring `k4_bodies`/`measure_gap`.
+    pub deposit_reselect: bool,
 }
 
 impl Default for MarketArmCfg {
     fn default() -> Self {
-        MarketArmCfg { consts: MarketConsts::default(), k4_bodies: true, measure_gap: false, oracle_period: 25 }
+        MarketArmCfg { consts: MarketConsts::default(), k4_bodies: true, measure_gap: false, oracle_period: 25, deposit_reselect: true }
     }
 }
 
@@ -472,6 +477,112 @@ impl MarketRuntime {
                 None => self.gap.skipped += 1,
             }
         }
+    }
+
+    /// Move+deposit concurrency (sim mirror). The tick-start [`Self::market_pass`] only tasks
+    /// carriers that are `Activity::Idle` at pass time, so a hauler mid-`Deliver` gets NO task and
+    /// its completion defers the next move a full tick (the sim's "deeper lag", design §4.4). This
+    /// re-runs the SHARED kernel for JUST the completing carrier — with its capacity PROJECTED for
+    /// the transfer already emitted this tick (`free + deposited`, `held − deposited`; a full
+    /// deposit ⇒ empty carrier, pickup lane) — against the CURRENT residual demand (bookings now
+    /// include this tick's earlier assignments and this carrier's freed capacity). It books the
+    /// chosen flow into the shared `bookings` and returns the task WITHOUT clearing other workers'
+    /// tasks. Returns `None` on a drained lane (caller waits). Determinism: same kernel, same
+    /// id-ordered inputs, one carrier — cannot disturb peers' assignments.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reselect_after_deposit(
+        &mut self,
+        world: &EconWorld,
+        info: &LayoutInfo,
+        plans: &[(SpawnPlan, u32)],
+        deposits: &[Deposit],
+        pickups: &[Pickup],
+        carrier: CarrierDto,
+        bookings: &mut Bookings,
+        mover: &mut dyn crate::movement::Mover,
+    ) -> Option<MarketTask> {
+        if deposits.is_empty() {
+            return None;
+        }
+        // Re-price deposits against the current demand set (Container bids depend on unfulfilled;
+        // spawn/extension/storage bids are booking-independent — same values as the tick-start
+        // pass when demand is unchanged). This recomputes floor/veto identically to tick-start.
+        let dep_bids = self.begin_tick(world, info, plans, deposits);
+
+        let k_carriers = vec![mk::MarketCarrier {
+            id: carrier.id,
+            pos: carrier.pos,
+            free: carrier.free,
+            held: carrier.held,
+            opportunity_milli: carrier.opportunity_milli,
+        }];
+        let k_deposits: Vec<mk::MarketDeposit> = deposits
+            .iter()
+            .enumerate()
+            .map(|(i, d)| mk::MarketDeposit {
+                sink: i as u32,
+                pos: d.pos,
+                bid_milli: dep_bids[i],
+                unfulfilled: d.unfulfilled,
+                is_refill: d.sink.is_fungible_pool_member(),
+            })
+            .collect();
+        let k_pickups: Vec<mk::MarketPickup> = pickups
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.lane == Lane::Haul)
+            .map(|(i, p)| mk::MarketPickup {
+                src: i as u32,
+                pos: p.pos,
+                available: p.available,
+                source_floor_milli: src_floor_milli(p.src),
+            })
+            .collect();
+
+        let nominal = screeps_sim_core::SimBody::unboosted(&[screeps::Part::Carry, screeps::Part::Move]);
+        let mut dist = |a: Position, b: Position| -> Option<u32> { mover.travel_ticks(a, b, 1, &nominal, 0) };
+        let out = mk::market_pass(&k_carriers, &k_deposits, &k_pickups, econ::HAUL_ROAD_Q_PLAINS_PERMILLE, &mut dist, |src_idx, sink_idx| {
+            same_structure(pickups[src_idx as usize].src, deposits[sink_idx as usize].sink)
+        });
+
+        // Instrument D (same accounting as `market_pass`): the reselect's realized haul IS hauling
+        // that delivers value, so it must be counted, else `delivered_value` undercounts the
+        // reselect's deliveries while the next tick's pass still prices the loaded-carrier haul —
+        // inflating the haul-cost ratio (the realistic-Family-R instrument-D regression this fixes).
+        self.match_ops += out.stats.ops;
+        self.match_edges += out.stats.edges;
+        for asg in &out.greedy {
+            let e = &out.edges[asg.edge];
+            self.haul_cost_integral += e.haul_cost_milli as u64 * asg.amount as u64;
+            self.delivered_value_integral += e.bid_milli as u64 * asg.amount as u64;
+        }
+
+        // Book the assigned flow and resolve the ONE task back to sim keys (no self.tasks.clear()).
+        for (&src_idx, &amount) in &out.bookings.pickups {
+            *bookings.pickups.entry(pickups[src_idx as usize].src).or_insert(0) += amount;
+        }
+        for (&sink_idx, &amount) in &out.bookings.deposits {
+            *bookings.deposits.entry(deposits[sink_idx as usize].sink).or_insert(0) += amount;
+        }
+        let mut resolved = None;
+        for a in &out.assignments {
+            let task = match a.task {
+                mk::MarketTask::PickupDeliver { src, src_pos, take, sink, sink_pos, give } => MarketTask::PickupDeliver {
+                    src: pickups[src as usize].src,
+                    src_pos,
+                    take,
+                    sink: deposits[sink as usize].sink,
+                    sink_pos,
+                    give,
+                },
+                mk::MarketTask::Deliver { sink, sink_pos, amount } => {
+                    MarketTask::Deliver { sink: deposits[sink as usize].sink, sink_pos, amount }
+                }
+            };
+            self.tasks.insert(a.carrier, task);
+            resolved = Some(task);
+        }
+        resolved
     }
 }
 

@@ -133,6 +133,34 @@ where
     None
 }
 
+/// A deposit-tick capacity projection. On the deposit-tick reselect (hauler move+deposit
+/// concurrency), `creep.store()` is stale — the transfer intent is issued this tick but not
+/// reflected until end of tick — so selection must size against projected capacities, NOT the
+/// game store. BOTH scalars are projected: a partial deposit lowers `carried_energy` and raises
+/// `free_capacity` by the same accepted amount, and the loaded-hauler delivery branch sizes
+/// against `carried_energy` (projecting only free capacity would re-open the phantom-cargo bug on
+/// the delivery side). `None` (the Idle path) reads the live store, byte-identical to today.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProjectedStore {
+    pub free_capacity: u32,
+    pub carried_energy: u32,
+}
+
+impl ProjectedStore {
+    /// Ship-blocker #1: project BOTH capacity scalars for a transfer issued this tick but not yet
+    /// reflected in `creep.store()`. A deposit of `deposited_total` lowers the carried energy and
+    /// raises the free capacity by the SAME amount (a lone free-capacity override would leave
+    /// `carried_energy` stale and re-open the phantom-cargo bug on the loaded-hauler delivery leg).
+    /// `deposited_total` for a non-energy resource does not reduce the energy carry — matched here,
+    /// as it never contributes to a non-energy deposit's `carried_before` (energy-carry contract).
+    pub fn after_deposit(free_before: u32, carried_before: u32, deposited_total: u32) -> Self {
+        ProjectedStore {
+            free_capacity: free_before.saturating_add(deposited_total),
+            carried_energy: carried_before.saturating_sub(deposited_total),
+        }
+    }
+}
+
 /// ADR 0040 M5a — the LIVE bid-native HAUL-lane selection (the wiring the M5a-core slice left
 /// undone). Runs the SHARED market kernel (`market_pass`, the same one the sim's MARKET tournament
 /// arm delegates to) over this hauler, ranking (pickup, delivery) pairs by RAW bid-density instead
@@ -141,6 +169,9 @@ where
 /// caller registers the returned tickets and transitions into the mapped state. Returns `None`
 /// when the market assigns nothing (drained lane / full creep) so the Idle cascade falls through
 /// to the tier path (which keeps the crate tier-capable for the non-market lanes).
+///
+/// `projected`: `Some(..)` on a deposit-tick reselect supplies both capacities projected for the
+/// transfer already issued this tick (see `ProjectedStore`); `None` reads the live store (Idle).
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_market_pickup_and_delivery_state<TF, PF, DF, R>(
@@ -153,15 +184,22 @@ pub fn get_new_market_pickup_and_delivery_state<TF, PF, DF, R>(
     target_filter: TF,
     pickup_state: PF,
     delivery_state: DF,
+    projected: Option<ProjectedStore>,
 ) -> Option<R>
 where
     TF: Fn(&TransferTarget) -> bool,
     PF: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
     DF: Fn(Vec<TransferDepositTicket>) -> R,
 {
-    // Safe on general stores (engine-mechanics folklore row 26).
-    let free_capacity = creep.store().get_free_capacity(None).max(0) as u32;
-    let carried_energy = creep.store().get_used_capacity(Some(ResourceType::Energy));
+    // Safe on general stores (engine-mechanics folklore row 26). On a deposit-tick reselect the
+    // live store is stale, so the caller supplies a projected pair; `None` reads the live store.
+    let (free_capacity, carried_energy) = match projected {
+        Some(p) => (p.free_capacity, p.carried_energy),
+        None => (
+            creep.store().get_free_capacity(None).max(0) as u32,
+            creep.store().get_used_capacity(Some(ResourceType::Energy)),
+        ),
+    };
 
     if free_capacity == 0 && carried_energy == 0 {
         return None;
@@ -528,20 +566,35 @@ pub fn visualize_pickup(_describe_data: &mut JobDescribeData, _ticket: &Transfer
 /// callers (haul/harvest) pass `true`; the MILITARY caller (dismantle — salvage delivery) passes
 /// `false` and keeps its enum tier THIS pass: military w needs war-layer objective EV, frozen
 /// with operations/war.rs (unblock-after-merge).
+///
+/// On the deposit tick, `creep.store()` is stale (the transfer intent is issued but not yet
+/// reflected), so instead of re-reading the store the caller may reselect its next target
+/// same-tick against a PROJECTED store. `on_deposit_complete` is invoked with the tick context
+/// and the total ACCEPTED transfer amount this tick (`deposited_total`); returning `Some(state)`
+/// transitions straight into the next state (letting the still-free MOVE pipeline emit that
+/// state's move this tick), `None` preserves today's defer-a-tick behavior. Civilian haul opts
+/// in; the military dismantle caller (and any other) passes `|_, _| None` to keep today's
+/// semantics. The context is threaded as a parameter (not captured) so the closure can re-borrow
+/// it mutably for the reselect while `tick_delivery` still holds `&mut tick_context`.
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_delivery<F, R>(
+pub fn tick_delivery<F, G, R>(
     tick_context: &mut JobTickContext,
     tickets: &mut Vec<TransferDepositTicket>,
     bid_cargo_value: bool,
     next_state: F,
+    on_deposit_complete: G,
 ) -> Option<R>
 where
     F: Fn() -> R,
+    G: Fn(&mut JobTickContext, u32) -> Option<R>,
 {
     let creep = tick_context.runtime_data.owner;
     let creep_pos = creep.pos();
 
     let mut transfered = false;
+    // Sum of ACCEPTED transfers this tick (rejected entries do not contribute), from which the
+    // caller derives the projected (free, carried) pair for a same-tick reselect.
+    let mut deposited_total: u32 = 0;
 
     while let Some(ticket) = tickets.first_mut() {
         //TODO: Use visibility to query if target should be visible.
@@ -578,6 +631,9 @@ where
                         tick_context.action_flags.insert(SimultaneousActionFlags::TRANSFER);
 
                         transfered = true;
+                        // ACCEPTED only — a rejected entry (else branch) consumes its own slot
+                        // but does not inflate the projected deposit total.
+                        deposited_total = deposited_total.saturating_add(amount);
                     } else {
                         ticket.consume_deposit(resource, amount);
                     }
@@ -591,11 +647,11 @@ where
     }
 
     if transfered {
-        //
-        // NOTE: Delay further execution by a tick as inventory cannot be trusted. (Needs predicted storage that can be shared across systems.)
-        //
-
-        None
+        // Was: return None to defer a tick, since creep.store() is stale (the transfer intent is
+        // deferred, store() is not updated until end of tick). Now the caller may reselect its
+        // next target same-tick against a PROJECTED store derived from `deposited_total`, so the
+        // move fires on the still-free MOVE pipeline this tick. `|_, _| None` preserves the defer.
+        on_deposit_complete(tick_context, deposited_total)
     } else {
         Some(next_state())
     }
@@ -660,3 +716,54 @@ where
 
 // The anchor-range pin tests MOVED with the kernel to
 // `screeps_econ_decision::snapshot` (nearest_pickup_honors_anchor — ADR 0040 M3).
+
+#[cfg(test)]
+mod tests {
+    use super::ProjectedStore;
+
+    // Move+deposit concurrency (docs/design/hauler-move-deposit-concurrency.md). The runtime FSM
+    // path (`tick_delivery` / `select_next_haul_state` reselect, `Delivery::tick`) needs a live game
+    // `Creep` + `JobTickContext`, which have no host-side constructor — so, like every other job
+    // test in this crate, only the PURE extracted logic is unit-tested here. The end-to-end reclaim
+    // (move-count/throughput diff, co-located no-reclaim, projected-empty reselect) is covered by the
+    // deterministic sim mirror in `screeps-econ-eval` (runner.rs tests), and the live path by the
+    // private soak (§5 item 10).
+
+    /// Ship-blocker #1: the deposit-tick projection moves BOTH scalars by the deposited amount —
+    /// free rises, carried falls — so the loaded-hauler delivery leg (which sizes against
+    /// `carried_energy`) never sees phantom cargo.
+    #[test]
+    fn projection_moves_both_scalars_by_deposited_amount() {
+        // A hauler carrying 200 with 100 free deposits 150.
+        let p = ProjectedStore::after_deposit(100, 200, 150);
+        assert_eq!(p.free_capacity, 250, "free capacity rises by the deposited amount");
+        assert_eq!(p.carried_energy, 50, "carried energy falls by the deposited amount");
+    }
+
+    /// A FULL deposit empties the carry and frees the whole store (→ the pickup lane next).
+    #[test]
+    fn full_deposit_projects_empty_carrier() {
+        let p = ProjectedStore::after_deposit(0, 300, 300);
+        assert_eq!(p.carried_energy, 0, "fully drained");
+        assert_eq!(p.free_capacity, 300, "the whole store is free");
+    }
+
+    /// A PARTIAL deposit leaves carry > 0 and free < full — the loaded-hauler branch re-targets a
+    /// second sink with correctly-projected carry (§4.5), not a phantom-full or phantom-empty store.
+    #[test]
+    fn partial_deposit_keeps_carry_positive() {
+        let p = ProjectedStore::after_deposit(50, 250, 100);
+        assert_eq!(p.carried_energy, 150);
+        assert_eq!(p.free_capacity, 150);
+        assert!(p.carried_energy > 0 && p.free_capacity < 300, "still loaded, still partially full");
+    }
+
+    /// Saturating arithmetic: a `deposited_total` at/above the carried amount never underflows the
+    /// carry (defensive — the accepted total is bounded by cargo, but the projection must not panic).
+    #[test]
+    fn projection_saturates_and_never_underflows() {
+        let p = ProjectedStore::after_deposit(0, 100, u32::MAX);
+        assert_eq!(p.carried_energy, 0, "carried saturates to 0, never wraps");
+        assert_eq!(p.free_capacity, u32::MAX, "free saturates at u32::MAX, never wraps");
+    }
+}

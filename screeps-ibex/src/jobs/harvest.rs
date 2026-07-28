@@ -269,7 +269,9 @@ impl Delivery {
         }
 
         // Civilian: the delivery leg bids its carried-cargo rate on the numeric lane (decision (4)).
-        tick_delivery(tick_context, &mut self.deposits, true, HarvestState::finished_delivery)
+        // Harvest keeps the pre-concurrency defer-a-tick behavior (`|_, _| None`); the move+deposit
+        // concurrency reselect is wired only on the haul lane (its Idle cascade is the shared path).
+        tick_delivery(tick_context, &mut self.deposits, true, HarvestState::finished_delivery, |_, _| None)
     }
 }
 

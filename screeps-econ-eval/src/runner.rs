@@ -150,6 +150,14 @@ pub struct RunOutcome {
     pub sites_built: BTreeMap<&'static str, u32>,
     /// ADR 0044 P2 remote-haul instruments (Family R; zero on single-room families).
     pub remote: crate::metrics::RemoteInstruments,
+    /// Total creep MOVES over the run (Σ per-worker `step_worker` move-returns). A diagnostic for
+    /// the move+deposit concurrency parity gate (design §5.2): the same scenario with the reselect
+    /// on must show FEWER moves than with it off, over the same delivered throughput. Ledger-
+    /// invisible (not folded into `report_digest`), so it does not affect the determinism fence.
+    pub total_moves: u64,
+    /// Total delivery-transfer intents emitted (`EconAction::Transfer`) — the throughput
+    /// denominator paired with `total_moves` for the parity move-count-per-delivery diff.
+    pub total_deliveries: u64,
 }
 
 impl RunOutcome {
@@ -337,6 +345,9 @@ pub fn run_world(
         .collect();
     let mut assignments = 0u64;
     let mut intents_total = 0u64;
+    // Parity diagnostics for the move+deposit concurrency gate (design §5.2), ledger-invisible.
+    let mut total_moves = 0u64;
+    let mut total_deliveries = 0u64;
     let mut deficit_episodes: Vec<u32> = Vec::new();
     let mut deficit_started: Option<u32> = None;
     let mut sites_built: BTreeMap<&'static str, u32> = BTreeMap::new();
@@ -382,6 +393,9 @@ pub fn run_world(
         let mut moved_any = false;
         let allowance = allowance_for(&opts.cfg, world);
         let ids: Vec<u32> = driver.workers.keys().copied().collect();
+        // A stable snapshot of role assignments for the deposit-tick reselect's spawn-preview
+        // (refill bid) — roles do not change while workers step (assigned at spawn).
+        let roles_snapshot = driver.roles();
         let mut new_assignments = 0u64;
         for id in ids {
             let step = step_worker(
@@ -391,6 +405,7 @@ pub fn run_world(
                 allowance,
                 opts.cfg.tiered_delivery,
                 market_rt.as_mut(),
+                &roles_snapshot,
                 &mut bookings,
                 &mut driver,
                 id,
@@ -398,10 +413,18 @@ pub fn run_world(
                 &mut new_assignments,
             );
             moved_any |= step;
+            if step {
+                total_moves += 1;
+            }
         }
         assignments += new_assignments;
         let actions_emitted = intents.actions.len() as u32;
         intents_total += actions_emitted as u64;
+        total_deliveries += intents
+            .actions
+            .iter()
+            .filter(|(_, a)| matches!(a, EconAction::Transfer { .. }))
+            .count() as u64;
 
         // ── 4. K4 spawning through the shared queue kernel. The hauling stat is the live
         // supply↔demand MIN-MATCH (`matched_unfulfilled_hauling` — the transfersystem.rs
@@ -668,6 +691,8 @@ pub fn run_world(
         match_max_edges,
         match_gap,
         remote: remote_instr,
+        total_moves,
+        total_deliveries,
     }
 }
 
@@ -838,6 +863,7 @@ fn step_worker(
     allowance: baseline::RepairAllowance,
     tiered_delivery: bool,
     mut market: Option<&mut MarketRuntime>,
+    roles: &BTreeMap<u32, RoleSpec>,
     bookings: &mut Bookings,
     driver: &mut Driver,
     id: u32,
@@ -1199,8 +1225,47 @@ fn step_worker(
                     }
                     // Harvesters continue through FinishedDelivery (harvest.rs:279 →
                     // finished_delivery); haulers go Idle (haul.rs:255 → HaulState::idle).
-                    worker.activity =
-                        if is_harvester { Activity::PostDelivery } else { Activity::Idle };
+                    let reselect_on = market.as_deref().is_some_and(|rt| rt.cfg.deposit_reselect);
+                    if is_harvester {
+                        worker.activity = Activity::PostDelivery;
+                    } else if reselect_on && transfer_amount > 0 {
+                        // Move+deposit concurrency (sim mirror, design §4.4): reduce the sim's own
+                        // deeper lag on the completion path. The tick-start market pass excluded
+                        // this mid-delivery carrier, so re-run the SHARED kernel for JUST it against
+                        // the residual demand with PROJECTED capacity (the Transfer is emitted but
+                        // not yet applied — creep_energy is stale), then transition to Travel AND
+                        // advance the first trace step THIS tick so the move is physically reclaimed
+                        // (not just re-booked). Drained lane ⇒ Wait; co-located next pickup reclaims
+                        // no move (§4.6). Bounded transitions: at most one reselect per completion.
+                        let free_proj = creep_free(world, id).saturating_add(transfer_amount);
+                        let held_proj = held.saturating_sub(transfer_amount);
+                        let deposit_set = deposits(world, info, bookings);
+                        let pickup_set = pickups(world, info, bookings);
+                        let unfulfilled = matched_unfulfilled_hauling(&deposit_set, &pickup_set);
+                        // rt borrowed immutably for the spawn preview, then mutably for the reselect
+                        // (sequential — no overlap).
+                        let plans = {
+                            let rt = market.as_deref().expect("market.is_some()");
+                            crate::market::spawn_requests_market(world, roles, unfulfilled, rt)
+                        };
+                        let carrier = CarrierDto { id, pos, free: free_proj, held: held_proj, opportunity_milli: 0 };
+                        let rt = market.as_deref_mut().expect("market.is_some()");
+                        let task = rt.reselect_after_deposit(world, info, &plans, &deposit_set, &pickup_set, carrier, bookings, mover);
+                        match task {
+                            Some(t) => {
+                                *assignments += 1;
+                                let next = market_task_activity(world, mover, id, pos, &t, tick);
+                                let (next, reclaimed) = advance_first_trace_step(world, &mut market, id, pos, next);
+                                worker.activity = next;
+                                moved |= reclaimed;
+                            }
+                            // Drained lane: no store read, back off like the live projected-path
+                            // short-circuit (HaulState::wait) — the next tick's pass re-tasks it.
+                            None => worker.activity = Activity::Wait { until: tick + 5 },
+                        }
+                    } else {
+                        worker.activity = Activity::Idle;
+                    }
                 }
                 _ => {
                     // Target died / nothing aboard: replan (harvesters through the same
@@ -1700,6 +1765,51 @@ fn repair_hits(world: &EconWorld, r: baseline::RepairRef) -> (u32, u32) {
     }
 }
 
+/// Move+deposit concurrency (sim mirror, design §4.4c). Consume the FIRST trace step of a freshly
+/// produced `Activity::Travel { idx: 0, .. }` THIS tick — the physical reclaim of the move the
+/// live loop fires on the still-free MOVE pipeline. Without this the reselect only re-books
+/// (`Travel{idx:0}` returns "no move"), so the sim would change bookkeeping without changing move
+/// count and the throughput/move-count parity gate would diverge. Mirrors the `Travel` arm's
+/// first-step teleport + road-wear booking; haulers have NO drive-by repair lane (`drive_by_min`
+/// is `None`), so that branch is omitted. A co-located reselect (`travel_then` returned a non-Travel
+/// `then` directly, empty trace) reclaims NO move — returned unchanged, `moved` stays false (§4.6).
+/// Returns `(next_activity, moved)`.
+fn advance_first_trace_step(
+    world: &mut EconWorld,
+    market: &mut Option<&mut MarketRuntime>,
+    id: u32,
+    pos: Position,
+    activity: Activity,
+) -> (Activity, bool) {
+    let Activity::Travel { trace, idx, then } = activity else {
+        // Co-located / non-travel next state: no move to reclaim this tick.
+        return (activity, false);
+    };
+    debug_assert_eq!(idx, 0, "advance_first_trace_step expects a fresh Travel");
+    let mut moved = false;
+    let new_pos = trace.get(idx).copied().unwrap_or(pos);
+    if new_pos != pos {
+        let parts = world.creep(id).map(|c| c.body.parts.len() as u32).unwrap_or(0);
+        if let Some(c) = world.creep_mut(id) {
+            c.pos = new_pos;
+        }
+        world.apply_road_wear(new_pos, parts);
+        if world.road_at(new_pos).is_some() {
+            if let Some(rt) = market.as_deref_mut() {
+                rt.observe_wear((new_pos.x().u8(), new_pos.y().u8()), parts);
+            }
+        }
+        moved = true;
+    }
+    let next_idx = idx + 1;
+    let next = if next_idx >= trace.len() {
+        *then
+    } else {
+        Activity::Travel { trace, idx: next_idx, then }
+    };
+    (next, moved)
+}
+
 /// Travel to within `range` of `to`, then do `then` (empty trace ⇒ `then` immediately NEXT tick).
 #[allow(clippy::too_many_arguments)] // the FSM transition's full context; a struct would hide it
 fn travel_then(
@@ -2007,5 +2117,152 @@ mod tests {
             "the open episode spans the whole run (open {open}, ran {})",
             out.ticks_run
         );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════════
+    // Move+deposit concurrency (design docs/design/hauler-move-deposit-concurrency.md) — the sim
+    // mirror + the move-count/throughput PARITY gate (§5.2). See also the live-side reselect wired
+    // in jobs/haul.rs (untestable host-side: it needs a real game Creep/JobTickContext).
+    // ═══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// A single CARRY-only hauler (→ `Role::Hauler`), a FULL storage it withdraws from, and a spawn
+    /// with a standing deficit it refills. Pickup (storage) and sink (spawn) are NON-ADJACENT, so a
+    /// completed delivery's next pickup leg is a real move to reclaim. Market mode; `deposit_reselect`
+    /// selectable so the parity test can A/B the pre-fix baseline against the shipped behavior.
+    fn hauler_market_world(deposit_reselect: bool) -> (EconWorld, SimTerrain, LayoutInfo, RunOptions) {
+        let mut w = EconWorld::default();
+        // Spawn (sink) at one end, storage (pickup) far away — a multi-tile haul each way.
+        let s = w.add_spawn(pos(10, 25));
+        w.spawns[s].store_energy = 0;
+        w.set_storage(pos(40, 25), 1_000_000);
+        w.storage.as_mut().unwrap().store.add(SimResource::Energy, 1_000_000);
+        // CARRY-only body ⇒ Hauler. Start adjacent to the spawn (a natural completion point).
+        let id = w.add_creep(pos(11, 25), &[Part::Carry, Part::Carry, Part::Carry, Part::Move], 100_000);
+        let _ = id;
+        let info = LayoutInfo {
+            room: "W1N1".parse().unwrap(),
+            controller_pos: pos(25, 45),
+            container_roles: BTreeMap::new(),
+            source_containers: BTreeMap::new(),
+            plan_structures: Vec::new(),
+            furniture_tiles: Vec::new(),
+        };
+        let terrain = w.movement.terrain.clone();
+        let mut cfg = crate::market::MarketArmCfg::default();
+        cfg.deposit_reselect = deposit_reselect;
+        let mut opts = RunOptions::new(PolicyConfig::market(cfg), RecoverConsts::default(), 400);
+        opts.goal = RunGoal::Horizon; // run the full horizon regardless of lane recovery
+        (w, terrain, info, opts)
+    }
+
+    /// **The parity gate (§5.2).** The SAME single-hauler scenario, run with the deposit-tick
+    /// reselect OFF (pre-fix baseline) and ON (shipped). ON reclaims the post-deposit idle tick, so
+    /// over a FIXED move/tick budget it completes the same work in FEWER moves per delivery — the
+    /// direct move-count / throughput diff that validates the live↔sim reclaim (NOT the determinism
+    /// fence, which is blind to move timing, §4.4). The reclaim is bounded (≤ one tick per completed
+    /// delivery, so throughput does not balloon and moves do not fall below the work done).
+    #[test]
+    fn deposit_reselect_reclaims_moves_move_count_diff() {
+        let (mut w_off, t_off, i_off, o_off) = hauler_market_world(false);
+        let mut m_off = AnalyticMover::new(&t_off);
+        let out_off = run_world(&sc(400), &mut w_off, &mut m_off, &i_off, &o_off);
+
+        let (mut w_on, t_on, i_on, o_on) = hauler_market_world(true);
+        let mut m_on = AnalyticMover::new(&t_on);
+        let out_on = run_world(&sc(400), &mut w_on, &mut m_on, &i_on, &o_on);
+
+        eprintln!(
+            "[reselect diff] off: moves={} deliveries={} | on: moves={} deliveries={}",
+            out_off.total_moves, out_off.total_deliveries, out_on.total_moves, out_on.total_deliveries
+        );
+        // Deliveries actually happened on both arms (the scenario exercises the completion path).
+        assert!(out_off.total_deliveries > 0, "baseline delivered (deliveries={})", out_off.total_deliveries);
+        assert!(out_on.total_deliveries > 0, "shipped delivered (deliveries={})", out_on.total_deliveries);
+
+        // Moves-per-delivery STRICTLY drops with the reselect on — the reclaimed post-deposit move,
+        // whether it manifests as fewer moves at equal deliveries or (as here, on a fixed Horizon
+        // move budget) more completed deliveries at equal moves. Both are the same reclaimed tick.
+        let mpd_off = out_off.total_moves as f64 / out_off.total_deliveries as f64;
+        let mpd_on = out_on.total_moves as f64 / out_on.total_deliveries as f64;
+        assert!(
+            mpd_on < mpd_off,
+            "moves/delivery must drop with the reselect on: off={:.3} ({} moves / {} deliveries), on={:.3} ({} moves / {} deliveries)",
+            mpd_off, out_off.total_moves, out_off.total_deliveries,
+            mpd_on, out_on.total_moves, out_on.total_deliveries,
+        );
+
+        // Throughput does not regress and does not balloon: the reclaim is ONE tick per completed
+        // delivery, so the shipped arm delivers at least as much but not more than a bounded margin
+        // above the baseline (a runaway would signal a double-step / re-book bug, §4.7).
+        assert!(
+            out_on.total_deliveries >= out_off.total_deliveries,
+            "throughput must not regress: on={} vs off={}",
+            out_on.total_deliveries, out_off.total_deliveries,
+        );
+        assert!(
+            out_on.total_deliveries <= out_off.total_deliveries * 2,
+            "the reclaim is bounded (≤ one tick per delivery), not a runaway: on={} vs off={}",
+            out_on.total_deliveries, out_off.total_deliveries,
+        );
+
+        // Moves did not fall below the work actually done (no move was silently dropped): the on-arm
+        // still physically travels for every round-trip it completes.
+        assert!(
+            out_on.total_moves >= out_on.total_deliveries,
+            "each completed delivery still required real travel (moves={} >= deliveries={})",
+            out_on.total_moves, out_on.total_deliveries,
+        );
+    }
+
+    /// **Co-located next target reclaims NO move (§4.6).** `advance_first_trace_step` on a next
+    /// state that is NOT a `Travel` (the co-located case — `travel_then` returns the `then` activity
+    /// directly on an empty trace) must return `moved == false`: pipeline D is spent, there is no
+    /// move to reclaim. The move-count assertion must tolerate this.
+    #[test]
+    fn advance_first_trace_step_colocated_reclaims_no_move() {
+        let (mut w, _t, _i, _o) = hauler_market_world(true);
+        let id = *w.creep_stores.keys().next().unwrap();
+        let p = w.creep(id).unwrap().pos;
+        let mut market: Option<&mut MarketRuntime> = None;
+        // A non-Travel next activity (co-located pickup): NO move reclaimed, position unchanged.
+        let colocated = Activity::PickupFor {
+            src: SrcKey::Storage,
+            take: 50,
+            sink: SinkKey::Spawn(0),
+            sink_pos: pos(10, 25),
+            give: 50,
+        };
+        let (next, moved) = advance_first_trace_step(&mut w, &mut market, id, p, colocated.clone());
+        assert!(!moved, "a co-located (non-Travel) next state reclaims no move");
+        assert!(matches!(next, Activity::PickupFor { .. }), "the next state is preserved unchanged");
+        assert_eq!(w.creep(id).unwrap().pos, p, "the creep did not teleport");
+    }
+
+    /// **`reselect_after_deposit` finds the next haul task from a projected-EMPTY carrier, without a
+    /// store read.** After a full deposit the projected carrier is empty (`free = capacity`,
+    /// `held = 0`); against a full storage + spawn deficit the single-carrier kernel returns a
+    /// pickup→deliver task (the round-trip back to storage). This is the reclaim's booking step.
+    #[test]
+    fn reselect_after_deposit_projects_empty_and_finds_pickup() {
+        let (w, terrain, info, _o) = hauler_market_world(true);
+        let id = *w.creep_stores.keys().next().unwrap();
+        let cap = w.creep_stores.get(&id).unwrap().free(); // empty ⇒ free == capacity
+        let cpos = w.creep(id).unwrap().pos;
+        let mut mover = AnalyticMover::new(&terrain);
+        let mut rt = MarketRuntime::new(crate::market::MarketArmCfg::default(), w.tick());
+        let mut bookings = Bookings::default();
+        let deposit_set = deposits(&w, &info, &bookings);
+        let pickup_set = pickups(&w, &info, &bookings);
+        let unfulfilled = matched_unfulfilled_hauling(&deposit_set, &pickup_set);
+        let plans = crate::market::spawn_requests_market(&w, &Driver { workers: BTreeMap::new(), pending_roles: BTreeMap::new() }.roles(), unfulfilled, &rt);
+        // Projected-empty carrier (post-full-deposit): free = capacity, held = 0.
+        let carrier = CarrierDto { id, pos: cpos, free: cap, held: 0, opportunity_milli: 0 };
+        let task = rt.reselect_after_deposit(&w, &info, &plans, &deposit_set, &pickup_set, carrier, &mut bookings, &mut mover);
+        assert!(
+            matches!(task, Some(MarketTask::PickupDeliver { .. })),
+            "an emptied carrier is re-tasked to pick up and deliver again (got {task:?})",
+        );
+        // The pickup was booked (the reserve-before-move step), proving the kernel actually ran.
+        assert!(!bookings.pickups.is_empty(), "the reselect booked its pickup leg");
     }
 }

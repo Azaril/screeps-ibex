@@ -71,110 +71,145 @@ impl Idle {
             return Some(HaulState::wait(cadence.backoff_ticks));
         }
 
-        let creep = tick_context.runtime_data.owner;
-        let pickup_rooms = state_context
-            .pickup_rooms
-            .iter()
-            .filter_map(|e| tick_context.system_data.room_data.get(*e))
-            .collect_vec();
+        // Live store (projected = None) → byte-identical to the pre-extraction cascade (test:
+        // idle_selection_is_byte_identical_pure_extraction).
+        select_next_haul_state(state_context, tick_context, None)
+    }
+}
 
-        let delivery_rooms = state_context
-            .delivery_rooms
-            .iter()
-            .filter_map(|e| tick_context.system_data.room_data.get(*e))
-            .collect_vec();
+/// The shared HAUL market/tier selection cascade, extracted from `Idle::tick` so `Delivery::tick`
+/// can run the EXACT same selection on a deposit-tick reselect (identical determinism, identical
+/// booking). `projected`:
+/// - `None` (from `Idle`): sizes against the live `creep.store()` and runs the full fallback
+///   chain — byte-identical to the pre-extraction `Idle::tick`.
+/// - `Some(..)` (deposit-tick reselect): the market head sizes against the projected `(free,
+///   carried)` pair, and the chain STOPS at the market head — a drained lane returns `Wait`
+///   directly rather than dropping into a store-reading fallback, since `creep.store()` is stale
+///   on the deposit tick. This keeps the no-store-read-on-deposit-tick invariant total.
+fn select_next_haul_state(
+    state_context: &HaulJobContext,
+    tick_context: &mut JobTickContext,
+    projected: Option<ProjectedStore>,
+) -> Option<HaulState> {
+    // Recomputed here (pure, deterministic match — see screeps_econ_decision::cadence) so the
+    // drained-lane / fallback tails have the backoff without threading it from the caller.
+    let cadence = screeps_econ_decision::cadence::rematch_policy(tick_context.system_data.governor.tier.into());
 
-        let transfer_queue_data = TransferQueueGeneratorData {
-            cause: "Haul Idle",
-            room_data: tick_context.system_data.room_data,
-        };
+    let creep = tick_context.runtime_data.owner;
+    let pickup_rooms = state_context
+        .pickup_rooms
+        .iter()
+        .filter_map(|e| tick_context.system_data.room_data.get(*e))
+        .collect_vec();
 
-        let target_filter = if state_context.storage_delivery_only {
-            target_filters::storage
-        } else {
-            target_filters::all
-        };
+    let delivery_rooms = state_context
+        .delivery_rooms
+        .iter()
+        .filter_map(|e| tick_context.system_data.room_data.get(*e))
+        .collect_vec();
 
-        // ADR 0040 M5a — the LIVE bid-native HAUL selection: rank (pickup, delivery) pairs by RAW
-        // bid-density via the SHARED market kernel (reproducing the sim's MARKET tournament arm),
-        // for BOTH a loaded hauler (delivers carried cargo) and an empty one (pickup+deliver). The
-        // tier-interleave / nearest-wins path below is the fallback the market falls through to
-        // (drained lane / non-market lanes) — it keeps the crate tier-capable for the sim's arms.
-        // ADR 0044 step 2: the haul leg is priced on TRUE routed distance via a rover-backed oracle
-        // (the SAME model the sim mover uses). Built here from the shared cost-matrix cache + the
-        // distance memo; the transfer layer sees only the `HaulDistance` trait.
-        let mut haul_dist = crate::pathing::hauldistance::RoverDistanceOracle::new(
-            tick_context.runtime_data.haul_distance_service,
-            tick_context.runtime_data.cost_matrix_cache,
-            game::time(),
-        );
-        get_new_market_pickup_and_delivery_state(
-            creep,
-            &transfer_queue_data,
-            &pickup_rooms,
-            &delivery_rooms,
-            tick_context.runtime_data.transfer_queue,
-            &mut haul_dist,
-            target_filter,
-            HaulState::pickup,
-            HaulState::delivery,
-        )
-        .or_else(|| {
-            get_new_delivery_current_resources_state(
-                creep,
-                &transfer_queue_data,
-                &delivery_rooms,
-                TransferPriorityFlags::ACTIVE,
-                TransferTypeFlags::HAUL,
-                tick_context.runtime_data.transfer_queue,
-                target_filter,
-                HaulState::delivery,
-            )
-        })
-        .or_else(|| {
-            get_new_delivery_current_resources_state(
-                creep,
-                &transfer_queue_data,
-                &delivery_rooms,
-                TransferPriorityFlags::NONE,
-                TransferTypeFlags::HAUL,
-                tick_context.runtime_data.transfer_queue,
-                target_filter,
-                HaulState::delivery,
-            )
-        })
-        .or_else(|| {
-            let transfer_queue_data = TransferQueueGeneratorData {
-                cause: "Haul Idle",
-                room_data: tick_context.system_data.room_data,
-            };
+    let transfer_queue_data = TransferQueueGeneratorData {
+        cause: "Haul Idle",
+        room_data: tick_context.system_data.room_data,
+    };
 
-            get_new_pickup_and_delivery_full_capacity_state(
-                creep,
-                &transfer_queue_data,
-                &pickup_rooms,
-                &delivery_rooms,
-                TransferPriorityFlags::ALL,
-                TransferPriorityFlags::ALL,
-                10,
-                TransferType::Haul,
-                tick_context.runtime_data.transfer_queue,
-                target_filter,
-                HaulState::pickup,
-            )
-        })
-        .or_else(|| {
-            for room in &pickup_rooms {
-                if room.get_dynamic_visibility_data().map(|v| !v.visible()).unwrap_or(true) {
-                    if let Some(state) = get_new_move_to_room_state(creep, room.name, HaulState::move_to_room) {
-                        return Some(state);
+    let target_filter = if state_context.storage_delivery_only {
+        target_filters::storage
+    } else {
+        target_filters::all
+    };
+
+    // ADR 0040 M5a — the LIVE bid-native HAUL selection: rank (pickup, delivery) pairs by RAW
+    // bid-density via the SHARED market kernel (reproducing the sim's MARKET tournament arm),
+    // for BOTH a loaded hauler (delivers carried cargo) and an empty one (pickup+deliver). The
+    // tier-interleave / nearest-wins path below is the fallback the market falls through to
+    // (drained lane / non-market lanes) — it keeps the crate tier-capable for the sim's arms.
+    // ADR 0044 step 2: the haul leg is priced on TRUE routed distance via a rover-backed oracle
+    // (the SAME model the sim mover uses). Built here from the shared cost-matrix cache + the
+    // distance memo; the transfer layer sees only the `HaulDistance` trait.
+    let mut haul_dist = crate::pathing::hauldistance::RoverDistanceOracle::new(
+        tick_context.runtime_data.haul_distance_service,
+        tick_context.runtime_data.cost_matrix_cache,
+        game::time(),
+    );
+    let head = get_new_market_pickup_and_delivery_state(
+        creep,
+        &transfer_queue_data,
+        &pickup_rooms,
+        &delivery_rooms,
+        tick_context.runtime_data.transfer_queue,
+        &mut haul_dist,
+        target_filter,
+        HaulState::pickup,
+        HaulState::delivery,
+        projected,
+    );
+
+    match (head, projected) {
+        // Market assigned a target — common path, no store read either way.
+        (Some(state), _) => Some(state),
+        // Deposit-tick reselect on a drained lane: STOP at the market head — the fallbacks below
+        // read the (stale) live store, so entering them would re-open the phantom-cargo bug.
+        // Return the same Wait tail the full cascade would reach anyway. No store read.
+        (None, Some(_)) => Some(HaulState::wait(cadence.backoff_ticks)),
+        // Idle (live store): run the full fallback chain exactly as the pre-extraction cascade.
+        (None, None) => None
+            .or_else(|| {
+                get_new_delivery_current_resources_state(
+                    creep,
+                    &transfer_queue_data,
+                    &delivery_rooms,
+                    TransferPriorityFlags::ACTIVE,
+                    TransferTypeFlags::HAUL,
+                    tick_context.runtime_data.transfer_queue,
+                    target_filter,
+                    HaulState::delivery,
+                )
+            })
+            .or_else(|| {
+                get_new_delivery_current_resources_state(
+                    creep,
+                    &transfer_queue_data,
+                    &delivery_rooms,
+                    TransferPriorityFlags::NONE,
+                    TransferTypeFlags::HAUL,
+                    tick_context.runtime_data.transfer_queue,
+                    target_filter,
+                    HaulState::delivery,
+                )
+            })
+            .or_else(|| {
+                let transfer_queue_data = TransferQueueGeneratorData {
+                    cause: "Haul Idle",
+                    room_data: tick_context.system_data.room_data,
+                };
+
+                get_new_pickup_and_delivery_full_capacity_state(
+                    creep,
+                    &transfer_queue_data,
+                    &pickup_rooms,
+                    &delivery_rooms,
+                    TransferPriorityFlags::ALL,
+                    TransferPriorityFlags::ALL,
+                    10,
+                    TransferType::Haul,
+                    tick_context.runtime_data.transfer_queue,
+                    target_filter,
+                    HaulState::pickup,
+                )
+            })
+            .or_else(|| {
+                for room in &pickup_rooms {
+                    if room.get_dynamic_visibility_data().map(|v| !v.visible()).unwrap_or(true) {
+                        if let Some(state) = get_new_move_to_room_state(creep, room.name, HaulState::move_to_room) {
+                            return Some(state);
+                        }
                     }
                 }
-            }
 
-            None
-        })
-        .or_else(|| Some(HaulState::wait(cadence.backoff_ticks)))
+                None
+            })
+            .or_else(|| Some(HaulState::wait(cadence.backoff_ticks))),
     }
 }
 
@@ -290,7 +325,27 @@ impl Delivery {
         }
 
         // Civilian: the delivery leg bids its carried-cargo rate on the numeric lane (decision (4)).
-        tick_delivery(tick_context, &mut self.deposits, true, HaulState::idle)
+        //
+        // Move+deposit concurrency: capture the capacities from the STILL-TRUSTWORTHY store at
+        // entry (before tick_delivery issues the transfer), then on a completing deposit reselect
+        // the next target same-tick against the PROJECTED (free, carried) pair — never re-reading
+        // the now-stale store — so the move fires on the still-free MOVE pipeline this tick instead
+        // of losing a tick through Idle. The context is threaded into the closure (not captured) so
+        // it can be re-borrowed for select_next_haul_state while tick_delivery holds &mut on it.
+        let creep = tick_context.runtime_data.owner;
+        let free_before = creep.store().get_free_capacity(None).max(0) as u32;
+        let carried_before = creep.store().get_used_capacity(Some(ResourceType::Energy));
+
+        tick_delivery(
+            tick_context,
+            &mut self.deposits,
+            true,
+            HaulState::idle,
+            |tc, deposited_total| {
+                let projected = ProjectedStore::after_deposit(free_before, carried_before, deposited_total);
+                select_next_haul_state(state_context, tc, Some(projected))
+            },
+        )
     }
 }
 
