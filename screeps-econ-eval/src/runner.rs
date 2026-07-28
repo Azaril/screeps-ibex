@@ -1372,7 +1372,11 @@ fn step_worker(
                 // MARKET arms: the Use-lane withdraw admission (§D1) — the upgrade sink must
                 // meet the opportunity floor unless the downgrade veto is live.
                 let refill_admitted = match market.as_deref() {
-                    Some(rt) => rt.veto
+                    // ADR 0044 A3 — Arm A (`a3_live_control`) reverts Defect 2: bypass the Use-lane
+                    // admission gate so the upgrader draws regardless of the floor (reproducing the
+                    // live inversion where consumers never shed under a refill deficit).
+                    Some(rt) => rt.cfg.a3_live_control
+                        || rt.veto
                         || screeps_econ_decision::sink_economics::admit_use_withdraw(rt.upgrade_sink_bid(world), rt.floor),
                     None => true,
                 };
@@ -1525,7 +1529,8 @@ fn step_idle_market(
         }
         Role::Upgrader => {
             let body = world.creep(id).unwrap().body.clone();
-            let admitted = rt.veto || se::admit_use_withdraw(rt.upgrade_sink_bid(world), rt.floor);
+            // ADR 0044 A3 — Arm A bypasses the Use-lane admission gate (Defect 2 revert).
+            let admitted = rt.cfg.a3_live_control || rt.veto || se::admit_use_withdraw(rt.upgrade_sink_bid(world), rt.floor);
             let fill = if admitted && free > 0 {
                 let pickup_set = pickups(world, info, bookings);
                 let anchor = upgrader_pickup_anchor(&body, info.controller_pos);
@@ -1595,7 +1600,8 @@ fn step_idle_market(
                     .chain(best_site.map(|(_, b)| b))
                     .max()
                     .unwrap_or(0);
-                let fill = if se::admit_use_withdraw(sink_bid, rt.floor) && free > 0 {
+                // ADR 0044 A3 — Arm A bypasses the builder self-fetch admission gate (Defect 2 revert).
+                let fill = if (rt.cfg.a3_live_control || se::admit_use_withdraw(sink_bid, rt.floor)) && free > 0 {
                     let pickup_set = pickups(world, info, bookings);
                     select_fill_pickup(pos, free, &pickup_set, None)
                 } else {

@@ -79,6 +79,14 @@ impl Idle {
             )
         })
         .or_else(|| {
+            // ADR 0044 A3 (Defect 2) — gate the builder self-fetch pickup on the floor so builders
+            // too shed their Use-lane draw under a refill deficit (the doc's "gate the build
+            // self-fetch pickup" completeness patch). Admit on the best pending build site's
+            // per-class bid, on any pending repair target, or on an unpriced-class site.
+            if !builder_self_fetch_admitted(creep, build_room_data, state_context, tick_context) {
+                return None;
+            }
+
             let transfer_queue_data = TransferQueueGeneratorData {
                 cause: "Build Idle",
                 room_data: tick_context.system_data.room_data,
@@ -104,6 +112,41 @@ impl Idle {
         })
         .or_else(|| Some(BuildState::wait(5)))
     }
+}
+
+/// ADR 0044 A3 (Defect 2) — whether the builder's Use-lane self-fetch is admitted this tick: its
+/// best pending downstream sink (build site class bid or a pending repair target) clears the room's
+/// opportunity floor. Reuses the shared consumer-admission gate (the same `admit_use_withdraw` the
+/// upgrader and the sim's builder loop use). Only reached when the builder has no energy to build/
+/// repair with (the pickup slot of the Idle/FinishedPickup cascade).
+fn builder_self_fetch_admitted(
+    creep: &Creep,
+    build_room_data: &crate::room::data::RoomData,
+    state_context: &BuildJobContext,
+    tick_context: &JobTickContext,
+) -> bool {
+    use crate::jobs::utility::build::select_construction_site;
+    use crate::jobs::utility::consumer_admission::builder_withdraw_admitted;
+    use crate::jobs::utility::repair::select_repair_structure;
+
+    let current_rcl = build_room_data
+        .get_structures()
+        .iter()
+        .flat_map(|s| s.controllers())
+        .map(|c| c.level())
+        .max()
+        .unwrap_or(0);
+    let best_site_type = build_room_data
+        .get_construction_sites()
+        .and_then(|sites| select_construction_site(creep, &sites, current_rcl as u32))
+        .map(|s| s.structure_type());
+    // A repair target that the builder's repair selection would pick (any minimum priority) clears
+    // the floor by construction (it passed the repair selection's own gate / survival override).
+    let has_repair_target = select_repair_structure(build_room_data, tick_context.system_data.repair_queue, None, true).is_some();
+
+    // Address `state_context`'s build-room binding is already reflected in `build_room_data`.
+    let _ = state_context;
+    builder_withdraw_admitted(build_room_data, tick_context.system_data.market_bids, best_site_type, has_repair_target)
 }
 
 impl Pickup {
@@ -134,17 +177,23 @@ impl FinishedPickup {
             room_data: tick_context.system_data.room_data,
         };
 
-        get_new_pickup_state_fill_resource(
-            tick_context.runtime_data.owner,
-            &transfer_queue_data,
-            &[build_room_data],
-            TransferPriorityFlags::ALL,
-            TransferTypeFlags::HAUL | TransferTypeFlags::USE,
-            ResourceType::Energy,
-            tick_context.runtime_data.transfer_queue,
-            BuildState::pickup,
-        )
-        .or_else(|| Some(BuildState::idle()))
+        // ADR 0044 A3 (Defect 2) — same Use-lane admission on the continuation self-fetch.
+        let pickup = if builder_self_fetch_admitted(tick_context.runtime_data.owner, build_room_data, state_context, tick_context) {
+            get_new_pickup_state_fill_resource(
+                tick_context.runtime_data.owner,
+                &transfer_queue_data,
+                &[build_room_data],
+                TransferPriorityFlags::ALL,
+                TransferTypeFlags::HAUL | TransferTypeFlags::USE,
+                ResourceType::Energy,
+                tick_context.runtime_data.transfer_queue,
+                BuildState::pickup,
+            )
+        } else {
+            None
+        };
+
+        pickup.or_else(|| Some(BuildState::idle()))
     }
 }
 

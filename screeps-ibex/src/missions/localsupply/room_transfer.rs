@@ -209,7 +209,36 @@ impl RoomTransferMission {
                 refill_lane_deficit,
                 refill_ctx.next_body_cost_e,
             );
-            Self::execute_demands(transfer, &targets, room_haul_demand(&dto), refill_bid);
+
+            // ADR 0044 A3 (Defect 1) — the controller container is a BUFFER of the upgrade sink:
+            // price its deposit by the EV buffer curve (`buffer_deposit_bid(upgrade_bid, free, cap)`)
+            // so a near-empty high-EV container competes in the single market against refill/par
+            // storage, instead of the flat 1250/par tier ladder (the deleted A8 stub). This mirrors
+            // the sim's unconditional container pricing (`market.rs` `begin_tick`). The RAW,
+            // fullness-UNSCALED `upgrade_bid` computed here is ALSO the raw admission bid (Defect 2,
+            // consumer side); the deposit seam applies the buffer scaling, the admission seam does
+            // not (do not merge the two — ADR 0044 §1).
+            // The RAW (fullness-unscaled) upgrade sink bid — the base of the buffer deposit curve
+            // (Defect 1). The SAME raw quantity is the consumer withdraw-admission bid (Defect 2);
+            // the deposit seam here applies the buffer scaling, the admission seam does not.
+            let upgrade_bid = crate::jobs::utility::consumer_admission::upgrade_sink_bid(room_data, &market_consts);
+            // item -> total capacity, for the controller containers only (the buffer curve needs
+            // `free/capacity`; the true per-container capacity == the engine's 2000, kept here so
+            // `free/capacity` is self-consistent with the K1 `free` amount).
+            let controller_container_caps: std::collections::HashMap<u32, u32> = dto
+                .containers
+                .iter()
+                .filter(|c| c.role == ContainerRole::Controller)
+                .map(|c| (c.item.0, c.capacity))
+                .collect();
+            Self::execute_demands(
+                transfer,
+                &targets,
+                room_haul_demand(&dto),
+                refill_bid,
+                upgrade_bid,
+                &controller_container_caps,
+            );
 
             Ok(())
         })
@@ -353,7 +382,10 @@ impl RoomTransferMission {
         targets: &[TransferTarget],
         demands: Vec<Demand>,
         refill_bid_milli: u32,
+        upgrade_bid_milli: Option<u32>,
+        controller_container_caps: &std::collections::HashMap<u32, u32>,
     ) {
+        use screeps_econ_decision::sink_economics::buffer_deposit_bid;
         for demand in demands {
             let target = targets[demand.item.0 as usize];
             match demand.side {
@@ -369,11 +401,24 @@ impl RoomTransferMission {
                     // (`refill_bid`, deficit-scaled) rather than the flat `High` band: a starved lane
                     // bids up (toward the 10× cap), a nearly-full one drops to ~par (was a flat 5000
                     // that over-diverted haulers). Connects the sim's market refill pricing onto the
-                    // live path. Non-refill deposits (containers/storage) keep their tier for now (A8).
+                    // live path.
                     let is_refill = demand.resource == Some(ResourceType::Energy)
                         && matches!(target, TransferTarget::Spawn(_) | TransferTarget::Extension(_));
+                    // ADR 0044 A3 (Defect 1) — the controller container deposit is priced by the EV
+                    // buffer curve `buffer_deposit_bid(upgrade_bid, free, capacity)` (the A8 tier
+                    // stub is gone). `demand.amount` IS the container's free capacity for a container
+                    // deposit (K1 `demand.rs`). Falls back to the tier lane only when the upgrade bid
+                    // is unavailable (no visible controller).
+                    let controller_cap = if demand.resource == Some(ResourceType::Energy) && matches!(target, TransferTarget::Container(_)) {
+                        controller_container_caps.get(&demand.item.0).copied()
+                    } else {
+                        None
+                    };
                     let request = if is_refill {
                         TransferDepositRequest::new(target, demand.resource, refill_bid_milli, demand.amount, demand.transfer_type)
+                    } else if let (Some(cap), Some(up_bid)) = (controller_cap, upgrade_bid_milli) {
+                        let bid = buffer_deposit_bid(up_bid, demand.amount, cap);
+                        TransferDepositRequest::new(target, demand.resource, bid, demand.amount, demand.transfer_type)
                     } else {
                         TransferDepositRequest::new_tier(target, demand.resource, demand.priority, demand.amount, demand.transfer_type)
                     };
@@ -570,6 +615,137 @@ impl Mission for RoomTransferMission {
         self.link_transfer(system_data)?;
 
         Ok(MissionResult::Running)
+    }
+}
+
+#[cfg(test)]
+mod a3_deposit_tests {
+    use super::*;
+    use screeps_econ_decision::demand::{controller_container_deposit_priority, Demand, DemandSide, ItemRef};
+    use screeps_econ_decision::priority::{TransferPriority, TransferType};
+    use screeps_econ_decision::sink_economics::{buffer_deposit_bid, tier_to_bid, upgrade_bid, MarketConsts, BID_TIER_LOW};
+
+    /// A `TransferRequestSystem` that just records the deposit requests it receives (bid + target),
+    /// so a test can assert what `execute_demands` registered.
+    #[derive(Default)]
+    struct RecordingTransfer {
+        deposits: Vec<TransferDepositRequest>,
+    }
+
+    impl TransferRequestSystem for RecordingTransfer {
+        fn request_withdraw(&mut self, _withdraw_request: TransferWithdrawRequest) {}
+        fn request_deposit(&mut self, deposit_request: TransferDepositRequest) {
+            self.deposits.push(deposit_request);
+        }
+        fn register_pickup(&mut self, _ticket: &TransferWithdrawTicket) {}
+        fn register_delivery(&mut self, _ticket: &TransferDepositTicket) {}
+    }
+
+    fn container_pos() -> Position {
+        let room: RoomName = "W1N1".parse().unwrap();
+        Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), room)
+    }
+
+    fn fake_container(item_index: u32) -> (TransferTarget, ItemRef) {
+        // A syntactically-valid object id — the value is never resolved in these pure tests.
+        let id: ObjectId<StructureContainer> = "5bbcabcd9099fc012e63a1b5".parse().unwrap();
+        let target = TransferTarget::Container(RemoteObjectId::new_from_components(id, container_pos()));
+        (target, ItemRef(item_index))
+    }
+
+    fn deposit_demand(item: ItemRef, free: u32) -> Demand {
+        Demand {
+            item,
+            side: DemandSide::Deposit,
+            resource: Some(ResourceType::Energy),
+            priority: controller_container_deposit_priority(2000u32.saturating_sub(free), 2000),
+            amount: free,
+            transfer_type: TransferType::Haul,
+        }
+    }
+
+    /// (a) A near-empty CONTROLLER container's deposit is now priced by the EV buffer curve, well
+    /// above the old flat tier (`BID_TIER_LOW=1250`). A NON-controller container keeps the flat
+    /// tier. This exercises the live `execute_demands` seam (Defect 1).
+    #[test]
+    fn controller_container_deposit_is_ev_priced_near_empty() {
+        let consts = MarketConsts::default();
+        let cap = 2000u32;
+        let free = cap; // near-empty
+        let up_bid = upgrade_bid(&consts, false); // 2000 (not near level-up)
+
+        // Controller container: EV buffer bid.
+        let (ctrl_target, ctrl_item) = fake_container(0);
+        let targets = vec![ctrl_target];
+        let mut caps = std::collections::HashMap::new();
+        caps.insert(ctrl_item.0, cap);
+        let mut transfer = RecordingTransfer::default();
+        RoomTransferMission::execute_demands(&mut transfer, &targets, vec![deposit_demand(ctrl_item, free)], 4321, Some(up_bid), &caps);
+
+        assert_eq!(transfer.deposits.len(), 1);
+        let expected = buffer_deposit_bid(up_bid, free, cap);
+        assert_eq!(transfer.deposits[0].bid(), expected, "controller container carries the EV buffer bid");
+        assert!(
+            transfer.deposits[0].bid() > BID_TIER_LOW,
+            "near-empty controller container ({}) out-bids the old flat 1250",
+            transfer.deposits[0].bid()
+        );
+
+        // NON-controller container (empty caps map): keeps the flat tier ladder.
+        let (other_target, other_item) = fake_container(0);
+        let targets = vec![other_target];
+        let empty_caps: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut transfer = RecordingTransfer::default();
+        RoomTransferMission::execute_demands(
+            &mut transfer,
+            &targets,
+            vec![deposit_demand(other_item, free)],
+            4321,
+            Some(up_bid),
+            &empty_caps,
+        );
+        assert_eq!(transfer.deposits.len(), 1);
+        assert_eq!(
+            transfer.deposits[0].bid(),
+            tier_to_bid(TransferPriority::Low),
+            "a non-controller container keeps the flat tier ladder"
+        );
+    }
+
+    /// (a, crossover) The EV curve falls quadratically with fill: a ~half-full controller container
+    /// bids BELOW the old flat 1250 (the honest fill-dependent characterization, ADR 0044 §1) —
+    /// A3 is not a uniform uplift.
+    #[test]
+    fn controller_container_deposit_falls_below_flat_when_half_full() {
+        let consts = MarketConsts::default();
+        let cap = 2000u32;
+        let free = cap / 2; // 50% full
+        let up_bid = upgrade_bid(&consts, false);
+        let (target, item) = fake_container(0);
+        let targets = vec![target];
+        let mut caps = std::collections::HashMap::new();
+        caps.insert(item.0, cap);
+        let mut transfer = RecordingTransfer::default();
+        RoomTransferMission::execute_demands(&mut transfer, &targets, vec![deposit_demand(item, free)], 4321, Some(up_bid), &caps);
+        assert!(
+            transfer.deposits[0].bid() < BID_TIER_LOW,
+            "half-full controller container ({}) bids below the old flat 1250 (quadratic falloff)",
+            transfer.deposits[0].bid()
+        );
+    }
+
+    /// When the upgrade bid is unavailable (no visible controller), the controller container falls
+    /// back to the flat tier lane — never mis-prices on a `None`.
+    #[test]
+    fn controller_container_falls_back_to_tier_without_upgrade_bid() {
+        let cap = 2000u32;
+        let (target, item) = fake_container(0);
+        let targets = vec![target];
+        let mut caps = std::collections::HashMap::new();
+        caps.insert(item.0, cap);
+        let mut transfer = RecordingTransfer::default();
+        RoomTransferMission::execute_demands(&mut transfer, &targets, vec![deposit_demand(item, cap)], 4321, None, &caps);
+        assert_eq!(transfer.deposits[0].bid(), tier_to_bid(TransferPriority::Low));
     }
 }
 

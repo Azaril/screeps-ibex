@@ -801,6 +801,21 @@ impl TransferDepositRequest {
     ) -> TransferDepositRequest {
         Self::new(target, resource, tier_to_bid(priority), amount, allowed_type)
     }
+
+    /// The numeric e/t bid (milli).
+    pub fn bid(&self) -> u32 {
+        self.bid
+    }
+
+    /// The deposit target.
+    pub fn target(&self) -> &TransferTarget {
+        &self.target
+    }
+
+    /// The requested deposit amount.
+    pub fn amount(&self) -> u32 {
+        self.amount
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]

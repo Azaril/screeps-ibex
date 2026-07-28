@@ -63,6 +63,12 @@ pub struct JobExecutionSystemData<'a> {
     pub economy: &'a EconomySnapshot,
     pub features: &'a Features,
     pub governor: GovernorSnapshot,
+    /// ADR 0044 A3 (Defect 2) — the per-room opportunity floor + top unmet bids published by
+    /// `publish_market_floor` at the top of `RunJobSystem` (BEFORE the per-creep loop). Read by
+    /// the consumer jobs' Use-lane pickup admission (upgraders/builders shed their draw when their
+    /// sink bid falls below the floor). Empty during `PreRunJobSystem` (the floor isn't published
+    /// yet; pre-run does no consumer selection).
+    pub market_bids: &'a MarketBidSummary,
 }
 
 pub struct JobExecutionRuntimeData<'a> {
@@ -110,6 +116,9 @@ impl<'a> System<'a> for PreRunJobSystem {
     type SystemData = JobSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
+        // The market floor is not published until `RunJobSystem`; pre-run does no consumer
+        // selection, so an empty summary (floor 0 ⇒ everything admits) is correct here.
+        let empty_market_bids = MarketBidSummary::default();
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
@@ -119,6 +128,7 @@ impl<'a> System<'a> for PreRunJobSystem {
             economy: &data.economy,
             features: &data.features,
             governor: *data.governor,
+            market_bids: &empty_market_bids,
         };
 
         for (creep_entity, creep, job_data) in (&data.entities, &data.creep_owners, &mut data.jobs).join() {
@@ -180,6 +190,8 @@ impl<'a> System<'a> for RunJobSystem {
             economy: &data.economy,
             features: &data.features,
             governor: *data.governor,
+            // The floor published above (line ~169) — read by consumer Use-lane pickup admission.
+            market_bids: &data.market_bids,
         };
 
         for (creep_entity, creep, job_data) in (&data.entities, &data.creep_owners, &mut data.jobs).join() {

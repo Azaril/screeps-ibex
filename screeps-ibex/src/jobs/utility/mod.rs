@@ -1,5 +1,6 @@
 pub mod build;
 pub mod buildbehavior;
+pub mod consumer_admission;
 pub mod controllerbehavior;
 pub mod dismantle;
 pub mod dismantlebehavior;
