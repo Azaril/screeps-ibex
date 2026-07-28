@@ -68,6 +68,22 @@ pub fn arms(consts: MarketConsts, measure_gap: bool, oracle_period: u32) -> Vec<
                 a3_live_control: false,
             }),
         },
+        // ATTRIBUTION control: BOTH 2026-07-10 changes reverted (no deposit-tick reselect, A3
+        // defects restored) — the "before today's fixes" reference. Needed because the last stored
+        // tournament predates all of ADR 0044, so it cannot attribute a delta to these two changes.
+        // Pairs with `market-a3-control` (hauler ON / A3 OFF) to separate the two effects.
+        // SIM-VALIDATION-ONLY — never live.
+        Arm {
+            name: "market-prefix-control",
+            cfg: PolicyConfig::market(MarketArmCfg {
+                consts,
+                k4_bodies: true,
+                measure_gap: false,
+                oracle_period,
+                deposit_reselect: false,
+                a3_live_control: true,
+            }),
+        },
         // ADR 0044 A3 — Arm A ("live-today" control): reverts BOTH A3 defects (flat-tier controller
         // container deposit + bypassed Use-lane admission) to reproduce the shipped-live behavior.
         // The A/B against "market" (Arm B) on Family-C (benefit) + Family-S (regression guard)
