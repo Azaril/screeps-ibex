@@ -399,15 +399,17 @@ impl Mission for TowerMission {
                     total_damage > *heal
                 })
                 .min_by(|(a, _, _), (b, _, _)| {
-                    // Prefer dangerous creeps first.
+                    // Prefer dangerous creeps first. CLAIM counts (D27/T-DEF-4 half): a controller
+                    // attacker/declaimer is a first-class threat — pre-fix it sorted LAST (behind the
+                    // hits tie-break) despite being able to block upgrades / unclaim the room.
                     let a_dangerous = a
                         .body()
                         .iter()
-                        .any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Work));
+                        .any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Work | Part::Claim));
                     let b_dangerous = b
                         .body()
                         .iter()
-                        .any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Work));
+                        .any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Work | Part::Claim));
 
                     match (a_dangerous, b_dangerous) {
                         (true, false) => std::cmp::Ordering::Less,

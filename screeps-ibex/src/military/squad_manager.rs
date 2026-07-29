@@ -88,6 +88,17 @@ pub struct SquadFormingProgress {
     /// INTROSPECTION ONLY. objective id → whether the squad had ENGAGED at the previous trace, so the
     /// `ENGAGED` transition event fires exactly once on the false→true latch.
     last_engaged: std::collections::BTreeMap<ObjectiveId, bool>,
+    /// R22 (never-departed circuit breaker — combat review §7, live-MMO root cause): objective id →
+    /// consecutive `GaveUp` retirements whose generation NEVER DEPARTED home (`departed_at` never
+    /// stamped). Unlike every other tracker here this deliberately SURVIVES retire — the streak spans
+    /// generations (that is its whole point: the live loop re-fielded the same objective for 20+
+    /// generations without a single departure). Reset on any retire that departed or ended in a
+    /// non-GaveUp terminal. At [`NEVER_DEPARTED_GIVEUP_LIMIT`] the target room is backed off via
+    /// `mark_unwinnable` EVEN for defense-owned objectives — a defender that cannot even depart is not
+    /// defending (towers/safe-mode still hold the room), and the exponential backoff is strictly better
+    /// than an infinite spawn-energy drain. Ephemeral (NOT serialized — no WFV bump; a VM reload
+    /// restarts the streak, still bounded at LIMIT further generations).
+    never_departed_giveups: std::collections::BTreeMap<ObjectiveId, u32>,
     /// FIX A (assault latch): objective ids whose squad has had `gather_quorum_met` fire at least once. Once
     /// latched, the TRAVEL phase takes the ASSAULT branch (advance the anchor rally→target) WITHOUT
     /// re-evaluating the gather quorum every tick — so members dying/lagging crossing enemy-held neighbours
@@ -255,6 +266,13 @@ const FORMING_ABANDON_STREAK: u32 = 20;
 /// budget also bounds the first-contact-lose bounce loop rather than resetting on every room poke.
 const MAX_TRAVEL_BUDGET: u32 = 1000;
 
+/// R22 (never-departed circuit breaker): consecutive `GaveUp` generations on ONE objective in which the
+/// squad never departed home before the target room is backed off (`mark_unwinnable`) even for defense.
+/// 2 ⇒ roughly two full lease windows (~800t) of provable futility before the exponential backoff takes
+/// over — a bounded retry for a transient hiccup (spawn drought, a blocked corridor that clears), a hard
+/// stop for the structural never-departs loop the 2026-07 live root cause exposed (Generation 28+).
+const NEVER_DEPARTED_GIVEUP_LIMIT: u32 = 2;
+
 /// REC-003 — the Retreating liveness budget (EP-2.7 bounded liveness, NOT hysteresis): a squad that sits
 /// in `Retreating` this many ticks without re-engaging is force-aborted (`GaveUp` + backoff) by the
 /// reconcile kernel. The engage/retreat dead band (retreat ≤ −band, re-engage ≥ +band AND HP above the
@@ -294,13 +312,29 @@ fn room_distance(a: RoomName, b: RoomName) -> u32 {
 /// room (RC-11), so a scattered no-intel squad that MASSES at the rally still advances via the count quorum
 /// — only a REAL-intel LOSING assessment (`false`, the exact inverse of the retreat gate) is vetoed. A
 /// previously-fired latch (`assault_latched`) still keeps a committed assault — unchanged.
-fn squad_is_gathered(present_wins_or_stalls: bool, have_target_intel: bool, gather_quorum_met: bool, assault_latched: bool) -> bool {
+///
+/// D24 (combat review §7 — the frozen-anchor deploy deadlock): BOTH un-latched arms additionally require
+/// `roster_massed` (the [`screeps_combat_decision::rally::roster_massed_for_anchor`] quorum at the rally).
+/// Pre-fix, the uncontested arm of `gather_quorum_met` (`gathered >= 1`) and the real-intel win fast-path
+/// both admitted a SCATTERED multi-home roster into the anchor march, whose boundary-cohesion gate then
+/// froze the whole squad at `d=1` for its entire lease (the live never-departs loop, Generation 28+). A
+/// scattered squad now always solo-travels until massed; the latch (inserted only from this fully-gated
+/// value — which also finally makes the T2 veto BIND the latch, review D1) keeps a committed crossing
+/// committed as positions spread, exactly the FIX A contract.
+fn squad_is_gathered(
+    present_wins_or_stalls: bool,
+    have_target_intel: bool,
+    gather_quorum_met: bool,
+    roster_massed: bool,
+    assault_latched: bool,
+) -> bool {
     // The count-quorum advance now carries the winnability veto too: an unwinnable-sized present force never
     // advances the anchor, even if it meets its own (bare) count quorum. `present_wins_or_stalls` is the SAME
     // predicate the fast-path uses (and vacuously TRUE with no intel, so a legitimate no-intel mass proceeds).
     let count_quorum_advances = gather_quorum_met && present_wins_or_stalls;
-    let quorum_now =
-        screeps_combat_decision::winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel) || count_quorum_advances;
+    let quorum_now = (screeps_combat_decision::winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel)
+        || count_quorum_advances)
+        && roster_massed;
     quorum_now || assault_latched
 }
 
@@ -1238,6 +1272,9 @@ fn solve_global_reassignment(
     for o in &objectives {
         let room = o.kind.room();
         let unwinnable = data.objective_queue.is_unwinnable_now(room, now);
+        // D25: a producer-stale (TTL-expired) objective is not a reassign target either — it only survives
+        // in the queue at all because its CURRENT claim/lease protects the committed squad (StayPut).
+        let expired = o.expires_at <= now;
         let claimed_by = data.objective_queue.claimed_by(o.id);
         // REC-037: the reassign target must have an in-range spawn home (mirror Phase C's claim gate) — a
         // squad reassigned onto a room no home can spawn/renew for death-spirals N−1, N−2… silently.
@@ -1253,7 +1290,7 @@ fn solve_global_reassignment(
             // (unclaimed OR claimed by THIS squad).
             let is_own_current = *cur_id == o.id;
             let claimed_by_other = matches!(claimed_by, Some(c) if c != *entity);
-            feasible_per_row.push(row_reassignable[r] && home_in_range && !is_own_current && !unwinnable && !claimed_by_other);
+            feasible_per_row.push(row_reassignable[r] && home_in_range && !is_own_current && !unwinnable && !expired && !claimed_by_other);
         }
         let econ = data.objective_queue.economic_intel(o.id);
         cells.push(ObjectiveCell {
@@ -2017,6 +2054,34 @@ impl<'a> System<'a> for SquadManagerSystem {
                         data.objective_queue.mark_unwinnable(room, now);
                     }
                 }
+                // ── R22 (never-departed circuit breaker — combat review §7 root cause). A GaveUp whose
+                // generation NEVER departed home increments a per-objective streak that SURVIVES the retire
+                // (read `departed_at` here, BEFORE the tracker clears below). At the limit the room is backed
+                // off even for defense-owned objectives — the one exception to the "never abandon an owned
+                // room" rule, justified because a defender that cannot even depart is not defending (towers +
+                // safe-mode still hold) and the alternative is the observed infinite re-field drain. Any
+                // departed or non-GaveUp retire resets the streak. Skipped when the kernel already marked the
+                // room (offense GaveUp) — no double attempt-bump on the same de-commit.
+                if matches!(reason, lifecycle::RetireReason::GaveUp)
+                    && !data.forming_progress.departed_at.contains_key(&obj_id)
+                {
+                    let streak = data.forming_progress.never_departed_giveups.entry(obj_id).or_insert(0);
+                    *streak = streak.saturating_add(1);
+                    if *streak >= NEVER_DEPARTED_GIVEUP_LIMIT {
+                        data.forming_progress.never_departed_giveups.remove(&obj_id);
+                        if !mark_unwinnable {
+                            if let Some(room) = squad_room {
+                                log::warn!(
+                                    "[Lifecycle] NEVER-DEPARTED-BREAKER squad={:?} obj={:?} room={} — {} consecutive GaveUp generations without departing; backing the room off",
+                                    squad_entity, obj_id, room, NEVER_DEPARTED_GIVEUP_LIMIT
+                                );
+                                data.objective_queue.mark_unwinnable(room, now);
+                            }
+                        }
+                    }
+                } else {
+                    data.forming_progress.never_departed_giveups.remove(&obj_id);
+                }
                 retire_squad(&data.updater, &data.entities, squad_entity);
                 data.objective_queue.release_entity(squad_entity);
                 // Drop ALL per-objective lifecycle trackers so a RE-FIELD (new generation claiming the same
@@ -2398,6 +2463,8 @@ impl<'a> System<'a> for SquadManagerSystem {
             .objective_queue
             .iter_objectives()
             .filter(|o| !data.objective_queue.is_claimed(o.id))
+            // D25: never re-claim a producer-stale (TTL-expired) objective — see `best_unclaimed_near_excluding`.
+            .filter(|o| o.expires_at > now)
             .filter(|o| !data.objective_queue.is_unwinnable_now(o.kind.room(), now))
             .map(|o| (o.id, ev_of_claim(o)))
             .filter(|(_, ev_q)| *ev_q > commit_threshold_q)
@@ -3161,8 +3228,25 @@ fn compute_squad_orders(
             // centroid as the approach. For a same-room/tight squad it is byte-identical to the legacy
             // `shared_rally_point`. The centroid still feeds the engage/win-or-stall frame as
             // `decision.center` (computed once in `decide_squad`).
-            let rally =
-                screeps_combat_decision::rally::shared_rally_point_for_members(&member_positions, assault_target, uncontested);
+            // D26 (combat review §7 — threat-aware staging): veto hostile-OWNED / militarily-active rooms
+            // as rally candidates. The pure-geometry kernel once staged a squad at the centre of the
+            // defending player's 6-tower RCL8 home room because it sat on the approach corridor. Unknown
+            // rooms are not vetoed (no intel ⇒ geometry stands) — the kernel's candidate ladder falls back
+            // to the geometric pick only when every alternative is also dangerous.
+            let room_is_dangerous = |room: RoomName| -> bool {
+                mapping
+                    .get_room(&room)
+                    .and_then(|entity| room_data.get(entity))
+                    .and_then(|rd| rd.get_dynamic_visibility_data())
+                    .map(|d| d.owner().hostile() || d.militarily_active())
+                    .unwrap_or(false)
+            };
+            let rally = screeps_combat_decision::rally::shared_rally_point_for_members_avoiding(
+                &member_positions,
+                assault_target,
+                uncontested,
+                &room_is_dangerous,
+            );
 
             // ── ADR 0034 D4 + D8 (RC-3/RC-8 — member-side movement-failure escalation, NO silent retry) ──
             // Track each present member's room-distance to the rally; a member whose distance does NOT
@@ -3270,26 +3354,37 @@ fn compute_squad_orders(
                 fighter_gathered,
                 screeps_combat_decision::rally::RALLY_GATHER_RADIUS,
             );
-            let quorum_now = fast_path_allowed || count_quorum_met;
-            // FIX A (assault latch): once the gather quorum FIRST fires, LATCH the assault and thereafter take
-            // the assault branch WITHOUT re-evaluating the quorum — so members dying/lagging crossing
-            // enemy-held neighbours can't un-commit it (the contested in_room<->travel oscillation, BUG A).
-            // The latch is an ephemeral per-objective flag (no WORLD_FORMAT_VERSION bump); on a VM reload the
-            // squad re-derives the quorum from live positions (a massed bloc re-latches immediately).
-            if quorum_now {
-                forming_progress.assault_latched.insert(obj_id);
-            }
+            // D24: the anchor march is only sound for a MASSED bloc — the shared kernel quorum over the
+            // SAME (exclusion-filtered) gather positions the count quorum uses.
+            let roster_massed = screeps_combat_decision::rally::roster_massed_for_anchor(
+                &gather_positions,
+                rally,
+                screeps_combat_decision::rally::RALLY_GATHER_RADIUS,
+            );
+            // FIX A (assault latch): once the FULLY-GATED gather verdict FIRST fires (winnability veto +
+            // massed roster — review D1 + D24: the latch is inserted from the same value the branch uses,
+            // never from a bare un-vetoed quorum), LATCH the assault and thereafter take the assault branch
+            // WITHOUT re-evaluating — so members dying/lagging crossing enemy-held neighbours can't
+            // un-commit it (the contested in_room<->travel oscillation, BUG A). The latch is an ephemeral
+            // per-objective flag (no WORLD_FORMAT_VERSION bump); on a VM reload the squad re-derives the
+            // verdict from live positions (a massed bloc re-latches immediately).
+            //
             // RC-11 — the gather→assault vs solo-travel branch (the pure `squad_is_gathered`): the win-or-
             // stall fast-path is INTEL-GATED, so a vacuous no-intel win on a SCATTERED squad falls to the
             // count quorum (which a scattered roster does not meet) → solo-travel; a fired latch keeps a
             // committed assault. Same `present_wins_or_stalls`/`have_target_intel` inputs the proceed gate
             // used this tick, so the gates agree.
-            let gathered = squad_is_gathered(
+            let gathered_now = squad_is_gathered(
                 present_wins_or_stalls,
                 have_target_intel,
                 count_quorum_met,
-                forming_progress.assault_latched.contains(&obj_id),
+                roster_massed,
+                false,
             );
+            if gathered_now {
+                forming_progress.assault_latched.insert(obj_id);
+            }
+            let gathered = gathered_now || forming_progress.assault_latched.contains(&obj_id);
 
             if gathered {
                 // ASSAULT: members are massed at the rally → advance the box-formation anchor rally→target
@@ -4006,6 +4101,7 @@ mod tests {
                 /*present_wins_or_stalls*/ true,
                 /*have_target_intel*/ false,
                 /*count_quorum_met*/ false,
+                /*roster_massed*/ false,
                 /*assault_latched*/ false
             ),
             "scattered + vacuous no-intel win must NOT assault — it solo-travels to the rally (RC-11 fix)"
@@ -4017,6 +4113,7 @@ mod tests {
                 /*present_wins_or_stalls*/ true,
                 /*have_target_intel*/ true,
                 /*count_quorum_met*/ false,
+                /*roster_massed*/ true,
                 /*assault_latched*/ false
             ),
             "co-located squad WITH real intel still latches the assault — the win-or-stall is preserved (D7)"
@@ -4025,14 +4122,45 @@ mod tests {
         // legacy count-gate path still works without the fast-path. `present_wins_or_stalls` is vacuously
         // TRUE here (no-intel), so the ADR 0037 T2 count-quorum winnability gate does NOT block it.
         assert!(
-            squad_is_gathered(true, false, /*count_quorum_met*/ true, false),
+            squad_is_gathered(true, false, /*count_quorum_met*/ true, /*roster_massed*/ true, false),
             "once massed at the rally (count quorum met) the squad assaults via the legacy gate"
         );
         // And a previously-fired latch keeps the assault committed regardless (FIX-A preserved).
         assert!(
-            squad_is_gathered(false, false, false, /*assault_latched*/ true),
+            squad_is_gathered(false, false, false, false, /*assault_latched*/ true),
             "a fired assault latch keeps the squad committed (FIX-A latch preserved)"
         );
+    }
+
+    /// D24 (combat review §7 — the frozen-anchor deploy deadlock, live-MMO root cause). The un-latched
+    /// gather arms — BOTH the real-intel win fast-path and the count quorum (whose UNCONTESTED arm is
+    /// satisfied by a single member near the rally) — must NOT admit a SCATTERED roster into the anchor
+    /// march: the anchor's boundary-cohesion gate can never fire for members rooms apart, so the squad
+    /// stalls at d=1 for its whole lease and gives up without departing (observed live at Generation 28+
+    /// on W12N51). RED before the fix: `squad_is_gathered(true, true, true, /*latched*/ false)` was true
+    /// with members scattered across five home rooms.
+    #[test]
+    fn d24_scattered_roster_never_enters_the_anchor_march() {
+        // Real-intel WIN + count quorum "met" (the uncontested gathered>=1 arm) but roster NOT massed ⇒
+        // solo-travel. This is the exact live shape: 8 slots across 5 home rooms, one member near the
+        // target-room-centre rally tripping the uncontested quorum.
+        assert!(
+            !squad_is_gathered(true, true, /*count_quorum_met*/ true, /*roster_massed*/ false, false),
+            "a scattered roster must never enter the anchor march, even with a winning verdict (D24)"
+        );
+        // The fast-path alone is equally gated.
+        assert!(
+            !squad_is_gathered(true, true, false, /*roster_massed*/ false, false),
+            "the real-intel win fast-path must not anchor-march a scattered roster (D24)"
+        );
+        // Massed ⇒ both paths admit as before (no deadlock: massing is exactly what solo-travel produces).
+        assert!(squad_is_gathered(true, true, true, /*roster_massed*/ true, false));
+        // A committed (latched) crossing stays committed as positions spread — the FIX A contract.
+        assert!(squad_is_gathered(true, true, false, /*roster_massed*/ false, /*latched*/ true));
+        // Review D1: the latch is now inserted ONLY from this fully-gated value (see the call site) — an
+        // un-vetoed bare count quorum can no longer latch an unwinnable assault. The pure-fn half of that
+        // contract: unwinnable + quorum + massed still does NOT gather un-latched.
+        assert!(!squad_is_gathered(/*pws*/ false, true, true, /*roster_massed*/ true, false));
     }
 
     /// ADR 0037 T2 (HARDEN — the count-quorum anchor-advance winnability veto). A bare/under-sized force
@@ -4049,6 +4177,7 @@ mod tests {
                 /*present_wins_or_stalls*/ false,
                 /*have_target_intel*/ true,
                 /*count_quorum_met*/ true,
+                /*roster_massed*/ true,
                 /*assault_latched*/ false
             ),
             "an UNWINNABLE-sized force meeting its own count quorum must NOT advance the anchor into towers (T2 tail fix)"
@@ -4059,6 +4188,7 @@ mod tests {
                 /*present_wins_or_stalls*/ true,
                 /*have_target_intel*/ true,
                 /*count_quorum_met*/ true,
+                /*roster_massed*/ true,
                 /*assault_latched*/ false
             ),
             "a WINNABLE/stalling contested assault STILL advances via the count quorum — the gate only blocks the unwinnable case"
@@ -4066,7 +4196,7 @@ mod tests {
         // Even UNWINNABLE, a previously-fired latch keeps a committed assault (FIX-A dominates; the retreat
         // gate — not the anchor advance — is what pulls a losing committed squad back).
         assert!(
-            squad_is_gathered(false, true, true, /*assault_latched*/ true),
+            squad_is_gathered(false, true, true, true, /*assault_latched*/ true),
             "a fired latch still keeps a committed assault (the retreat gate handles a losing committed squad)"
         );
     }

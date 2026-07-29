@@ -119,6 +119,14 @@ fn apply_squad_move_priority<H>(req: &mut MovementRequestBuilder<'_, H>, tier: M
             req.priority(tier);
         }
     }
+    // D11 (combat review — VERIFIED LIVE as the solo-travel stall mechanism): `RoomOptions::default()` is
+    // `HostileBehavior::Deny`, under which `find_route` prices any hostile-flagged room at ∞ — INCLUDING
+    // the squad's own target room and any hostile-owned staging/transit room. A combat order that needs a
+    // cross-room leg into such a room then fails with "could not find path between rooms" and the member
+    // stands still (the observed ESCALATE-BLOCK solo-stall loop). Every squad ORDER move therefore routes
+    // hostile rooms at HIGH COST (finite — still avoided when a detour exists), matching the fallback
+    // travel path's long-standing explicit choice. Same-room tactical moves are unaffected (no route legs).
+    req.room_options(RoomOptions::new(HostileBehavior::HighCost));
 }
 
 /// REC-049 (EP-3.5) — surface a rally-unreachable MOVE-BLOCKED once per VM instead of spamming

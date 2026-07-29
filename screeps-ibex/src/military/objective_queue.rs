@@ -498,6 +498,12 @@ impl CombatObjectiveQueue {
             .iter()
             .filter(|o| !self.is_claimed(o.id))
             .filter(|o| !exclude.contains(&o.id))
+            // D25 (combat review §7 — the zombie-objective loop): an objective past its TTL is NOT
+            // re-claimable. The claim/lease retention in `expire()` protects a COMMITTED squad from being
+            // retired underneath; it must not let a give-up→same-tick-re-claim cycle keep an objective
+            // alive forever after its producer fell silent. An alive producer re-asserts well inside the
+            // TTL, so a live objective is never gated here.
+            .filter(|o| o.expires_at > now)
             .filter(|o| !self.is_unwinnable_now(o.kind.room(), now))
             .max_by(|a, b| {
                 a.priority
@@ -518,11 +524,11 @@ impl CombatObjectiveQueue {
         self.objectives.iter()
     }
 
-    /// Whether there is any unclaimed, non-backoff objective at all.
+    /// Whether there is any unclaimed, unexpired (D25), non-backoff objective at all.
     pub fn has_unclaimed(&self, now: u32) -> bool {
         self.objectives
             .iter()
-            .any(|o| !self.is_claimed(o.id) && !self.is_unwinnable_now(o.kind.room(), now))
+            .any(|o| !self.is_claimed(o.id) && o.expires_at > now && !self.is_unwinnable_now(o.kind.room(), now))
     }
 
     /// Load entries from the persistent component into the working copy.
@@ -803,6 +809,34 @@ mod tests {
         assert_eq!(q.get(id2).unwrap().deadline, None);
         q.request(farm_request("W6N6", 10.0).deadline(Some(1500)), 1001);
         assert_eq!(q.get(id2).unwrap().deadline, Some(1500), "None + Some arms the lease");
+    }
+
+    /// D25 (combat review §7 — the ZOMBIE-OBJECTIVE loop, live-MMO root cause): the claim/lease retention
+    /// in `expire()` protects a COMMITTED squad, but it must NOT make the objective re-claimable after a
+    /// give-up when the producer has fallen silent. Pre-fix, a give-up released the claim in Phase A and
+    /// Phase C re-claimed the same tick — `expire()` (tick start) always saw it claimed, so the objective
+    /// (and its re-fielding squad) lived forever with no producer asserting it (observed live at
+    /// Generation 28+). Post-fix: past-TTL objectives are invisible to every claim/selection path; they
+    /// survive only as the CURRENT squad's committed target, and die with the release.
+    #[test]
+    fn expired_objective_is_not_reclaimable_after_release() {
+        use specs::WorldExt;
+        let mut world = World::new();
+        let squad = world.create_entity().build();
+        let mut q = CombatObjectiveQueue::default();
+        let id = q.request(farm_request("W5N5", 10.0), 1000);
+        q.claim(id, squad);
+        let past_ttl = 1000 + DEFAULT_OBJECTIVE_TTL + 50;
+        // The claim keeps it alive past TTL (the committed squad, P-OBJ #23)…
+        q.expire(past_ttl);
+        assert!(q.get(id).is_some(), "claimed objective survives TTL while committed");
+        // …but the give-up release must not allow a same-tick re-claim: every selection path skips it.
+        q.release_entity(squad);
+        assert_eq!(q.best_unclaimed_near(None, past_ttl), None, "expired objective is not claimable");
+        assert!(!q.has_unclaimed(past_ttl), "expired objective does not count as unclaimed work");
+        // A live producer re-assert makes it claimable again (the normal path — TTL refreshed).
+        q.request(farm_request("W5N5", 10.0), past_ttl);
+        assert_eq!(q.best_unclaimed_near(None, past_ttl), Some(id), "a re-asserted objective is claimable");
     }
 
     /// P-OBJ #23: the manager's serialized commitment `deadline` keeps an objective alive past its TTL

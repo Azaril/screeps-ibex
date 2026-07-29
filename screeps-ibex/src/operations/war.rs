@@ -538,100 +538,21 @@ impl WarOperation {
         };
         let policy = screeps_combat_decision::war_decision::DefensePolicy::default();
 
-        // ── ADR 0027 v1 LIVE SEAM: feed NEIGHBOUR threats ──────────────────────────────────────────────
-        // The owned-room scan above only feeds threats IN owned rooms; a hostile roaming a VISIBLE,
-        // non-owned NEIGHBOUR (within the leash) was never fed, so the kernel's adjacent-HIGH / leashed-
-        // MEDIUM branches were dead on the live path (the comment below about "the next scan re-emits at the
-        // neighbour's room" was aspirational — nothing populated a neighbour threat). Here we gather the
-        // ARMED hostiles from each visible non-owned room within the leash, fold each room into ONE
-        // `ObservedRoom` (a swarm of N hostiles ⇒ one room ⇒ one threat ⇒ one Secure — never N), and run the
-        // PURE `neighbour_threats` builder (geometry within leash + the danger estimate + the threat-list
-        // build). Only the `game::*`/intel hostile-gather below is non-pure; the decision is the proven
-        // kernel. Border visibility is kept fresh by the heavy-recompute refresh (war.rs ~1345-1372).
-        let owned_room_names: Vec<RoomName> = home_rooms.iter().filter_map(|&e| system_data.room_data.get(e)).map(|rd| rd.name).collect();
-        // ── ADR 0027 P0: war.rs keeps ONLY the RAW `game::*`/intel read — (room, hostile bodies as parts,
-        //    visible, is_owned, nearest-owned-dist) — and the DECISION (armed-check + danger estimate +
-        //    visible/non-owned/within-leash filter + swarm→one-room fold) is the PURE `observe_neighbours`
-        //    kernel, so the whole observation LAYER is sim-able (run_v1_flow / war_decision tests). Source
-        //    Keepers are excluded HERE (the raw read), the only non-pure judgement left.
-        // (room, visible, is_owned, nearest-owned-dist, hostile bodies as live parts, tower_danger, tower_count)
-        // — the RAW read. ADR 0037 T1 adds the hostile-TOWER signal (energized-tower Σ DPS + energized count),
-        // read from the SCOUTED `RoomThreatData` (the same signal offense uses), DISTINCT from the creep bodies.
-        // REC-067: each read carries a per-body BOOST MULTIPLIER slice (parallel to the bodies) so the pure
-        // `estimate_danger` sizes a boosted neighbour raider correctly (×4 for a T3-boosted creep — the same
-        // model the threatmap uses; unboosted ⇒ 1.0).
-        type RawNeighbourRead = (RoomName, bool, bool, Option<u32>, Vec<Vec<Part>>, Vec<f32>, f32, u32);
-        let raw_bodies: Vec<RawNeighbourRead> = (system_data.entities, &*system_data.room_data)
-            .join()
-            .filter_map(|(entity, room_data)| {
-                let dynamic_vis = room_data.get_dynamic_visibility_data()?;
-                let visible = dynamic_vis.visible();
-                let is_owned = dynamic_vis.owner().mine();
-                let nearest = owned_room_names.iter().map(|&o| cheby(o, room_data.name)).min();
-                // Source Keepers excluded (permanent lair residents, not a colony threat). Each remaining
-                // hostile's LIVE parts → one body entry; the pure kernel folds armed + danger over them.
-                // REC-067: a parallel per-creep boost multiplier (4.0 if ANY live part is boosted — the
-                // threatmap's conservative T3 ×4 model — else 1.0), so the danger fold is boost-aware.
-                let (bodies, boosts): (Vec<Vec<Part>>, Vec<f32>) = room_data
-                    .get_creeps()
-                    .map(|creeps| {
-                        creeps
-                            .hostile()
-                            .iter()
-                            .filter(|c| !crate::military::is_source_keeper_owner(&c.owner().username()))
-                            .map(|c| {
-                                let body = c.body();
-                                let live: Vec<_> = body.iter().filter(|p| p.hits() > 0).collect();
-                                let boosted = live.iter().any(|p| p.boost().is_some());
-                                let parts: Vec<Part> = live.iter().map(|p| p.part()).collect();
-                                (parts, if boosted { 4.0_f32 } else { 1.0_f32 })
-                            })
-                            .unzip()
-                    })
-                    .unwrap_or_default();
-                // ADR 0037 T1: the SCOUTED hostile-tower threat (energized-tower Σ DPS + count), DISTINCT from
-                // the creep bodies — a defender is never sized to beat towers. Read from `RoomThreatData` (the
-                // same signal offense uses); absent threat data (never scouted) ⇒ 0 (no known towers).
-                let (tower_danger, tower_count) = system_data
-                    .threat_data
-                    .get(entity)
-                    .map(|td| {
-                        // `TOWER_ENERGY_COST` = the screeps game constant (in scope via `use screeps::*`).
-                        let count = td
-                            .hostile_tower_positions
-                            .iter()
-                            .enumerate()
-                            .filter(|(i, _)| td.tower_energy.get(*i).copied().unwrap_or(1000) >= TOWER_ENERGY_COST)
-                            .count() as u32;
-                        (neighbour_tower_dps(td), count)
-                    })
-                    .unwrap_or((0.0, 0));
-                Some((room_data.name, visible, is_owned, nearest, bodies, boosts, tower_danger, tower_count))
-            })
-            .collect();
-        // Per-room (tower_dps, tower_count) so the neighbour Secure log below can EXPLAIN a `dps=0` room (a
-        // Work/Claim/Heal creep under towers) with the tower threat — ADR 0037 T1 (surfaces the live observation).
-        let neighbour_tower_intel: std::collections::HashMap<RoomName, (f32, u32)> =
-            raw_bodies.iter().map(|(room, _, _, _, _, _, td, tc)| (*room, (*td, *tc))).collect();
-        let observations: Vec<screeps_combat_decision::war_decision::RawObservation<RoomName>> = raw_bodies
-            .iter()
-            .map(|(room, visible, is_owned, nearest, bodies, boosts, tower_danger, _tower_count)| screeps_combat_decision::war_decision::RawObservation {
-                room: *room,
-                hostile_bodies: bodies,
-                boost_multipliers: boosts, // REC-067
-                visible: *visible,
-                is_owned: *is_owned,
-                nearest_owned_dist: *nearest,
-                tower_danger: *tower_danger,
-            })
-            .collect();
-        let observed_neighbours = screeps_combat_decision::war_decision::observe_neighbours(&observations, policy);
-        let neighbour_threats = screeps_combat_decision::war_decision::neighbour_threats(&owned_rooms_for_kernel, &observed_neighbours, policy, cheby);
-
-        // Feed the owned-room threats AND the neighbour threats to the one proven kernel. The kernel emits
-        // Secure{neighbour} at HIGH (adjacent) / MEDIUM (within leash) and a defender reassigns to follow.
-        let threats_for_kernel: Vec<screeps_combat_decision::war_decision::Threat<RoomName>> =
-            owned_threats_for_kernel.iter().copied().chain(neighbour_threats.iter().copied()).collect();
+        // ── D27 (combat review §7, operator decision 2026-07-28): DEFENSE reacts ONLY to threats in OWNED
+        // rooms. The former ADR 0027 v1 neighbour-intercept seam (gather armed hostiles from visible
+        // non-owned rooms within the leash → `Secure{neighbour}` at HIGH/MEDIUM) is REMOVED from the
+        // defense scan: on live MMO it stood up standing intercept squads against a neighbouring player's
+        // harmless remote miners (dps=0, non-adjacent rooms, even rooms lost to another player), sized
+        // from a heal:0/hits:0 fold (R13a), bypassing `attack_players` entirely — a pure spawn-energy
+        // drain feeding the D24/D25/R22 never-departs loop. Threats in NON-owned rooms are OFFENSE's
+        // business: the offense scan already routes towered neighbours through the winnability/EV oracle
+        // (`towered_neighbour_offense_reason`, ADR 0037 T3) and prices every scouted threat room by EV,
+        // all behind the `offense`/`attack_players` feature gates. The pure `observe_neighbours`/
+        // `neighbour_threats` kernels remain in `screeps-combat-decision` (sim/tests; a future
+        // offense-side candidate feed can reuse them). CLAIM/declaim creeps in OWNED rooms remain
+        // first-class threats via `hostile_warrants_defender` (Claim is a warranting part) and the
+        // owned-room scan below.
+        let threats_for_kernel: Vec<screeps_combat_decision::war_decision::Threat<RoomName>> = owned_threats_for_kernel.clone();
         // The kernel's per-room verdict (Secure room → priority). A threat beyond the leash is absent here
         // (not chased). Deterministic ordering; we index it by room below.
         let defense_emissions = screeps_combat_decision::war_decision::emit_defense(
@@ -718,67 +639,8 @@ impl WarOperation {
             );
         }
 
-        // ── ADR 0027 v1 LIVE SEAM: emit Secure for NEIGHBOUR threats ───────────────────────────────────
-        // Each neighbour threat (gathered above, already bounded to ARMED + VISIBLE + within-leash) gets one
-        // `Secure{neighbour}` at the kernel-decided priority (adjacent → HIGH, leashed → MEDIUM; the asset-
-        // priority boost is folded in). ONE threat-room ⇒ ONE objective (a swarm is one room), so the
-        // max_concurrent_squads cap + the reassign/claim mean ONE defender follows the threat, never one per
-        // roaming creep. A neighbour has no spawn of its own → the defender is sized to the strongest home's
-        // capacity (`max_home_energy`). A neighbour beyond the leash is absent from `defense_emissions` and
-        // from `neighbour_threats` → no objective.
-        for nbr in &neighbour_threats {
-            let Some(emission) = defense_emissions.iter().find(|e| e.room == nbr.room) else {
-                continue; // beyond the leash (shouldn't happen — we pre-filtered) → not chased
-            };
-            // The neighbour has no spawn; size the defender to the strongest home's capacity so the oracle
-            // sizes a real blob (0 → bare template). `danger` is the summed DPS; heal/count are unknown from
-            // the coarse neighbour gather, so use the dps with a single-creep count (the GarrisonDefense
-            // doctrine still sizes from the dps).
-            let ctx = EngagementContext {
-                objective: DoctrineObjective::ClearCreeps,
-                coordination: EnemyCoordination::Coordinated,
-                defense: DefenseProfile::default(),
-                enemy_force: Some(EnemyForce {
-                    dps: nbr.danger,
-                    heal: 0.0,
-                    hits: 0,
-                    count: 1,
-                    boosted: false,
-                }),
-                importance: 0.0,
-                member_energy: max_home_energy,
-                target_value: DEFENSE_TARGET_VALUE,
-                onsite_window: DEFENSE_ONSITE_WINDOW,
-                params: CompositionParams {
-                    member_energy: max_home_energy,
-                    ..Default::default()
-                },
-                // Defense vs a PRESENT neighbour threat — NEVER confirmed-undefended (keep the floor).
-                defense_intel_reliable: false,
-            };
-            let Some(composition) = decide_doctrine(&ctx, &defense_docs).and_then(|d| screeps_combat_decision::doctrine::plan_engagement(d, &ctx, None).composition) else {
-                continue;
-            };
-            // ADR 0037 T1: surface the SCOUTED hostile-TOWER threat (dps + count) alongside the creep dps so a
-            // `dps=0` Secure (a Work/Claim/Heal creep under towers, the live W13N56 case) is EXPLAINED — the
-            // tower_danger is DISTINCT (a defender is NOT sized to beat it; T2/T3 will consume this signal).
-            let (tower_dps, tower_count) = neighbour_tower_intel.get(&nbr.room).copied().unwrap_or((nbr.tower_danger, 0));
-            info!(
-                "[War] Secure objective for NEIGHBOUR threat room {} prio={:.0} (dps={:.0}, tower_dps={:.0}, towers={}, adjacent={})",
-                nbr.room, emission.priority, nbr.danger, tower_dps, tower_count, emission.asset_boosted
-            );
-            system_data.combat_objective_queue.request(
-                ObjectiveRequest::new(
-                    ObjectiveKind::Secure { room: nbr.room },
-                    emission.priority,
-                    ForceRequirement::single(composition),
-                )
-                .owner(ObjectiveOwner::Defense)
-                .authoritative() // REC-041: recomputed each scan — a de-escalated neighbour threat decays
-                .ttl(DEFEND_OBJECTIVE_TTL),
-                game::time(),
-            );
-        }
+        // (The former "emit Secure for NEIGHBOUR threats" loop lived here — removed per D27; see the
+        // routing note above the kernel feed.)
 
         // ── Nuke defense, safe mode, wall repair (home rooms only) ──────────
         // Only create these missions for rooms we control (have spawns). This
