@@ -1,5 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
+use super::utility::*;
 use crate::serialize::*;
 use log::*;
 use screeps::*;
@@ -80,6 +81,16 @@ impl Mission for NukeDefenseMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
+        // Ownership-subordinate (ADR 0017 §13): this mission dies with the room. Gated before the
+        // feature/interval early-outs — each of those returns Running unconditionally, so a mission
+        // on a lost room would otherwise zombie forever.
+        {
+            let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
+            if !is_valid_home_room(room_data) {
+                return Err(format!("Nuke defense room {} is no longer an owned home room", room_data.name));
+            }
+        }
+
         let features = system_data.features;
 
         if !features.military.nuke_defense {

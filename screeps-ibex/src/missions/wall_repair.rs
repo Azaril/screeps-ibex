@@ -1,5 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
+use super::utility::*;
 use crate::jobs::utility::repair::RepairPriority;
 use crate::remoteobjectid::*;
 use crate::repairqueue::RepairRequest;
@@ -88,6 +89,14 @@ impl Mission for WallRepairMission {
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
+
+        // Ownership-subordinate (ADR 0017 §13): this mission dies with the room. An owned room
+        // always has visibility, so a dark or enemy-owned room means the room was lost — without
+        // this gate the mission survives on `run_mission`'s visibility early-out and re-registers
+        // a transfer generator that errors every tick.
+        if !is_valid_home_room(room_data) {
+            return Err(format!("Wall repair room {} is no longer an owned home room", room_data.name));
+        }
 
         let room_data_entity = self.room_data;
 
