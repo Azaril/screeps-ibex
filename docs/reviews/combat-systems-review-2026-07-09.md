@@ -352,6 +352,24 @@ Representative telemetry (repeating **every tick**):
 5. **Tighten the intercept trigger (D27, new).** Require actual combat threat (dps>0 or armed-with-combat-parts) and ownership sanity (never `Secure` a room another player owns/has taken unless a deliberate offense decision — consult `attack_players` for player-owned threats); drop the non-adjacent leash cases or price them honestly through the offense EV path.
 6. **Operator stopgap (no deploy needed):** `Memory._features.military.defense=false` stops the defense-scan producers (towers/safe-mode are separate missions and keep running) — an immediate off-switch for the drain while fixes land, at the cost of no squad defense. `military.debug_log` was enabled during this investigation and has been turned back off.
 
+### 7.2a Post-fix deployment verification (2026-07-28, Wave A: super `ab692bd` + decision `f6c084a`)
+
+Fixes for D24/D25/D26/D27/D11/R22 (+ review D1, which the D24 latch rework closes structurally) landed,
+private-soaked (~7k ticks: solo-travel replaces the frozen anchor; a pre-existing Generation-46
+never-departed loop ended; no panics), and deployed to MMO. Live MMO verification: CPU 16/130 with a full
+recovering bucket (vs 87/130 draining pre-fix); two of the three surviving zombie objectives (the lost-room
+W13N53 Secure and the W12N53 intercept) gave up once and **expired instead of re-fielding** (D25 confirmed
+end-to-end); rally staging moved out of the W11N54 fortress (D26 confirmed); `[SpawnQueue]` churn stopped.
+
+**Residual — D28 (new, Wave B): an uncontested `Secure` over a hostile-free room can never reach
+`Resolved`.** The clean-win terminal requires `engaged_once`, which latches only in-room WITH a focus
+(FIX B1) — a room with zero hostiles offers no focus, so a squad that successfully masses in its empty
+target room holds/renews until the forming/travel budget forces a `GaveUp` (bounded ≤ `MAX_FORMING_BUDGET`,
+then D25 expires the producer-silent objective — observed live on obj 3423/W12N51, members border-osc at
+the north exit while holding). Fix direction: let `resolved` fire for an uncontested objective with
+in-room members + live visibility + zero hostiles, without requiring `engaged_once` (the vacuous-clear
+completion rule); pairs with the D4/D5 roster-churn fixes that produced the border-oscillation hold shape.
+
 ### 7.3 Review reconciliation
 
 Live-confirmed from the §1–2 list: **D11** (Deny — the routing stall), **R8** (rally-hold), **R6** (defense re-field loop — its lifecycle exemption is the enabler of R22), **R13a** (heal:0/hits:0 intercept sizing — the flimsy floor duos observed), **R9** (CPU cluster — the pre-contraction bucket drain). New IDs minted by this addendum: **D24** (frozen-anchor deploy deadlock), **D25** (zombie claimed objectives), **D26** (threat-blind rally placement), **D27** (intercept over-breadth), **R22→defect-grade** (no never-departed circuit breaker). Note the July private-server validation (ADR 0042: "RALLY-hold 153→12") measured the *forming* half; the deploy-phase deadlock (D24) begins after the rally gate releases, which is why simulation-side wins did not translate to MMO — the sim's `ManagedSimSquad` pre-places members and bypasses travel entirely (the known lifecycle-harness gap).
