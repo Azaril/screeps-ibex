@@ -193,6 +193,12 @@ pub struct TransferFeatures {
 pub struct RemoteMineFeatures {
     pub harvest: bool,
     pub reserve: bool,
+    /// Outpost-candidate BFS radius in ROOM hops from each home (stall report
+    /// §4): the literal `1` in `miningoutpost.rs` capped remote mining to
+    /// adjacent rooms only. Serde-default (no WFV impact) so an operator retune
+    /// via `Memory._features` survives; raising it widens the candidate ring —
+    /// outpost admission economics still decide what actually gets mined.
+    pub search_radius: u32,
 }
 
 impl Default for RemoteMineFeatures {
@@ -200,6 +206,7 @@ impl Default for RemoteMineFeatures {
         Self {
             harvest: true,
             reserve: true,
+            search_radius: 1,
         }
     }
 }

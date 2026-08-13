@@ -56,8 +56,9 @@ pub fn is_claim_target_safe(threat: Option<&RoomThreatData>, dynamic: &RoomDynam
 /// Normal creep lifetime (ticks). Local const mirrors `military/composition.rs`
 /// (the screeps crate constant is not conveniently typed for this arithmetic).
 const CREEP_LIFE_TIME: u32 = 1500;
-/// CLAIM-creep lifetime (ticks): claimers live only 600.
-const CREEP_CLAIM_LIFE_TIME: u32 = 600;
+/// CLAIM-creep lifetime (ticks): claimers live only 600. Pub: `missions/claim.rs`
+/// uses it to tell a claimer's natural TTL expiry from a premature (combat) loss.
+pub const CREEP_CLAIM_LIFE_TIME: u32 = 600;
 /// Minimum on-site working life for a remote builder to be worth spawning —
 /// it must arrive with enough life to harvest and build. Structural threshold,
 /// not a deployment knob (cf. salvage's 300-tick floor).

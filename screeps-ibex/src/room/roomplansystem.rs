@@ -448,13 +448,28 @@ impl<'a> System<'a> for RoomPlanSystem {
                             }
                         };
 
+                        // Deterministic total order (stall report §4): `max_by` keeps the LAST of
+                        // equal maxima, so priority ties used to resolve to whichever request was
+                        // pushed last — for the claim prefetch (which pushes best-first) that was
+                        // the WORST-ranked tied candidate, and seed-dependent in general
+                        // ([[sim-determinism-fence]]). Break ties by room NAME ascending: a smaller
+                        // name must compare GREATER so it wins the max.
                         let request = data
                             .room_plan_queue
                             .requests
                             .iter()
                             .filter(|request| can_plan(request.room))
                             .filter(|request| data.room_data.get(request.room).is_some())
-                            .max_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal))
+                            .max_by(|a, b| {
+                                a.priority
+                                    .partial_cmp(&b.priority)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                                    .then_with(|| {
+                                        let name = |e: Entity| data.room_data.get(e).map(|rd| rd.name);
+                                        // Reversed: name ASC wins the max.
+                                        name(b.room).cmp(&name(a.room))
+                                    })
+                            })
                             .cloned();
 
                         if let Some(request) = request {

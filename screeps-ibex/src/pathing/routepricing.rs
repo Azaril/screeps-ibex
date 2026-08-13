@@ -21,6 +21,19 @@
 //! (`can_traverse_between_room_status`) is deliberately not mirrored:
 //! `find_route` handles closed rooms internally.
 //!
+//! **Intel-age bounds (expansion-stall M4, 2026-08-11):** hostility read from
+//! a cached snapshot decays. A hostile-CREEP sighting is a mobile fact — a
+//! creep seen 10k ticks ago is long gone (or long dead); treating it as a
+//! permanent wall poisoned corridors for up to ~20k ticks and emptied the
+//! feasible claim set on live MMO. A hostile PLAYER reservation decays on its
+//! own within `RESERVATION_MAX_AGE` unless renewed. Both signals are now
+//! age-bounded; a hostile OWNER, armed towers, and SK flags remain age-free
+//! (structural facts that only change with a re-sighting). An NPC "Invader"
+//! reservation is NOT a movement hazard at all (no towers, and any actual
+//! invader creeps show up as `hostile_creeps`): it prices passable-dispreferred
+//! instead of denying — invader cores near expansion frontiers were walling
+//! off whole corridors.
+//!
 //! Pure kernel over a plain-bool DTO (EP-6.2): the adapter reads cached
 //! `RoomData` dynamic-visibility intel through public getters; tests construct
 //! the DTO directly.
@@ -37,16 +50,34 @@ use crate::room::data::RoomDynamicVisibilityData;
 /// of scope).
 pub const UNSCOUTED_ROUTE_COST: f64 = 2.5;
 
-/// Cached room intel needed to price a room for economy routing. Plain bools
-/// so the pricing kernel stays world-free and host-testable
+/// Maximum intel age (ticks) for a hostile-CREEP sighting to still deny a
+/// corridor. Hostile creeps live ≤ 1500 ticks and roam; a sighting older than
+/// this bound says nothing about the room today. Sized to one creep lifetime
+/// plus margin.
+pub const HOSTILE_SIGHTING_MAX_AGE: u32 = 2000;
+
+/// Maximum intel age (ticks) for a hostile PLAYER reservation to still deny a
+/// corridor. A reservation decays within 5000 ticks unless actively renewed,
+/// so an older snapshot's reservation has provably lapsed (or the room is
+/// being actively worked, which a re-sighting will re-establish).
+pub const RESERVATION_MAX_AGE: u32 = 5000;
+
+/// Cached room intel needed to price a room for economy routing. Plain
+/// primitives so the pricing kernel stays world-free and host-testable
 /// (`RoomDynamicVisibilityData` is not constructible outside `room::data`).
 #[derive(Debug, Clone, Copy)]
 pub struct RouteRoomIntel {
+    /// Age of this intel snapshot in ticks (0 = currently visible). Bounds the
+    /// mobile/decaying hostile signals below.
+    pub intel_age: u32,
     /// Source-keeper room.
     pub source_keeper: bool,
-    /// Reserved by a hostile player.
-    pub reservation_hostile: bool,
-    /// Hostile creeps sighted.
+    /// Reserved by a hostile PLAYER (NPC "Invader" reservations are carried
+    /// separately — they are not a movement hazard).
+    pub reservation_hostile_player: bool,
+    /// Reserved by the NPC "Invader" faction (invader cores).
+    pub reservation_invader: bool,
+    /// Hostile creeps sighted (at snapshot time).
     pub hostile_creeps: bool,
     /// Armed hostile towers sighted.
     pub hostile_towers: bool,
@@ -65,9 +96,16 @@ pub struct RouteRoomIntel {
 impl RouteRoomIntel {
     /// Adapter from cached dynamic visibility (public getters only).
     pub fn from_dynamic(d: &RoomDynamicVisibilityData) -> RouteRoomIntel {
+        let (reservation_hostile_player, reservation_invader) = match d.reservation() {
+            crate::room::data::RoomDisposition::Hostile(name) if name == "Invader" => (false, true),
+            crate::room::data::RoomDisposition::Hostile(_) => (true, false),
+            _ => (false, false),
+        };
         RouteRoomIntel {
+            intel_age: d.age(),
             source_keeper: d.source_keeper(),
-            reservation_hostile: d.reservation().hostile(),
+            reservation_hostile_player,
+            reservation_invader,
             hostile_creeps: d.hostile_creeps(),
             hostile_towers: d.hostile_towers(),
             owner_hostile: d.owner().hostile(),
@@ -79,12 +117,17 @@ impl RouteRoomIntel {
 
 /// The mover's hostile-room predicate — the exact derivation
 /// `MovementSystemExternalProvider::get_room_cost` applies before its
-/// `HostileBehavior` dispatch (`pathing/movementsystem.rs`): SK rooms, hostile
-/// reservations, hostile creeps, armed towers, or a hostile OWNER unless the
-/// room is derelict-passable (`derelict_pathing_on` = `features.derelict.on`).
+/// `HostileBehavior` dispatch (`pathing/movementsystem.rs`): SK rooms,
+/// UN-DECAYED hostile player reservations, RECENT hostile-creep sightings,
+/// armed towers, or a hostile OWNER unless the room is derelict-passable
+/// (`derelict_pathing_on` = `features.derelict.on`). Invader reservations are
+/// never hostile for movement (priced dispreferred in
+/// [`economy_route_cost`]).
 pub fn is_hostile_for_movement(i: &RouteRoomIntel, derelict_pathing_on: bool) -> bool {
     let derelict = derelict_pathing_on && i.derelict;
-    i.source_keeper || i.reservation_hostile || i.hostile_creeps || i.hostile_towers || (i.owner_hostile && !derelict)
+    let recent_creeps = i.hostile_creeps && i.intel_age <= HOSTILE_SIGHTING_MAX_AGE;
+    let live_player_reservation = i.reservation_hostile_player && i.intel_age <= RESERVATION_MAX_AGE;
+    i.source_keeper || live_player_reservation || recent_creeps || i.hostile_towers || (i.owner_hostile && !derelict)
 }
 
 /// Economy-corridor route cost: `None` = DENY (the mover's
@@ -94,6 +137,8 @@ pub fn is_hostile_for_movement(i: &RouteRoomIntel, derelict_pathing_on: bool) ->
 /// from `get_room_cost`: a room with NO cached intel prices at
 /// [`UNSCOUTED_ROUTE_COST`] (2.5) instead of the mover's 2.0 default — route
 /// PREFERENCE conservatism only (see the constant's doc); it never denies.
+/// An invader-reserved or aged-out-hostile room prices at 2.5: passable, but
+/// prefer clean corridors on ties.
 pub fn economy_route_cost(intel: Option<RouteRoomIntel>, derelict_pathing_on: bool) -> Option<f64> {
     let Some(i) = intel else {
         return Some(UNSCOUTED_ROUTE_COST);
@@ -101,13 +146,29 @@ pub fn economy_route_cost(intel: Option<RouteRoomIntel>, derelict_pathing_on: bo
     if is_hostile_for_movement(&i, derelict_pathing_on) {
         return None;
     }
+    Some(passable_room_cost(&i, derelict_pathing_on))
+}
+
+/// The room-price tier for a room that passed (or bypassed, under
+/// `HostileBehavior::Allow`) the hostile gate — the ONE tier chain both the
+/// route callback ([`economy_route_cost`]) and the mover
+/// (`MovementSystemExternalProvider::get_room_cost`) apply, so route
+/// preference and mover preference can never disagree (REC-024
+/// parity-by-construction): friendly 1.0; passable-but-dispreferred 2.5 for
+/// derelict rooms, invader reservations, and hostile signals that only aged
+/// out (the room MAY still be risky — prefer truly neutral corridors on
+/// ties); neutral 2.0.
+pub fn passable_room_cost(i: &RouteRoomIntel, derelict_pathing_on: bool) -> f64 {
     if i.friendly {
-        Some(1.0)
-    } else if derelict_pathing_on && i.derelict {
-        // Passable, but prefer truly neutral routes on ties (mover parity).
-        Some(2.5)
+        1.0
+    } else if (derelict_pathing_on && i.derelict)
+        || i.reservation_invader
+        || i.hostile_creeps
+        || i.reservation_hostile_player
+    {
+        2.5
     } else {
-        Some(2.0)
+        2.0
     }
 }
 
@@ -117,8 +178,10 @@ mod tests {
 
     fn neutral() -> RouteRoomIntel {
         RouteRoomIntel {
+            intel_age: 0,
             source_keeper: false,
-            reservation_hostile: false,
+            reservation_hostile_player: false,
+            reservation_invader: false,
             hostile_creeps: false,
             hostile_towers: false,
             owner_hostile: false,
@@ -138,10 +201,12 @@ mod tests {
         let cases: &[(&str, Mutator, bool)] = &[
             ("neutral room", |_| {}, false),
             ("source keeper", |i| i.source_keeper = true, true),
-            ("hostile reservation", |i| i.reservation_hostile = true, true),
-            ("hostile creeps", |i| i.hostile_creeps = true, true),
+            ("fresh hostile player reservation", |i| i.reservation_hostile_player = true, true),
+            ("fresh hostile creeps", |i| i.hostile_creeps = true, true),
             ("armed hostile towers", |i| i.hostile_towers = true, true),
             ("hostile owner", |i| i.owner_hostile = true, true),
+            // Invader reservations are never movement-hostile (M4).
+            ("invader reservation", |i| i.reservation_invader = true, false),
         ];
         for (label, setup, expect) in cases {
             let mut i = neutral();
@@ -160,6 +225,57 @@ mod tests {
         // …and anything ARMED stays hostile even if flagged derelict.
         derelict.hostile_towers = true;
         assert!(is_hostile_for_movement(&derelict, true), "armed derelict stays hostile");
+    }
+
+    /// M4 pin (expansion-stall 2026-08-11): mobile/decaying hostile signals
+    /// are AGE-BOUNDED. A hostile-creep sighting older than
+    /// `HOSTILE_SIGHTING_MAX_AGE` and a player reservation older than
+    /// `RESERVATION_MAX_AGE` no longer deny the corridor — one stale sighting
+    /// must not poison a route for ~20k ticks. Structural signals (owner,
+    /// towers, SK) stay age-free.
+    #[test]
+    fn hostile_signals_age_out() {
+        // Fresh sighting denies…
+        let mut creeps = neutral();
+        creeps.hostile_creeps = true;
+        creeps.intel_age = HOSTILE_SIGHTING_MAX_AGE;
+        assert!(is_hostile_for_movement(&creeps, true), "sighting at the bound still denies");
+        // …aged-out sighting does not.
+        creeps.intel_age = HOSTILE_SIGHTING_MAX_AGE + 1;
+        assert!(!is_hostile_for_movement(&creeps, true), "aged-out sighting must not deny");
+        // Aged-out is passable but dispreferred (2.5, not the neutral 2.0).
+        assert_eq!(economy_route_cost(Some(creeps), true), Some(2.5));
+
+        let mut reserved = neutral();
+        reserved.reservation_hostile_player = true;
+        reserved.intel_age = RESERVATION_MAX_AGE;
+        assert!(is_hostile_for_movement(&reserved, true), "un-decayed reservation denies");
+        reserved.intel_age = RESERVATION_MAX_AGE + 1;
+        assert!(!is_hostile_for_movement(&reserved, true), "decayed reservation must not deny");
+        assert_eq!(economy_route_cost(Some(reserved), true), Some(2.5));
+
+        // Structural signals never age out.
+        let mut towers = neutral();
+        towers.hostile_towers = true;
+        towers.intel_age = u32::MAX;
+        assert!(is_hostile_for_movement(&towers, true), "towers are structural — age-free");
+        let mut owner = neutral();
+        owner.owner_hostile = true;
+        owner.intel_age = u32::MAX;
+        assert!(is_hostile_for_movement(&owner, true), "hostile owner is structural — age-free");
+    }
+
+    /// M4 pin: an NPC "Invader" reservation is passable-dispreferred, never a
+    /// wall — invader cores near the expansion frontier must not veto claim
+    /// corridors (any actual invader creeps deny via `hostile_creeps`).
+    #[test]
+    fn invader_reservation_is_passable_dispreferred() {
+        let mut invader = neutral();
+        invader.reservation_invader = true;
+        assert_eq!(economy_route_cost(Some(invader), true), Some(2.5));
+        // With live invader creeps sighted, the room denies like any other.
+        invader.hostile_creeps = true;
+        assert_eq!(economy_route_cost(Some(invader), true), None);
     }
 
     /// REC-024 pin: hostile rooms are DENIED (None → infinite route cost) —

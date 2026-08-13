@@ -289,30 +289,26 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
             .and_then(|target_room_data| target_room_data.get_dynamic_visibility_data());
 
         if let Some(dynamic_visibility_data) = dynamic_visibility_data {
-            // A derelict room — hostile-owned but militarily dead at the last
-            // sighting (no spawns, armed towers, or combat/threat creeps) — is
-            // simply NOT hostile for pathing: it has no defenders, so the owner
-            // name alone can't hurt a creep. Uses the raw `derelict()`
-            // classification (last sighting), NOT the stricter
-            // `confirmed_derelict`: pathing into a defenseless room is safe on
-            // older intel too, and gating it on fresh intel deadlocked outpost
-            // economy creeps — the default `HostileBehavior::Deny` blocked them
-            // the moment the confirmation lapsed, and they could never enter to
-            // refresh the very intel the gate required. Anything armed at the
-            // last sighting — towers with energy, combat creeps, a hostile
-            // reservation, source keepers — still reads hostile. (Action
-            // decisions — salvage / de-claim / outpost admission — keep the
-            // stricter `confirmed_derelict`; only pathing is loosened here.)
-            let derelict_features = &self.derelict_features;
-            let derelict = derelict_features.on && dynamic_visibility_data.derelict();
+            // REC-024 parity-by-construction: the hostile predicate and the
+            // room-price tiers are the SHARED `routepricing` kernels — the same
+            // derivation `economy_route_cost` prices claim/economy routes with —
+            // so a route the router accepts is never a route this mover refuses.
+            // The derivation (rationale in `routepricing`):
+            // - a DERELICT room (hostile-owned but militarily dead at the last
+            //   sighting; raw `derelict()`, deliberately not the stricter
+            //   `confirmed_derelict` — fresh-intel gating deadlocked the very
+            //   creeps that refresh intel) is not hostile for pathing;
+            // - hostile-CREEP sightings age out (`HOSTILE_SIGHTING_MAX_AGE`) —
+            //   creeps live ≤ 1500 ticks, an old sighting says nothing today;
+            // - hostile PLAYER reservations age out (`RESERVATION_MAX_AGE`) —
+            //   reservations decay unless renewed;
+            // - NPC "Invader" reservations are never a movement hazard —
+            //   passable-dispreferred below;
+            // - SK rooms, armed towers, and live hostile owners stay hostile.
+            let intel = super::routepricing::RouteRoomIntel::from_dynamic(dynamic_visibility_data);
+            let derelict_pathing_on = self.derelict_features.on;
 
-            let is_hostile = dynamic_visibility_data.source_keeper()
-                || dynamic_visibility_data.reservation().hostile()
-                || dynamic_visibility_data.hostile_creeps()
-                || dynamic_visibility_data.hostile_towers()
-                || (dynamic_visibility_data.owner().hostile() && !derelict);
-
-            if is_hostile {
+            if super::routepricing::is_hostile_for_movement(&intel, derelict_pathing_on) {
                 match room_options.hostile_behavior() {
                     HostileBehavior::Allow => {}
                     HostileBehavior::HighCost => return Some(10.0),
@@ -320,18 +316,9 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
                 }
             }
 
-            if dynamic_visibility_data.owner().mine()
-                || dynamic_visibility_data.owner().friendly()
-                || dynamic_visibility_data.reservation().mine()
-                || dynamic_visibility_data.reservation().friendly()
-            {
-                return Some(1.0);
-            } else if derelict {
-                // Passable, but prefer truly neutral routes on ties.
-                return Some(2.5);
-            } else {
-                return Some(2.0);
-            }
+            // The ONE shared tier chain (friendly 1.0 / dispreferred 2.5 /
+            // neutral 2.0) — see `passable_room_cost`'s docs.
+            return Some(super::routepricing::passable_room_cost(&intel, derelict_pathing_on));
         }
 
         Some(2.0)

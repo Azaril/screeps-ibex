@@ -57,6 +57,22 @@ const ESCORT_TARGET_VALUE: f32 = 1_000_000.0;
 /// named constant (EP-4.6): calibration lands as a reviewed diff, not runtime config.
 const ESCORT_OBJECTIVE_TTL: u32 = 4000;
 
+/// How long Select may HOLD waiting for the governor to sample back to Normal
+/// before completing the cycle anyway (stall report §4: the tier is a per-tick
+/// sample; consulting it at one instant let a single Conserve sawtooth tick
+/// zero a whole discover cycle). ~One bucket-recovery horizon.
+const SELECT_CPU_HOLD_MAX_TICKS: u32 = 300;
+
+/// Maximum home rooms one claim mission may reserve (stall report §4): a claim
+/// used to consume EVERY eligible home, starving all other candidates in the
+/// same cycle via `used_home_rooms`. Two covers claimer + remote-build support.
+const HOME_CONSUMPTION_CAP: usize = 2;
+
+/// Plan-prefetch breadth per Scouting tick (stall report §4, M3): how many of
+/// the best viable plan-less candidates get a `RoomPlanRequest` pushed while
+/// scouting is still running, so plans exist by commit time.
+const PLAN_PREFETCH_TOP_N: usize = 6;
+
 /// Phase of the claim pipeline state machine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 enum ClaimPhase {
@@ -196,8 +212,20 @@ impl ClaimOperation {
         let confirmed_derelict = derelict_features.on
             && dynamic_visibility_data.confirmed_derelict(derelict_features.confirm_ticks, derelict_features.path_max_age);
 
+        // BFS/route-oracle alignment (stall report §4): a LIVE hostile-PLAYER
+        // reservation denies movement (`routepricing::is_hostile_for_movement`),
+        // so the expansion BFS must not search THROUGH such a room either —
+        // otherwise Discover produces candidates whose corridors the route
+        // oracle then refuses (phantom candidates; live example W11N56, kept
+        // alive behind a reserved wall for weeks). Shares the routepricing
+        // derivation: NPC "Invader" reservations and decayed (aged-out)
+        // reservations do NOT wall — only a live player reservation does.
+        let intel = crate::pathing::routepricing::RouteRoomIntel::from_dynamic(dynamic_visibility_data);
+        let live_hostile_player_reservation =
+            intel.reservation_hostile_player && intel.intel_age <= crate::pathing::routepricing::RESERVATION_MAX_AGE;
+
         let viable = has_controller && has_sources && can_claim && can_plan;
-        let can_expand = !hostile || confirmed_derelict;
+        let can_expand = (!hostile || confirmed_derelict) && !live_hostile_player_reservation;
 
         let candidate_room_data = CandidateRoomData::new(search_room_entity, viable, can_expand);
 
@@ -529,35 +557,21 @@ impl ClaimOperation {
     /// backoff). Lets Select fire as soon as coverage lands instead of always
     /// waiting out the full scouting window — and prevents a hostile-walled,
     /// never-scoutable room from blocking selection forever.
+    ///
+    /// Deliberately does NOT require every viable candidate's dynamic intel to
+    /// be simultaneously fresh (stall report §4, M2-near): with N candidates
+    /// and one scout, freshness windows cannot all overlap, so a simultaneous-
+    /// freshness clause held coverage open for whole cycles while each room's
+    /// intel expired as the next was visited. The staleness that clause guarded
+    /// against is handled where it belongs — the per-candidate commit-time
+    /// safety re-check — and the ROLLING commit (`try_commit_candidates` from
+    /// the Scouting phase) claims each far candidate in the tick its OWN intel
+    /// is fresh, so no candidate needs to be fresh at any shared instant.
     fn scouting_coverage_complete(&self, system_data: &OperationExecutionSystemData) -> bool {
         let now = game::time();
 
         if self.candidates.iter().any(|c| c.score.is_none()) {
             return false;
-        }
-
-        // A viable candidate (one that could actually be committed) must also have DYNAMIC intel fresh enough
-        // to pass the commit-time safety re-check — otherwise "covered" fires in a tick (candidates score
-        // instantly from static data), Select runs while the intel is stale, and the claim is rejected on
-        // staleness before any scout could refresh it. Holding coverage here lets the scout queue (kept alive
-        // in refresh_visibility_requests) bring the intel current; the scouting-window timeout in
-        // run_operation bounds the wait, so an unreachable room can't stall selection forever.
-        let freshness = system_data.features.claim.intel_freshness_ticks;
-        for candidate in &self.candidates {
-            let viable = candidate.score.map(|(s, _)| s >= 0.0).unwrap_or(false);
-            if !viable {
-                continue;
-            }
-            let fresh = system_data
-                .mapping
-                .get_room(&candidate.room_name)
-                .and_then(|e| system_data.room_data.get(e))
-                .and_then(|rd| rd.get_dynamic_visibility_data())
-                .map(|d| d.updated_within(freshness))
-                .unwrap_or(false);
-            if !fresh {
-                return false;
-            }
         }
 
         for room_name in &self.unknown_rooms {
@@ -580,15 +594,55 @@ impl ClaimOperation {
         true
     }
 
+    /// Plan prefetch (stall report §4 — kills M3): push a `RoomPlanRequest` for the top-N viable,
+    /// plan-LESS candidates every Scouting tick. Plans are produced asynchronously by
+    /// `roomplansystem` (budgeted, one room at a time), so requesting them only at commit time
+    /// meant the first cycle a candidate became otherwise-committable was always burned waiting
+    /// for a plan ("the plan mystery": the gate ordering meant the request was often never even
+    /// made). Priority rides UNDER construction missions (they use 1.0): `0.5 + score.clamp(0,
+    /// 0.45)` plans better candidates first without ever pre-empting a live colony's replan. The
+    /// queue is per-tick (cleared after each planner step), so re-pushing every tick is the
+    /// intended keep-alive, not a leak.
+    fn prefetch_candidate_plans(&self, system_data: &mut OperationExecutionSystemData) {
+        let mut viable: Vec<(f32, RoomName)> = self
+            .candidates
+            .iter()
+            .filter_map(|c| c.score.map(|(s, _)| (s, c.room_name)))
+            .filter(|(s, _)| *s >= 0.0)
+            .collect();
+        // Best-first, name tie-break (determinism — [[sim-determinism-fence]]).
+        viable.sort_by(|a, b| {
+            let qa = crate::claim_economics::claim_rank_quantize(a.0);
+            let qb = crate::claim_economics::claim_rank_quantize(b.0);
+            qb.cmp(&qa).then(a.1.cmp(&b.1))
+        });
+        let mut requested = 0usize;
+        for (score, room_name) in viable {
+            if requested >= PLAN_PREFETCH_TOP_N {
+                break;
+            }
+            let Some(entity) = system_data.mapping.get_room(&room_name) else {
+                continue;
+            };
+            // Only plan-LESS candidates: an existing plan (valid or failed) is the commit gate's
+            // + roomplansystem's business (failed plans re-request there under the replan backoff).
+            if system_data.room_plan_data.get(entity).is_some() {
+                continue;
+            }
+            let priority = 0.5 + score.clamp(0.0, 0.45);
+            system_data.room_plan_queue.request(RoomPlanRequest::new(entity, priority));
+            requested += 1;
+        }
+    }
+
     // ── Phase: Select ───────────────────────────────────────────────────────
 
-    /// Score and sort candidates, create missions for the best candidates, and
-    /// transition back to Idle.
-    ///
-    /// Up to `max_concurrent_missions` claim missions may be active at once
-    /// (0 = unlimited, capped by GCL/CPU). Additional candidates beyond the
-    /// first are only selected if their score is within `max_score_delta` of
-    /// the best candidate, preventing vastly inferior rooms from being claimed.
+    /// Final selection at the scouting window's end: score any stragglers, emit
+    /// escort screens, prune dead candidates, then run the SAME commit-gate
+    /// chain the rolling pass uses ([`Self::try_commit_candidates`]) one last
+    /// time — this is where below-ring candidates get their coverage-gated
+    /// last-resort chance (ADR 0038 D9; far candidates normally commit earlier,
+    /// from the rolling Scouting pass) — and transition back to Idle.
     fn run_select(
         &mut self,
         system_data: &mut OperationExecutionSystemData,
@@ -605,10 +659,23 @@ impl ClaimOperation {
         self.try_score_candidates(system_data, features);
 
         // Coverage snapshot BEFORE pruning (prune drops unscored, which would trivially "complete" coverage).
-        // Gates the cannibalization-patience check below: a below-ring (cannibalizing) room is only claimed
-        // once the reachable far frontier is fully scouted-or-given-up (ADR 0038 D9), so a closer room never
-        // pre-empts a farther one that is merely still being scouted.
+        // Gates the cannibalization-patience check in the commit chain: a below-ring (cannibalizing) room is
+        // only claimed once the reachable far frontier is fully scouted-or-given-up (ADR 0038 D9), so a closer
+        // room never pre-empts a farther one that is merely still being scouted.
         let covered = self.scouting_coverage_complete(system_data);
+
+        // CPU one-tick-sampling guard (stall report §4): the governor tier is a
+        // per-tick sample, and Select previously consulted it at exactly ONE
+        // instant — a single Conserve-tick of bucket sawtooth there zeroed the
+        // whole discover cycle. Hold the phase and retry next tick instead,
+        // bounded so a genuinely stressed empire still completes the cycle
+        // (capacity-gated to zero missions) rather than parking in Select.
+        if system_data.governor.tier != crate::cpugovernor::Tier::Normal {
+            let held = self.phase_tick.map(|t| game::time().saturating_sub(t)).unwrap_or(u32::MAX);
+            if held < SELECT_CPU_HOLD_MAX_TICKS {
+                return;
+            }
+        }
 
         // Escort pre-clear (ADR 0017; combat-overhaul-plan.md §W3): emit an Escort screen for any MARGINAL
         // threatened candidate BEFORE the prune below drops the threat-rejected ones. A NO-OP for clean
@@ -635,32 +702,90 @@ impl ClaimOperation {
             self.candidates.len()
         );
 
-        // Sort by a total, deterministic order: quantized score DESC, then room name ASC (ADR 0038 D8). The
-        // quantization stops f64 rounding from splitting a genuine tie, and the room-name tie-break removes the
-        // seed-flaky HashMap iteration order the BFS would otherwise leak into equal-scored candidates
-        // ([[sim-determinism-fence]]).
-        self.candidates.sort_by(|a, b| {
+        self.try_commit_candidates(system_data, runtime_data, maximum_rooms, currently_owned_rooms, features, covered, false, true);
+
+        // No adaptive-radius ratchet (ADR 0038 D1): the BFS searches the full claimer-viable range every
+        // discover cycle, so there is no radius to widen/re-tighten. Expansion reach grows only by claiming
+        // (each new colony re-seeds the BFS outward).
+
+        // Transition back to Idle, recording the current tick for the
+        // re-discover interval.
+        self.phase_tick = Some(game::time());
+        self.phase = ClaimPhase::Idle;
+    }
+
+    /// The ONE commit-gate chain (stall report §4 "rolling commit" — kills M2-far): capacity/CPU
+    /// gates, then per ranked candidate [score-delta, below-ring patience, plan gate, commit-time
+    /// safety re-check, existing-mission check, eligible-home feasibility] — creating a claim
+    /// mission for every candidate that passes EVERY gate in THIS tick. Returns missions created.
+    ///
+    /// Called from two places:
+    /// - **Scouting, every tick** (`far_only = true`, quiet): a far (>= ring) candidate commits the
+    ///   moment its OWN intel is fresh + safe + planned + home-reachable, instead of at one sampled
+    ///   Select instant — with one scout rotating N rooms, per-candidate freshness windows rarely
+    ///   overlap the window's end, so the single sampled instant burned whole cycles (M2-far).
+    /// - **Select, once at window end** (`far_only = false`, `verbose`): the below-ring stragglers'
+    ///   coverage-gated last-resort chance (ADR 0038 D9) + the cycle's ranked summary.
+    ///
+    /// Up to `max_concurrent_missions` claim missions may be active at once (0 = unlimited, capped
+    /// by GCL/CPU). Additional candidates beyond the first are only selected if their score is
+    /// within `max_score_delta` of the best, preventing vastly inferior rooms from being claimed.
+    ///
+    /// Gate ORDER matters (stall report §4, M3): the plan gate runs BEFORE the freshness/safety
+    /// skip, so a plan-less candidate gets its plan REQUESTED even while its intel happens to be
+    /// stale — previously the staleness skip came first, the request line was never reached, and a
+    /// perfectly good candidate could never become committable.
+    #[allow(clippy::too_many_arguments)]
+    fn try_commit_candidates(
+        &mut self,
+        system_data: &mut OperationExecutionSystemData,
+        runtime_data: &mut OperationExecutionRuntimeData,
+        maximum_rooms: u32,
+        currently_owned_rooms: u32,
+        features: &crate::features::ClaimFeatures,
+        covered: bool,
+        far_only: bool,
+        verbose: bool,
+    ) -> usize {
+        // Ranked snapshot (cloned so the commit loop below can mutate `self`): scored-viable
+        // candidates, rolling-pass-filtered to far (>= ring), in the deterministic total order —
+        // quantized score DESC then room name ASC (ADR 0038 D8: the quantization stops f64 rounding
+        // from splitting a genuine tie; the name tie-break removes the seed-flaky HashMap iteration
+        // order the BFS would otherwise leak — [[sim-determinism-fence]]).
+        let mut ranked: Vec<CachedCandidate> = self
+            .candidates
+            .iter()
+            .filter(|c| c.score.map(|(s, _)| s >= 0.0).unwrap_or(false))
+            .filter(|c| !far_only || c.distance >= features.ring_separation_hops)
+            .cloned()
+            .collect();
+        ranked.sort_by(|a, b| {
             let qa = crate::claim_economics::claim_rank_quantize(a.score.map(|(s, _)| s).unwrap_or(0.0));
             let qb = crate::claim_economics::claim_rank_quantize(b.score.map(|(s, _)| s).unwrap_or(0.0));
             qb.cmp(&qa).then(a.room_name.cmp(&b.room_name))
         });
+        if ranked.is_empty() {
+            return 0;
+        }
 
-        // Log the ranked candidates.
-        for (i, candidate) in self.candidates.iter().enumerate() {
-            if let Some((score, sub)) = candidate.score {
-                let plan_label = sub.plan.map(|p| format!(" plan={:.2}", p)).unwrap_or_default();
-                info!(
-                    "ClaimOp [Select]:   #{} {} score={:.3} (roi={:.2} unlock={:.2} decay={:.2}{}) dist={} homes=[{}]",
-                    i + 1,
-                    candidate.room_name,
-                    score,
-                    sub.roi,
-                    sub.unlock,
-                    sub.decay,
-                    plan_label,
-                    candidate.distance,
-                    candidate.home_rooms.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(","),
-                );
+        if verbose {
+            // Log the ranked candidates.
+            for (i, candidate) in ranked.iter().enumerate() {
+                if let Some((score, sub)) = candidate.score {
+                    let plan_label = sub.plan.map(|p| format!(" plan={:.2}", p)).unwrap_or_default();
+                    info!(
+                        "ClaimOp [Select]:   #{} {} score={:.3} (roi={:.2} unlock={:.2} decay={:.2}{}) dist={} homes=[{}]",
+                        i + 1,
+                        candidate.room_name,
+                        score,
+                        sub.roi,
+                        sub.unlock,
+                        sub.decay,
+                        plan_label,
+                        candidate.distance,
+                        candidate.home_rooms.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(","),
+                    );
+                }
             }
         }
 
@@ -684,33 +809,39 @@ impl ClaimOperation {
             (features.max_concurrent_missions as usize).saturating_sub(self.claim_missions.len())
         };
 
-        info!(
-            "ClaimOp [Select]: owned={} active_missions={} max_rooms={} available={} mission_cap={} at_capacity={} features.on={} cpu_healthy={} est_room_cpu={:.1}",
-            currently_owned_rooms,
-            self.claim_missions.len(),
-            maximum_rooms,
-            available_rooms,
-            features.max_concurrent_missions,
-            at_capacity,
-            features.on,
-            cpu_healthy,
-            system_data
-                .cpu_budget
-                .cpu_used_estimate
-                .map(|u| if currently_owned_rooms >= 2 { u / currently_owned_rooms as f64 } else { features.fallback_room_cpu_cost as f64 })
-                .unwrap_or(features.fallback_room_cpu_cost as f64),
-        );
+        if verbose {
+            info!(
+                "ClaimOp [Select]: owned={} active_missions={} max_rooms={} available={} mission_cap={} at_capacity={} features.on={} cpu_healthy={} est_room_cpu={:.1}",
+                currently_owned_rooms,
+                self.claim_missions.len(),
+                maximum_rooms,
+                available_rooms,
+                features.max_concurrent_missions,
+                at_capacity,
+                features.on,
+                cpu_healthy,
+                system_data
+                    .cpu_budget
+                    .cpu_used_estimate
+                    .map(|u| if currently_owned_rooms >= 2 { u / currently_owned_rooms as f64 } else { features.fallback_room_cpu_cost as f64 })
+                    .unwrap_or(features.fallback_room_cpu_cost as f64),
+            );
+        }
 
         let max_new_missions = if at_capacity {
-            info!(
-                "ClaimOp [Select]: no new missions (active={} max_rooms={} cpu_healthy={} features.on={})",
-                active_rooms, maximum_rooms, cpu_healthy, features.on
-            );
+            if verbose {
+                info!(
+                    "ClaimOp [Select]: no new missions (active={} max_rooms={} cpu_healthy={} features.on={})",
+                    active_rooms, maximum_rooms, cpu_healthy, features.on
+                );
+            }
             0
         } else {
             // Cap by both room headroom and mission concurrency limit.
             (available_rooms as usize).min(mission_headroom)
         };
+
+        let mut missions_created = 0;
 
         if max_new_missions > 0 {
             // Gather home room data for mission creation.
@@ -747,10 +878,9 @@ impl ClaimOperation {
                 }
             }
 
-            let mut missions_created = 0;
-            let best_score = self.candidates.first().and_then(|c| c.score.map(|(s, _)| s)).unwrap_or(0.0);
+            let best_score = ranked.first().and_then(|c| c.score.map(|(s, _)| s)).unwrap_or(0.0);
 
-            for candidate in self.candidates.iter() {
+            for candidate in ranked.iter() {
                 if missions_created >= max_new_missions {
                     break;
                 }
@@ -759,10 +889,12 @@ impl ClaimOperation {
                 // must be within max_score_delta of the best.
                 let candidate_score = candidate.score.map(|(s, _)| s).unwrap_or(0.0);
                 if missions_created > 0 && (best_score - candidate_score) > features.max_score_delta {
-                    info!(
-                        "ClaimOp [Select]: candidate {} score={:.3} exceeds delta {:.3} from best {:.3}, stopping",
-                        candidate.room_name, candidate_score, features.max_score_delta, best_score,
-                    );
+                    if verbose {
+                        info!(
+                            "ClaimOp [Select]: candidate {} score={:.3} exceeds delta {:.3} from best {:.3}, stopping",
+                            candidate.room_name, candidate_score, features.max_score_delta, best_score,
+                        );
+                    }
                     break;
                 }
 
@@ -781,10 +913,62 @@ impl ClaimOperation {
                     continue;
                 }
 
+                let candidate_entity = match system_data.mapping.get_room(&candidate.room_name) {
+                    Some(e) => e,
+                    None => {
+                        if verbose {
+                            info!(
+                                "ClaimOp [Select]: top candidate {} has no entity mapping, skipping",
+                                candidate.room_name
+                            );
+                        }
+                        continue;
+                    }
+                };
+
+                // Plan gate (ADR 0038 D7 / REC-025): checked on VALIDITY, not
+                // just presence. A plan that FAILED during the scouting window
+                // previously passed the old `is_none()` presence check and the
+                // room could be claimed despite being unbuildable — an
+                // irreversible GCL commit (`should_abandon_claim` never fires
+                // without hostiles), violating claim_economics' "no valid plan
+                // ⇒ no claim" contract.
+                //
+                // Runs BEFORE the safety/freshness skip (stall report §4, M3):
+                // a plan-less candidate must get its plan REQUESTED even while
+                // its intel happens to be stale — with the old order, staleness
+                // `continue`d first and the request line was never reached, so
+                // "no plan" and "stale intel" starved each other forever.
+                match plan_commit_gate(system_data.room_plan_data.get(candidate_entity).map(|p| p.valid())) {
+                    PlanCommitGate::RequestPlan => {
+                        if verbose {
+                            info!(
+                                "ClaimOp [Select]: top candidate {} has no room plan, requesting one",
+                                candidate.room_name
+                            );
+                        }
+                        system_data.room_plan_queue.request(RoomPlanRequest::new(candidate_entity, 0.5));
+                        continue;
+                    }
+                    PlanCommitGate::SkipInvalid => {
+                        if verbose {
+                            warn!(
+                                "ClaimOp [Select]: top candidate {} has a FAILED room plan — hard skip (no valid plan ⇒ no claim); re-requesting a plan (roomplansystem's replan backoff still applies)",
+                                candidate.room_name
+                            );
+                        }
+                        system_data.room_plan_queue.request(RoomPlanRequest::new(candidate_entity, 0.5));
+                        continue;
+                    }
+                    PlanCommitGate::Proceed => {}
+                }
+
                 // Commit-time safety re-validation (ADR 0017): intel can change
                 // during the scouting window, and "absence of fresh intel is not
                 // safety". Skip (do not claim) a candidate that is now contested,
                 // in avoid-cooldown, or whose intel is stale — keep scouting it.
+                // (The rolling pass retries every tick, so a candidate skipped
+                // here commits the tick its own intel comes fresh — M2-far.)
                 if features.safety_gate {
                     let now = game::time();
                     let safe = match system_data.mapping.get_room(&candidate.room_name) {
@@ -803,50 +987,14 @@ impl ClaimOperation {
                         _ => false,
                     };
                     if !safe {
-                        info!(
-                            "ClaimOp [Select]: candidate {} failed commit-time safety re-check, skipping",
-                            candidate.room_name
-                        );
+                        if verbose {
+                            info!(
+                                "ClaimOp [Select]: candidate {} failed commit-time safety re-check, skipping",
+                                candidate.room_name
+                            );
+                        }
                         continue;
                     }
-                }
-
-                let candidate_entity = match system_data.mapping.get_room(&candidate.room_name) {
-                    Some(e) => e,
-                    None => {
-                        info!(
-                            "ClaimOp [Select]: top candidate {} has no entity mapping, skipping",
-                            candidate.room_name
-                        );
-                        continue;
-                    }
-                };
-
-                // Plan gate (ADR 0038 D7 / REC-025): checked on VALIDITY, not
-                // just presence. A plan that FAILED during the scouting window
-                // previously passed the old `is_none()` presence check and the
-                // room could be claimed despite being unbuildable — an
-                // irreversible GCL commit (`should_abandon_claim` never fires
-                // without hostiles), violating claim_economics' "no valid plan
-                // ⇒ no claim" contract.
-                match plan_commit_gate(system_data.room_plan_data.get(candidate_entity).map(|p| p.valid())) {
-                    PlanCommitGate::RequestPlan => {
-                        info!(
-                            "ClaimOp [Select]: top candidate {} has no room plan, requesting one",
-                            candidate.room_name
-                        );
-                        system_data.room_plan_queue.request(RoomPlanRequest::new(candidate_entity, 0.5));
-                        continue;
-                    }
-                    PlanCommitGate::SkipInvalid => {
-                        warn!(
-                            "ClaimOp [Select]: top candidate {} has a FAILED room plan — hard skip (no valid plan ⇒ no claim); re-requesting a plan (roomplansystem's replan backoff still applies)",
-                            candidate.room_name
-                        );
-                        system_data.room_plan_queue.request(RoomPlanRequest::new(candidate_entity, 0.5));
-                        continue;
-                    }
-                    PlanCommitGate::Proceed => {}
                 }
 
                 let mission_data = system_data.mission_data;
@@ -857,13 +1005,17 @@ impl ClaimOperation {
                         .iter()
                         .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<ClaimMission>().is_some()),
                     None => {
-                        info!("ClaimOp [Select]: top candidate {} has no room data, skipping", candidate.room_name);
+                        if verbose {
+                            info!("ClaimOp [Select]: top candidate {} has no room data, skipping", candidate.room_name);
+                        }
                         continue;
                     }
                 };
 
                 if has_claim_mission {
-                    info!("ClaimOp [Select]: top candidate {} already has a claim mission", candidate.room_name);
+                    if verbose {
+                        info!("ClaimOp [Select]: top candidate {} already has a claim mission", candidate.room_name);
+                    }
                 } else {
                     // Eligible homes: restricted to `candidate.home_rooms` — the
                     // Discover BFS reached this candidate from exactly those homes
@@ -904,7 +1056,7 @@ impl ClaimOperation {
                     // over the ClaimCorridor route pricing). `restrict_to_bfs_homes` scopes
                     // the pass to `candidate.home_rooms` (the BFS's minimal-distance homes).
                     let mut collect_eligible_homes = |restrict_to_bfs_homes: bool| -> Vec<Entity> {
-                        let mut out: Vec<Entity> = Vec::new();
+                        let mut out: Vec<(RoomName, Entity)> = Vec::new();
                         for (entity, home_room_name, _max_level) in home_room_data.iter() {
                             if used_home_rooms.contains(entity) {
                                 continue;
@@ -927,10 +1079,18 @@ impl ClaimOperation {
                                 &route_cost,
                             );
                             if claim_route_feasible(route) {
-                                out.push(*entity);
+                                out.push((*home_room_name, *entity));
                             }
                         }
-                        out
+                        // Home consumption cap (stall report §4): one claim used to
+                        // reserve EVERY eligible home, so a single mission consumed the
+                        // whole empire's spawn capacity and `used_home_rooms` starved
+                        // every other candidate this cycle. Two homes are ample for one
+                        // claimer + remote-build support; deterministic order (room name)
+                        // keeps the pick stable across ticks ([[sim-determinism-fence]]).
+                        out.sort_by_key(|(name, _)| *name);
+                        out.truncate(HOME_CONSUMPTION_CAP);
+                        out.into_iter().map(|(_, entity)| entity).collect()
                     };
 
                     // Prefer the BFS's minimal-distance homes. REC-069: those are recorded
@@ -952,13 +1112,17 @@ impl ClaimOperation {
                     }
 
                     if home_room_entities.is_empty() {
-                        info!(
-                            "ClaimOp [Select]: top candidate {} has no eligible home rooms (all used, can't afford a claimer, or not claim-reachable through hostile-free corridors)",
-                            candidate.room_name
-                        );
+                        if verbose {
+                            info!(
+                                "ClaimOp [Select]: top candidate {} has no eligible home rooms (all used, can't afford a claimer, or not claim-reachable through hostile-free corridors)",
+                                candidate.room_name
+                            );
+                        }
                     } else {
                         let Some(room_data) = system_data.room_data.get_mut(candidate_entity) else {
-                            info!("ClaimOp [Select]: top candidate {} has no room data, skipping", candidate.room_name);
+                            if verbose {
+                                info!("ClaimOp [Select]: top candidate {} has no room data, skipping", candidate.room_name);
+                            }
                             continue;
                         };
 
@@ -988,22 +1152,15 @@ impl ClaimOperation {
                 }
             }
 
-            if missions_created == 0 && !self.candidates.is_empty() {
+            if verbose && missions_created == 0 {
                 info!(
                     "ClaimOp [Select]: had {} scored candidates but created no missions",
-                    self.candidates.len()
+                    ranked.len()
                 );
             }
         }
 
-        // No adaptive-radius ratchet (ADR 0038 D1): the BFS searches the full claimer-viable range every
-        // discover cycle, so there is no radius to widen/re-tighten. Expansion reach grows only by claiming
-        // (each new colony re-seeds the BFS outward).
-
-        // Transition back to Idle, recording the current tick for the
-        // re-discover interval.
-        self.phase_tick = Some(game::time());
-        self.phase = ClaimPhase::Idle;
+        missions_created
     }
 
     // ── Escort pre-clear producer (ADR 0017; combat-overhaul-plan.md §W3) ────
@@ -1414,7 +1571,7 @@ impl Operation for ClaimOperation {
         // ── 1. Count owned rooms, compute capacity, track min RCL ───────
 
         let mut currently_owned_rooms: u32 = 0;
-        let mut min_rcl: u32 = u32::MAX;
+        let mut max_rcl: u32 = 0;
 
         for (_, room_data) in (system_data.entities, &*system_data.room_data).join() {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
@@ -1428,15 +1585,15 @@ impl Operation for ClaimOperation {
                         .map(|c| c.level() as u32)
                         .max()
                         .unwrap_or(0);
-                    min_rcl = min_rcl.min(rcl);
+                    max_rcl = max_rcl.max(rcl);
                 }
             }
         }
 
-        // If we have no rooms, min_rcl stays MAX; treat as "ready" so we don't
-        // block forever on an empty empire.
+        // If we have no rooms, treat as "ready" so we don't block forever on an
+        // empty empire (the discovery readiness gate below checks max_rcl).
         if currently_owned_rooms == 0 {
-            min_rcl = u32::MAX;
+            max_rcl = u32::MAX;
         }
 
         let current_gcl = game::gcl::level();
@@ -1465,8 +1622,15 @@ impl Operation for ClaimOperation {
                 let elapsed = self.phase_tick.map(|t| game::time().saturating_sub(t)).unwrap_or(u32::MAX);
 
                 if elapsed >= self.discover_interval_eff(&features.claim) {
-                    // Readiness gate: all owned rooms must be RCL >= 2.
-                    if min_rcl >= 2 {
+                    // Readiness gate (stall report §4, RCL2-freeze fix): at least ONE
+                    // owned room must be RCL >= 2 — i.e. the empire has a colony
+                    // mature enough to fund a claimer. The old `min_rcl >= 2`
+                    // (EVERY room) froze all discovery whenever any single new
+                    // colony was bootstrapping at RCL 1 — which is precisely when
+                    // the empire is growing — and the capacity math already
+                    // throttles simultaneous bootstraps. `max_rcl` is MAX when no
+                    // rooms are owned (don't block an empty empire's re-seed).
+                    if max_rcl >= 2 {
                         self.run_discover(system_data);
                     }
                 }
@@ -1474,6 +1638,28 @@ impl Operation for ClaimOperation {
             ClaimPhase::Scouting => {
                 self.try_score_candidates(system_data, &features.claim);
                 self.refresh_visibility_requests(system_data);
+
+                // Plan prefetch (stall report §4, M3): request plans for the top
+                // viable plan-less candidates WHILE scouting runs, so the async
+                // planner has them ready by commit time.
+                self.prefetch_candidate_plans(system_data);
+
+                // Rolling commit (stall report §4, M2-far): a far (>= ring)
+                // candidate commits the tick it passes EVERY gate — fresh+safe
+                // intel, valid plan, reachable affordable home, capacity —
+                // instead of at one sampled instant at window end. Below-ring
+                // candidates keep their coverage-gated patience in Select
+                // (ADR 0038 D9); escorts also stay Select-side.
+                self.try_commit_candidates(
+                    system_data,
+                    runtime_data,
+                    maximum_rooms,
+                    currently_owned_rooms,
+                    &features.claim,
+                    false,
+                    true,
+                    false,
+                );
 
                 let elapsed = self.phase_tick.map(|t| game::time().saturating_sub(t)).unwrap_or(0);
 
@@ -1487,6 +1673,10 @@ impl Operation for ClaimOperation {
                         info!("ClaimOp [Scouting]: reachable ring covered after {} ticks, selecting", elapsed);
                     }
                     self.phase = ClaimPhase::Select;
+                    // Select-entry tick: run_select's CPU-hold retry window is
+                    // measured from here (Idle's re-discover interval is re-set
+                    // when Select completes).
+                    self.phase_tick = Some(game::time());
                 }
             }
             ClaimPhase::Select => {
@@ -2025,5 +2215,231 @@ mod tests {
         assert!(!escort_candidate_viable(true, PlanCommitGate::Proceed), "avoided rooms are never viable");
         assert!(!escort_candidate_viable(false, PlanCommitGate::SkipInvalid), "FAILED plans are never viable");
         assert!(!escort_candidate_viable(true, PlanCommitGate::SkipInvalid), "both guards failing is not viable");
+    }
+}
+
+/// Offline decoder for a LIVE serialized world payload (component segments 50–53 fetched read-only via
+/// the REST API and concatenated). Diagnostic tooling: introspects the live ClaimOperation /
+/// mission / visibility state on the host without touching the server. Ignored by default — run with
+///   IBEX_WORLD_PAYLOAD=<path-to-concatenated-base64> [IBEX_NOW=<game tick>] \
+///     cargo test -p screeps-ibex decode_live_world -- --ignored --nocapture
+/// Lives in this module (not game_loop) so it can read ClaimOperation's private phase/candidate fields.
+#[cfg(test)]
+mod live_world_decode {
+    use super::*;
+    use crate::creep::*;
+    use crate::jobs::data::JobData;
+    use crate::military::objective_queue::CombatObjectiveData;
+    use crate::military::squad::SquadContext;
+    use crate::military::threatmap::RoomThreatData;
+    use crate::missions::data::MissionData;
+    use crate::pathing::movementsystem::CreepRoverData;
+    use crate::room::data::RoomData;
+    use crate::room::roomplansystem::RoomPlanData;
+    use crate::room::visibilitysystem::VisibilityQueueData;
+    use crate::serialize::{decode_buffer_from_string, SerializeMarker, SerializeMarkerAllocator};
+    use bincode::DefaultOptions;
+    use specs::prelude::*;
+    use specs::saveload::DeserializeComponents;
+
+    /// Mirrors game_loop::WORLD_FORMAT_VERSION (private there). The assert below fails loudly on drift.
+    const EXPECTED_WORLD_FORMAT_VERSION: u32 = 27;
+
+    struct DecodeAndDump<'p> {
+        payload: &'p [u8],
+        now: Option<u32>,
+    }
+
+    #[derive(SystemData)]
+    struct DecodeSystemData<'a> {
+        entities: Entities<'a>,
+        marker_alloc: Write<'a, SerializeMarkerAllocator>,
+        markers: WriteStorage<'a, SerializeMarker>,
+        creep_spawnings: WriteStorage<'a, CreepSpawning>,
+        creep_owners: WriteStorage<'a, CreepOwner>,
+        creep_movement_data: WriteStorage<'a, CreepRoverData>,
+        room_data: WriteStorage<'a, RoomData>,
+        room_plan_data: WriteStorage<'a, RoomPlanData>,
+        job_data: WriteStorage<'a, JobData>,
+        operation_data: WriteStorage<'a, OperationData>,
+        mission_data: WriteStorage<'a, MissionData>,
+        squad_context: WriteStorage<'a, SquadContext>,
+        visibility_queue_data: WriteStorage<'a, VisibilityQueueData>,
+        combat_objective_data: WriteStorage<'a, CombatObjectiveData>,
+        room_threat_data: WriteStorage<'a, RoomThreatData>,
+    }
+
+    impl<'a, 'p> System<'a> for DecodeAndDump<'p> {
+        type SystemData = DecodeSystemData<'a>;
+
+        fn run(&mut self, mut data: Self::SystemData) {
+            let mut deserializer = bincode::Deserializer::from_slice(self.payload, DefaultOptions::new());
+            DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
+                &mut (
+                    &mut data.creep_spawnings,
+                    &mut data.creep_owners,
+                    &mut data.creep_movement_data,
+                    &mut data.room_data,
+                    &mut data.room_plan_data,
+                    &mut data.job_data,
+                    &mut data.operation_data,
+                    &mut data.mission_data,
+                    &mut data.squad_context,
+                    &mut data.visibility_queue_data,
+                    &mut data.combat_objective_data,
+                    &mut data.room_threat_data,
+                ),
+                &data.entities,
+                &mut data.markers,
+                &mut data.marker_alloc,
+                &mut deserializer,
+            )
+            .map(|_| ())
+            .expect("component stream deserialize failed");
+
+            let now = self.now;
+            let age = |tick: Option<u32>| -> String {
+                match (now, tick) {
+                    (Some(n), Some(t)) => format!("{} (age {})", t, n.saturating_sub(t)),
+                    (_, Some(t)) => format!("{}", t),
+                    _ => "?".to_owned(),
+                }
+            };
+
+            println!("=== entity counts ===");
+            println!("rooms: {}", (&data.room_data).join().count());
+            println!("room plans: {}", (&data.room_plan_data).join().count());
+            println!("operations: {}", (&data.operation_data).join().count());
+            println!("missions: {}", (&data.mission_data).join().count());
+            println!("jobs: {}", (&data.job_data).join().count());
+
+            // Room-name → entity map for candidate lookups.
+            let mut rooms_by_name = std::collections::HashMap::new();
+            for (entity, rd) in (&data.entities, &data.room_data).join() {
+                rooms_by_name.insert(rd.name, entity);
+            }
+
+            println!("\n=== ClaimOperation ===");
+            for op in (&data.operation_data).join() {
+                let OperationData::Claim(claim) = op else { continue };
+                println!("phase: {:?}, phase_tick: {}", claim.phase, age(claim.phase_tick));
+                println!("home_rooms: {:?}", claim.home_rooms.iter().map(|r| r.to_string()).collect::<Vec<_>>());
+                println!("claim_missions: {}", claim.claim_missions.len());
+                println!("unknown_rooms ({}):", claim.unknown_rooms.len());
+                for r in &claim.unknown_rooms {
+                    println!("  {}", r);
+                }
+                println!("candidates ({}):", claim.candidates.len());
+                for c in &claim.candidates {
+                    let plan_state = rooms_by_name
+                        .get(&c.room_name)
+                        .map(|e| match data.room_plan_data.get(*e).map(|p| p.valid()) {
+                            None => "no-plan-data".to_owned(),
+                            Some(true) => "plan-VALID".to_owned(),
+                            Some(false) => "plan-FAILED".to_owned(),
+                        })
+                        .unwrap_or_else(|| "no-room-entity".to_owned());
+                    let threat = rooms_by_name
+                        .get(&c.room_name)
+                        .and_then(|e| data.room_threat_data.get(*e))
+                        .map(|t| {
+                            format!(
+                                "threat={:?} dps={:.0} hostiles={}",
+                                t.threat_level,
+                                t.estimated_attack_dps,
+                                t.hostile_creeps.len()
+                            )
+                        })
+                        .unwrap_or_else(|| "no-threat-data".to_owned());
+                    println!(
+                        "  {} dist={} homes={:?} score={:?} [{}] [{}]",
+                        c.room_name,
+                        c.distance,
+                        c.home_rooms.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+                        c.score,
+                        plan_state,
+                        threat,
+                    );
+                }
+            }
+
+            println!("\n=== claim/colony/remote-build missions ===");
+            for (entity, mission) in (&data.entities, &data.mission_data).join() {
+                let room_name = mission
+                    .as_mission()
+                    .get_room()
+                    .and_then(|e| data.room_data.get(e))
+                    .map(|rd| rd.name.to_string())
+                    .unwrap_or_else(|| "?".to_owned());
+                if let Some(cm) = mission.as_mission_type::<ClaimMission>() {
+                    let homes: Vec<String> = cm
+                        .home_room_datas()
+                        .iter()
+                        .filter_map(|e| data.room_data.get(*e).map(|rd| rd.name.to_string()))
+                        .collect();
+                    println!("  {:?} ClaimMission -> {} (homes {:?})", entity, room_name, homes);
+                } else if mission.as_mission_type::<RemoteBuildMission>().is_some() {
+                    println!("  {:?} RemoteBuildMission -> {}", entity, room_name);
+                }
+            }
+
+            println!("\n=== visibility queue ===");
+            for vq in (&data.visibility_queue_data).join() {
+                println!("entries ({}):", vq.entries.len());
+                for e in &vq.entries {
+                    println!(
+                        "  {} prio={} expires_at={} opportunistic={}",
+                        e.room_name,
+                        e.priority,
+                        age(Some(e.expires_at)),
+                        e.opportunistic
+                    );
+                }
+                println!("unreachable ({}):", vq.unreachable.len());
+                for u in &vq.unreachable {
+                    println!("  {} retry_after={} attempts={}", u.room_name, age(Some(u.retry_after)), u.attempts);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn decode_live_world() {
+        let Ok(path) = std::env::var("IBEX_WORLD_PAYLOAD") else {
+            eprintln!("IBEX_WORLD_PAYLOAD not set; skipping");
+            return;
+        };
+        let now: Option<u32> = std::env::var("IBEX_NOW").ok().and_then(|v| v.parse().ok());
+        let encoded = std::fs::read_to_string(&path).expect("read payload file");
+        let decoded = decode_buffer_from_string(encoded.trim()).expect("base64+gzip decode");
+        assert!(decoded.len() >= 4, "payload too short");
+        let version = u32::from_le_bytes(decoded[..4].try_into().unwrap());
+        assert_eq!(
+            version, EXPECTED_WORLD_FORMAT_VERSION,
+            "payload world-format version mismatch (bincode would misalign)"
+        );
+
+        let mut world = World::new();
+        world.register::<SerializeMarker>();
+        world.register::<CreepSpawning>();
+        world.register::<CreepOwner>();
+        world.register::<CreepRoverData>();
+        world.register::<RoomData>();
+        world.register::<RoomPlanData>();
+        world.register::<JobData>();
+        world.register::<OperationData>();
+        world.register::<MissionData>();
+        world.register::<SquadContext>();
+        world.register::<VisibilityQueueData>();
+        world.register::<CombatObjectiveData>();
+        world.register::<RoomThreatData>();
+        world.insert(SerializeMarkerAllocator::new());
+
+        let mut sys = DecodeAndDump {
+            payload: &decoded[4..],
+            now,
+        };
+        sys.run_now(&world);
     }
 }

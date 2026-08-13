@@ -101,11 +101,24 @@ impl Mission for ClaimMission {
     fn remove_creep(&mut self, entity: Entity) {
         let before = self.claimers.len();
         self.claimers.retain(|e| *e != entity);
-        // A tracked claimer that disappeared before the room was claimed (the
-        // mission would have ended with Success on a claim) was lost — count it
-        // toward the abort budget.
+        // A tracked claimer that disappeared PREMATURELY before the room was
+        // claimed was lost to hostiles — count it toward the abort budget. A
+        // claimer that merely reached its natural CLAIM-creep TTL (600 ticks,
+        // plus a spawn-queue/spawn-time margin from `last_spawn_tick`, which is
+        // recorded at spawn REQUEST) says nothing hostile about the room —
+        // usually the route is just long or contention slowed it down. Counting
+        // TTL expiries burned the `max_claimer_deaths` abort budget on
+        // perfectly safe rooms and pushed them into avoid-cooldown (stall
+        // report §4: expansion self-poisoning).
         if self.claimers.len() < before {
-            self.claimer_deaths = self.claimer_deaths.saturating_add(1);
+            const SPAWN_MARGIN_TICKS: u32 = 100;
+            let premature = self
+                .last_spawn_tick
+                .map(|t| game::time().saturating_sub(t) < crate::missions::utility::CREEP_CLAIM_LIFE_TIME + SPAWN_MARGIN_TICKS)
+                .unwrap_or(true);
+            if premature {
+                self.claimer_deaths = self.claimer_deaths.saturating_add(1);
+            }
         }
     }
 
