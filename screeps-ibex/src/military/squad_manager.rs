@@ -2212,9 +2212,12 @@ impl<'a> System<'a> for SquadManagerSystem {
             // Intel coverage: keep eyes on a committed objective's room so its intel never goes stale
             // underneath the producer. OBSERVE-only + HIGH so an in-range RCL8 observer refreshes it free;
             // if no observer covers it, commitment + the deadline lease bridge the gap instead.
+            // ADR 0046 D6: `want_fresh_within = 1` — continuous coverage is load-bearing mid-fight, so
+            // an observer must re-service the room (nearly) every tick; an entry with a window this
+            // tight also monopolizes its observer's rotation slot (resolution #7's projection).
             if let Some(room) = squad_room {
                 data.visibility
-                    .request(VisibilityRequest::new(room, VISIBILITY_PRIORITY_HIGH, VisibilityRequestFlags::OBSERVE));
+                    .request(VisibilityRequest::new(room, VISIBILITY_PRIORITY_HIGH, VisibilityRequestFlags::OBSERVE).want_fresh_within(1));
             }
             covered.insert(obj_id);
             live_managed.push((squad_entity, obj_id));

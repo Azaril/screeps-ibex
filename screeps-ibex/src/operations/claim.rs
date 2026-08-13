@@ -351,25 +351,30 @@ impl ClaimOperation {
         // Cache unknown room names.
         self.unknown_rooms = gathered_data.unknown_rooms().iter().map(|u| u.room_name()).collect();
 
-        // Request visibility for unknown rooms (critical priority).
+        // Request visibility for unknown rooms (critical priority). ADR 0046
+        // D6: an unknown room is serviced by ANY sighting within the "known"
+        // horizon — declare `want_fresh_within = VISIBILITY_TIMEOUT` so the
+        // assigner stops touring it the moment it has been seen at all.
         for unknown_room in gathered_data.unknown_rooms().iter() {
-            system_data.visibility.request(VisibilityRequest::new(
-                unknown_room.room_name(),
-                VISIBILITY_PRIORITY_CRITICAL,
-                VisibilityRequestFlags::ALL,
-            ));
+            system_data.visibility.request(
+                VisibilityRequest::new(unknown_room.room_name(), VISIBILITY_PRIORITY_CRITICAL, VisibilityRequestFlags::ALL)
+                    .want_fresh_within(Self::VISIBILITY_TIMEOUT),
+            );
         }
 
-        // Request visibility for candidate rooms that are going stale.
+        // Request visibility for candidate rooms that are going stale. ADR 0046
+        // D6: candidates declare the commit gate's real freshness need
+        // (`intel_freshness_ticks`) so scouts arrive BECAUSE the commit gate
+        // needs them.
+        let candidate_freshness = system_data.features.claim.intel_freshness_ticks;
         for candidate_room in gathered_data.candidate_rooms().iter() {
             if let Some(room_data) = system_data.room_data.get(candidate_room.room_data_entity()) {
                 if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
                     if dynamic_visibility_data.age() > Self::VISIBILITY_TIMEOUT / 2 {
-                        system_data.visibility.request(VisibilityRequest::new(
-                            room_data.name,
-                            VISIBILITY_PRIORITY_HIGH,
-                            VisibilityRequestFlags::ALL,
-                        ));
+                        system_data.visibility.request(
+                            VisibilityRequest::new(room_data.name, VISIBILITY_PRIORITY_HIGH, VisibilityRequestFlags::ALL)
+                                .want_fresh_within(candidate_freshness),
+                        );
                     }
                 }
             }
@@ -386,13 +391,15 @@ impl ClaimOperation {
     /// Called each tick during the Scouting phase so that entries don't expire
     /// before scouts/observers can service them.
     fn refresh_visibility_requests(&self, system_data: &mut OperationExecutionSystemData) {
-        // Unknown rooms need critical-priority visibility.
+        // Unknown rooms need critical-priority visibility. ADR 0046 D6: any
+        // sighting within the "known" horizon services an unknown room, so the
+        // every-tick re-assert is harmless — the assigner's freshness filter
+        // (not the entry's existence) decides servicing.
         for room_name in &self.unknown_rooms {
-            system_data.visibility.request(VisibilityRequest::new(
-                *room_name,
-                VISIBILITY_PRIORITY_CRITICAL,
-                VisibilityRequestFlags::ALL,
-            ));
+            system_data.visibility.request(
+                VisibilityRequest::new(*room_name, VISIBILITY_PRIORITY_CRITICAL, VisibilityRequestFlags::ALL)
+                    .want_fresh_within(Self::VISIBILITY_TIMEOUT),
+            );
         }
 
         // Candidates need high-priority visibility while they are unscored OR
@@ -414,11 +421,13 @@ impl ClaimOperation {
                 .map(|d| !d.updated_within(freshness))
                 .unwrap_or(true);
             if candidate.score.is_none() || stale {
-                system_data.visibility.request(VisibilityRequest::new(
-                    candidate.room_name,
-                    VISIBILITY_PRIORITY_HIGH,
-                    VisibilityRequestFlags::ALL,
-                ));
+                // ADR 0046 D6: the candidate declares the commit gate's real
+                // freshness need — the assigner keeps it serviced within
+                // `intel_freshness_ticks`, so the commit-time re-check passes.
+                system_data.visibility.request(
+                    VisibilityRequest::new(candidate.room_name, VISIBILITY_PRIORITY_HIGH, VisibilityRequestFlags::ALL)
+                        .want_fresh_within(freshness),
+                );
             }
         }
     }
@@ -2243,7 +2252,7 @@ mod live_world_decode {
     use specs::saveload::DeserializeComponents;
 
     /// Mirrors game_loop::WORLD_FORMAT_VERSION (private there). The assert below fails loudly on drift.
-    const EXPECTED_WORLD_FORMAT_VERSION: u32 = 27;
+    const EXPECTED_WORLD_FORMAT_VERSION: u32 = 28;
 
     struct DecodeAndDump<'p> {
         payload: &'p [u8],

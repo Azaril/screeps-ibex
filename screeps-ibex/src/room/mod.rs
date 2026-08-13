@@ -4,5 +4,6 @@ pub mod gather;
 pub mod room_status_cache;
 pub mod roomplansystem;
 pub mod roomplanvisualizesystem;
+pub mod scoutassignment;
 pub mod updateroomsystem;
 pub mod visibilitysystem;

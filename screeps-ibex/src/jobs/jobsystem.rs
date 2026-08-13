@@ -12,6 +12,7 @@ use crate::pathing::hauldistance::HaulDistanceService;
 use crate::pathing::pathfinderservice::PathfinderService;
 use crate::repairqueue::RepairQueue;
 use crate::room::data::*;
+use crate::room::scoutassignment::ScoutAssignments;
 use crate::room::visibilitysystem::VisibilityQueue;
 use crate::transfer::transfersystem::*;
 use crate::visualization::SummaryContent;
@@ -36,6 +37,9 @@ pub struct JobSystemData<'a> {
     features: Read<'a, Features>,
     energy_leak: Write<'a, EnergyLeakStats>,
     visibility_queue: Write<'a, VisibilityQueue>,
+    /// ADR 0046: the scout fleet's persisted tour map (read-only here — the
+    /// `ScoutAssignmentSystem` post-pass owns all writes).
+    scout_assignments: Read<'a, ScoutAssignments>,
     pathfinder: Write<'a, PathfinderService>,
     /// ADR 0044 step 2 — the shared per-room cost-matrix cache (also driven by `MovementUpdateSystem`;
     /// segment-loaded, structures built once/tick) + the `(pickup,sink)` routed-distance memo. The
@@ -79,6 +83,8 @@ pub struct JobExecutionRuntimeData<'a> {
     pub movement: &'a mut MovementData<Entity>,
     pub movement_results: &'a MovementResults<Entity>,
     pub visibility_queue: &'a mut VisibilityQueue,
+    /// ADR 0046: the scout fleet's tour map (assignment-pass output).
+    pub scout_assignments: &'a ScoutAssignments,
     pub pathfinder: &'a mut PathfinderService,
     /// ADR 0044 step 2 — the pieces the hauler market pass builds a `RoverDistanceOracle` from to
     /// price the haul leg on true routed distance (shared cost matrices + the distance memo).
@@ -141,6 +147,7 @@ impl<'a> System<'a> for PreRunJobSystem {
                     movement: &mut data.movement,
                     movement_results: &data.movement_results,
                     visibility_queue: &mut data.visibility_queue,
+                    scout_assignments: &data.scout_assignments,
                     pathfinder: &mut data.pathfinder,
                     cost_matrix_cache: &mut data.cost_matrix_cache,
                     haul_distance_service: &mut data.haul_distance_service,
@@ -204,6 +211,7 @@ impl<'a> System<'a> for RunJobSystem {
                     movement: &mut data.movement,
                     movement_results: &data.movement_results,
                     visibility_queue: &mut data.visibility_queue,
+                    scout_assignments: &data.scout_assignments,
                     pathfinder: &mut data.pathfinder,
                     cost_matrix_cache: &mut data.cost_matrix_cache,
                     haul_distance_service: &mut data.haul_distance_service,

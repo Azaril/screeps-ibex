@@ -1,149 +1,33 @@
-use super::actions::*;
+//! The scout job (ADR 0046 D3): walk the assigned tour.
+//!
+//! All target selection lives in the `ScoutAssignmentSystem` post-pass — the
+//! job just moves toward the first tour stop that is not its current room.
+//! There is no Idle state, no per-creep claim, and no job-side opportunistic
+//! request path (all deleted with WFV 28); a scout with an empty tour was
+//! given a fallback leg by the assigner, so an empty tour here only happens
+//! on the first tick after spawn (or with truly zero demand and no frontier),
+//! where the creep registers as shoveable idle for exactly one pass.
+
 use super::context::*;
 use super::jobsystem::*;
 use super::utility::movebehavior::*;
-use crate::room::data::RoomDynamicVisibilityData;
-use crate::room::visibilitysystem::*;
-use log::*;
+use crate::jobs::actions::*;
 use screeps::*;
-use screeps_machine::*;
 use screeps_rover::*;
 use serde::*;
-use specs::Join;
 
-/// Number of ticks an idle scout waits before proactively exploring an adjacent room.
-const IDLE_EXPLORE_THRESHOLD: u32 = 10;
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ScoutJobContext {
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct ScoutJob {
+    /// Cache of the current tour head (visualization only — the tour itself
+    /// lives in the ephemeral `ScoutAssignments` resource).
     #[serde(default)]
     room_target: Option<RoomName>,
-    /// Game tick at which the scout entered the Idle state. Used to detect
-    /// prolonged idleness and trigger proactive exploration.
-    #[serde(default)]
-    idle_since: Option<u32>,
-}
-
-machine!(
-    #[derive(Clone, Serialize, Deserialize)]
-    enum ScoutState {
-        PickTarget,
-        MoveToRoom,
-        Idle,
-    }
-
-    impl {
-        * => fn describe(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
-
-        * => fn status_description(&self) -> String {
-            std::any::type_name::<Self>().to_string()
-        }
-
-        * => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
-
-        * => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
-
-        _ => fn tick(&mut self, state_context: &mut ScoutJobContext, tick_context: &mut JobTickContext) -> Option<ScoutState>;
-    }
-);
-
-impl PickTarget {
-    pub fn tick(&mut self, state_context: &mut ScoutJobContext, tick_context: &mut JobTickContext) -> Option<ScoutState> {
-        let creep_pos = tick_context.runtime_data.owner.pos();
-        let creep_entity = tick_context.runtime_data.creep_entity;
-
-        if let Some(room_name) = tick_context.runtime_data.visibility_queue.best_unclaimed_for(creep_pos) {
-            tick_context.runtime_data.visibility_queue.claim(room_name, creep_entity);
-            state_context.room_target = Some(room_name);
-            state_context.idle_since = None;
-            Some(ScoutState::move_to_room())
-        } else {
-            Some(ScoutState::idle())
-        }
-    }
-}
-
-impl MoveToRoom {
-    pub fn tick(&mut self, state_context: &mut ScoutJobContext, tick_context: &mut JobTickContext) -> Option<ScoutState> {
-        let room_target = match state_context.room_target {
-            Some(target) => target,
-            None => return Some(ScoutState::pick_target()),
-        };
-
-        let room_options = RoomOptions::new(HostileBehavior::HighCost);
-
-        // Live w-as-priority, SCOUT leg (ADR 0033 §D5.4 role table): value-of-information has no
-        // landed kernel, so the scout bids the DECLARED intel floor — rover-eval value.rs
-        // decision (3)'s EPSILON_INTEL, a 1×MOVE scout's amortized upkeep (see
-        // `pathing::value::SCOUT_INTEL_BID`). Scouts yield every contested tile to real
-        // cargo/work bids but still outrank shoveable idles.
-        let result = tick_move_to_room_with_bid(
-            tick_context,
-            room_target,
-            Some(room_options),
-            Some(crate::pathing::value::SCOUT_INTEL_BID),
-            ScoutState::pick_target,
-        );
-
-        if result.is_some() {
-            // Arrived at target room — release claim and clear target.
-            let creep_entity = tick_context.runtime_data.creep_entity;
-            tick_context.runtime_data.visibility_queue.release_entity(creep_entity);
-            state_context.room_target = None;
-
-            // Transition to Idle instead of PickTarget to end the state-machine
-            // loop this tick. If we returned PickTarget here, it could
-            // immediately claim a target the creep is already in range of,
-            // creating an infinite PickTarget → MoveToRoom → PickTarget cycle
-            // within a single tick. Idle returns None (ending the loop) and
-            // will check for new targets next tick.
-            return Some(ScoutState::idle());
-        }
-
-        result
-    }
-}
-
-impl Idle {
-    pub fn tick(&mut self, state_context: &mut ScoutJobContext, tick_context: &mut JobTickContext) -> Option<ScoutState> {
-        // Record when we first entered idle so pre_run_job can detect prolonged idleness.
-        if state_context.idle_since.is_none() {
-            state_context.idle_since = Some(game::time());
-        }
-
-        // Always register as idle this tick so the movement resolver knows
-        // about us, then end the state-machine loop. Checking for new targets
-        // is deferred to pre_run_job / the next tick's PickTarget to avoid an
-        // infinite PickTarget → MoveToRoom (instant arrive) → Idle → PickTarget
-        // cycle when the creep is already in range of the next target.
-        mark_idle(tick_context);
-        None
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ScoutJob {
-    pub context: ScoutJobContext,
-    pub state: ScoutState,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ScoutJob {
-    /// Create a new scout job. If `room_target` is `None`, the scout will pick
-    /// its own target from the visibility queue on the first tick.
-    pub fn new(room_target: Option<RoomName>) -> ScoutJob {
-        let (state, target) = match room_target {
-            Some(room) => (ScoutState::move_to_room(), Some(room)),
-            None => (ScoutState::pick_target(), None),
-        };
-
-        ScoutJob {
-            context: ScoutJobContext {
-                room_target: target,
-                idle_since: None,
-            },
-            state,
-        }
+    pub fn new() -> ScoutJob {
+        ScoutJob::default()
     }
 }
 
@@ -151,59 +35,10 @@ impl ScoutJob {
 impl Job for ScoutJob {
     fn summarize(&self) -> crate::visualization::SummaryContent {
         let target = self
-            .context
             .room_target
             .map(|r| r.to_string())
             .unwrap_or_else(|| "none".to_string());
-        crate::visualization::SummaryContent::Text(format!("Scout -> {} - {}", target, self.state.status_description()))
-    }
-
-    fn pre_run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
-        // Claim maintenance: re-affirm or clear stale claims.
-        if let Some(room_target) = self.context.room_target {
-            if runtime_data.visibility_queue.has_entry(room_target) {
-                // Entry still exists — re-affirm claim.
-                runtime_data.visibility_queue.claim(room_target, runtime_data.creep_entity);
-            } else {
-                // Entry expired and was not re-requested — clear target so we
-                // pick a new one in run_job.
-                self.context.room_target = None;
-                self.state = ScoutState::pick_target();
-            }
-        }
-
-        // Idle scouts should check for new targets at the start of each tick.
-        // The Idle state itself returns None to end the run_job loop (preventing
-        // an infinite cycle), so we promote to PickTarget here instead.
-        if matches!(self.state, ScoutState::Idle(_)) {
-            let creep_pos = runtime_data.owner.pos();
-            if runtime_data.visibility_queue.best_unclaimed_for(creep_pos).is_some() {
-                self.state = ScoutState::pick_target();
-            } else if let Some(idle_since) = self.context.idle_since {
-                // Scout has been idle with nothing in the visibility queue.
-                // After a threshold, proactively explore the adjacent room with
-                // the oldest (or absent) visibility data.
-                let idle_ticks = game::time().saturating_sub(idle_since);
-                if idle_ticks >= IDLE_EXPLORE_THRESHOLD {
-                    if let Some(target) = pick_adjacent_explore_target(creep_pos, system_data, runtime_data) {
-                        info!("Idle scout proactively exploring adjacent room {}", target);
-
-                        runtime_data.visibility_queue.request(VisibilityRequest::new_opportunistic(
-                            target,
-                            VISIBILITY_PRIORITY_LOW,
-                            VisibilityRequestFlags::SCOUT,
-                        ));
-
-                        // Immediately claim the request and set the target so
-                        // no other scout can snatch it before we act on it.
-                        runtime_data.visibility_queue.claim(target, runtime_data.creep_entity);
-                        self.context.room_target = Some(target);
-                        self.context.idle_since = None;
-                        self.state = ScoutState::move_to_room();
-                    }
-                }
-            }
-        }
+        crate::visualization::SummaryContent::Text(format!("Scout -> {}", target))
     }
 
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
@@ -213,152 +48,44 @@ impl Job for ScoutJob {
             action_flags: SimultaneousActionFlags::UNSET,
         };
 
-        crate::machine_tick::run_state_machine(&mut self.state, "ScoutJob", |state| {
-            state.tick(&mut self.context, &mut tick_context)
-        });
-    }
-}
+        let creep_entity = tick_context.runtime_data.creep_entity;
+        let current_room = tick_context.runtime_data.owner.pos().room_name();
 
-/// Maximum linear (Chebyshev) distance from the scout's current room to
-/// consider for proactive exploration.
-const EXPLORE_SEARCH_RADIUS: u32 = 5;
+        // The first tour stop that is not the room we are standing in. (The
+        // assigner pops satisfied stops when it runs; skipping the current
+        // room locally keeps a scout moving on assignment-pass-shed ticks.)
+        let target = tick_context
+            .runtime_data
+            .scout_assignments
+            .tours
+            .get(&creep_entity)
+            .and_then(|tour| tour.iter().copied().find(|room| *room != current_room));
 
-/// Visibility age threshold: when every known room within range has been seen
-/// more recently than this, the scout prefers discovering unknown rooms over
-/// re-visiting known ones.
-const FRESH_VISIBILITY_THRESHOLD: u32 = 1000;
+        self.room_target = target;
 
-/// Pick the best nearby room for an idle scout to explore proactively.
-///
-/// Searches in three passes:
-/// 1. **Known rooms** — iterates all `RoomData` entities within
-///    [`EXPLORE_SEARCH_RADIUS`] of the scout and scores them by visibility age
-///    (oldest first), with a tiebreaker preferring closer rooms.
-/// 2. **Unknown rooms via BFS** — if all known rooms within range have fresh
-///    data (age <= [`FRESH_VISIBILITY_THRESHOLD`]), walks the cached exit graph
-///    of known rooms to find the nearest room with no `RoomData` entity.
-/// 3. **Unknown adjacent rooms** — as a fast fallback, checks immediate exits
-///    for rooms that have no `RoomData` entity at all (never seen).
-///
-/// Rooms that already have a pending visibility queue entry are skipped.
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-fn pick_adjacent_explore_target(
-    creep_pos: Position,
-    system_data: &JobExecutionSystemData,
-    runtime_data: &JobExecutionRuntimeData,
-) -> Option<RoomName> {
-    let current_room = creep_pos.room_name();
+        match target {
+            Some(room_name) => {
+                let room_options = RoomOptions::new(HostileBehavior::HighCost);
 
-    // ── Pass 1: score all known rooms within range ───────────────────────
-    let mut all_fresh = true;
-    let best_known: Option<(RoomName, u32, u32)> = (system_data.entities, system_data.room_data)
-        .join()
-        .filter_map(|(_, rd)| {
-            let name = rd.name;
-            if name == current_room {
-                return None;
+                // Live w-as-priority, SCOUT leg (ADR 0033 §D5.4 role table):
+                // the scout bids the DECLARED intel floor (`SCOUT_INTEL_BID`)
+                // — it yields every contested tile to real cargo/work bids but
+                // still outranks shoveable idles. Arrival is not the goal —
+                // fresh intel is; the assigner advances the tour when the
+                // room's intel freshens (by this scout or anyone else).
+                let _: Option<()> = tick_move_to_room_with_bid(
+                    &mut tick_context,
+                    room_name,
+                    Some(room_options),
+                    Some(crate::pathing::value::SCOUT_INTEL_BID),
+                    || (),
+                );
             }
-
-            // Skip rooms already in the visibility queue.
-            if runtime_data.visibility_queue.has_entry(name) {
-                return None;
+            None => {
+                // No tour yet (first tick after spawn / zero demand): register
+                // as shoveable idle so the resolver can push us around.
+                mark_idle(&mut tick_context);
             }
-
-            let dist = game::map::get_room_linear_distance(current_room, name, false);
-            if dist > EXPLORE_SEARCH_RADIUS {
-                return None;
-            }
-
-            let age = rd
-                .get_dynamic_visibility_data()
-                .map(|dvd: &RoomDynamicVisibilityData| dvd.age())
-                .unwrap_or(u32::MAX);
-
-            if age > FRESH_VISIBILITY_THRESHOLD {
-                all_fresh = false;
-            }
-
-            Some((name, age, dist))
-        })
-        // Prefer oldest data first, then closest on ties.
-        .max_by(|a, b| {
-            a.1.cmp(&b.1).then_with(|| b.2.cmp(&a.2)) // smaller dist is better
-        });
-
-    // ── Pass 2: BFS for nearest unknown room via cached exits ────────────
-    // When all known rooms are fresh, expand the frontier to discover new
-    // rooms rather than re-visiting stale ones.
-    if all_fresh {
-        if let Some(unknown) = bfs_nearest_unknown(current_room, system_data, runtime_data) {
-            return Some(unknown);
         }
     }
-
-    // ── Pass 3: check immediate exits for truly unknown rooms ────────────
-    let exits = game::map::describe_exits(current_room);
-    let unknown_neighbor = exits
-        .values()
-        .find(|neighbor| !runtime_data.visibility_queue.has_entry(*neighbor) && runtime_data.mapping.get_room(neighbor).is_none());
-
-    // Unknown neighbors are highest priority (age = u32::MAX, dist = 1).
-    // Compare against the best known room.
-    match (unknown_neighbor, best_known) {
-        (Some(unknown), Some(_)) => {
-            // Unknown adjacent neighbor always wins — it's never-seen and
-            // immediately reachable.
-            Some(unknown)
-        }
-        (Some(unknown), None) => Some(unknown),
-        (None, Some((known_name, _, _))) => Some(known_name),
-        (None, None) => None,
-    }
-}
-
-/// BFS through known rooms' cached exits to find the nearest room that has no
-/// `RoomData` entity (never been seen). Returns `None` if no unknown room is
-/// reachable within [`EXPLORE_SEARCH_RADIUS`].
-fn bfs_nearest_unknown(start: RoomName, system_data: &JobExecutionSystemData, runtime_data: &JobExecutionRuntimeData) -> Option<RoomName> {
-    use std::collections::{HashSet, VecDeque};
-
-    let mut visited: HashSet<RoomName> = HashSet::new();
-    let mut queue: VecDeque<(RoomName, u32)> = VecDeque::new();
-
-    visited.insert(start);
-    queue.push_back((start, 0));
-
-    while let Some((room, depth)) = queue.pop_front() {
-        if depth >= EXPLORE_SEARCH_RADIUS {
-            continue;
-        }
-
-        // Get exits for this room from cached static visibility data.
-        let exits: Vec<RoomName> = runtime_data
-            .mapping
-            .get_room(&room)
-            .and_then(|entity| system_data.room_data.get(entity))
-            .and_then(|rd| rd.get_static_visibility_data())
-            .and_then(|svd| svd.exits())
-            .map(|exits| exits.iter().map(|(_, name)| *name).collect())
-            .unwrap_or_default();
-
-        for neighbor in exits {
-            if !visited.insert(neighbor) {
-                continue;
-            }
-
-            // Skip rooms already in the visibility queue.
-            if runtime_data.visibility_queue.has_entry(neighbor) {
-                continue;
-            }
-
-            // If this neighbor has no RoomData entity, it's unknown — return it.
-            if runtime_data.mapping.get_room(&neighbor).is_none() {
-                return Some(neighbor);
-            }
-
-            queue.push_back((neighbor, depth + 1));
-        }
-    }
-
-    None
 }
