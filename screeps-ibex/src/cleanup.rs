@@ -139,6 +139,14 @@ impl<'a> System<'a> for EntityCleanupSystem {
                 }
             }
 
+            // Notify all operations of each dead creep (ADR 0046 D4: the
+            // ScoutOperation owns a fleet roster — same contract as missions).
+            for creep in &creep_entries {
+                for od in (&mut operations).join() {
+                    od.as_operation().remove_creep(creep.entity);
+                }
+            }
+
             // Notify owning SquadContext for each dead creep (if the creep's
             // job references a squad entity). This is read from the creep's
             // JobData component before the entity is deleted.

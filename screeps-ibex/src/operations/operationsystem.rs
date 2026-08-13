@@ -39,6 +39,7 @@ pub struct OperationSystemData<'a> {
     room_status_cache: Write<'a, RoomStatusCache>,
     threat_data: ReadStorage<'a, RoomThreatData>,
     expansion_avoidance: Write<'a, ExpansionAvoidance>,
+    spawn_queue: Write<'a, crate::spawnsystem::SpawnQueue>,
 }
 
 pub struct OperationExecutionSystemData<'a, 'b> {
@@ -67,6 +68,12 @@ pub struct OperationExecutionSystemData<'a, 'b> {
     pub threat_data: &'b ReadStorage<'a, RoomThreatData>,
     /// Avoid-cooldown map for abandoned/failed claim targets (ADR 0017).
     pub expansion_avoidance: &'b mut ExpansionAvoidance,
+    /// The spawn queue (ADR 0046 D4/design-review resolution #9): operations
+    /// that own creep rosters can request spawns directly, without a mission
+    /// intermediary. (The scout fleet's EV bid itself is pushed by the
+    /// `ScoutAssignmentSystem` — resolution #6 — which runs after all
+    /// producers; this seam is for operation-owned spawns generally.)
+    pub spawn_queue: &'b mut crate::spawnsystem::SpawnQueue,
 }
 
 pub struct OperationExecutionRuntimeData {
@@ -102,6 +109,20 @@ pub trait Operation {
     /// Default implementation is a no-op (safe for operations without
     /// entity-valued fields beyond `owner`).
     fn repair_entity_refs(&mut self, _is_valid: &dyn Fn(Entity) -> bool) {}
+
+    /// Called by `EntityCleanupSystem` when a creep entity dies. Operations
+    /// that track creeps (the `ScoutOperation` fleet roster, ADR 0046 D4)
+    /// override this to drop the entity — mirroring `Mission::remove_creep`.
+    fn remove_creep(&mut self, _entity: Entity) {}
+
+    /// Every creep entity this operation tracks. Used by
+    /// `repair_entity_integrity` (the pre-serialize backstop) to detect and
+    /// drop dead creep references that would otherwise panic specs
+    /// `ConvertSaveload` — mirroring `Mission::get_creeps`. Operations that
+    /// track creeps must override this alongside `remove_creep`.
+    fn get_creeps(&self) -> Vec<Entity> {
+        Vec::new()
+    }
 
     /// Produce a structured summary for the visualization overlay.
     fn describe_operation(&self, _ctx: &OperationDescribeContext) -> SummaryContent {
@@ -145,6 +166,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
             room_status_cache: &data.room_status_cache,
             threat_data: &data.threat_data,
             expansion_avoidance: &mut data.expansion_avoidance,
+            spawn_queue: &mut data.spawn_queue,
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
@@ -185,6 +207,7 @@ impl<'a> System<'a> for RunOperationSystem {
             room_status_cache: &data.room_status_cache,
             threat_data: &data.threat_data,
             expansion_avoidance: &mut data.expansion_avoidance,
+            spawn_queue: &mut data.spawn_queue,
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
