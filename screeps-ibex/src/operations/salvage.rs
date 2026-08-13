@@ -281,11 +281,16 @@ impl SalvageOperation {
         }
 
         for room_name in due_rooms {
-            system_data.visibility.request(VisibilityRequest::new(
-                room_name,
-                VISIBILITY_PRIORITY_MEDIUM,
-                VisibilityRequestFlags::ALL,
-            ));
+            // ADR 0046 D6: the sighting-confirmation pipeline's real freshness
+            // threshold is the derelict confirm window — a sighting inside the
+            // window is the freshest this pipeline can use (the producer only
+            // asserts while a NEW sighting is due, so anything tighter would
+            // just churn scouts back for the residual TTL after the sighting
+            // lands).
+            system_data.visibility.request(
+                VisibilityRequest::new(room_name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL)
+                    .want_fresh_within(derelict_features.confirm_ticks),
+            );
         }
     }
 

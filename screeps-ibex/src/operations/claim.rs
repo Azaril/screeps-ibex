@@ -360,25 +360,30 @@ impl ClaimOperation {
         // Cache unknown room names.
         self.unknown_rooms = gathered_data.unknown_rooms().iter().map(|u| u.room_name()).collect();
 
-        // Request visibility for unknown rooms (critical priority).
+        // Request visibility for unknown rooms (critical priority). ADR 0046
+        // D6: an unknown room is serviced by ANY sighting within the "known"
+        // horizon — declare `want_fresh_within = VISIBILITY_TIMEOUT` so the
+        // assigner stops touring it the moment it has been seen at all.
         for unknown_room in gathered_data.unknown_rooms().iter() {
-            system_data.visibility.request(VisibilityRequest::new(
-                unknown_room.room_name(),
-                VISIBILITY_PRIORITY_CRITICAL,
-                VisibilityRequestFlags::ALL,
-            ));
+            system_data.visibility.request(
+                VisibilityRequest::new(unknown_room.room_name(), VISIBILITY_PRIORITY_CRITICAL, VisibilityRequestFlags::ALL)
+                    .want_fresh_within(Self::VISIBILITY_TIMEOUT),
+            );
         }
 
-        // Request visibility for candidate rooms that are going stale.
+        // Request visibility for candidate rooms that are going stale. ADR 0046
+        // D6: candidates declare the commit gate's real freshness need
+        // (`intel_freshness_ticks`) so scouts arrive BECAUSE the commit gate
+        // needs them.
+        let candidate_freshness = system_data.features.claim.intel_freshness_ticks;
         for candidate_room in gathered_data.candidate_rooms().iter() {
             if let Some(room_data) = system_data.room_data.get(candidate_room.room_data_entity()) {
                 if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
                     if dynamic_visibility_data.age() > Self::VISIBILITY_TIMEOUT / 2 {
-                        system_data.visibility.request(VisibilityRequest::new(
-                            room_data.name,
-                            VISIBILITY_PRIORITY_HIGH,
-                            VisibilityRequestFlags::ALL,
-                        ));
+                        system_data.visibility.request(
+                            VisibilityRequest::new(room_data.name, VISIBILITY_PRIORITY_HIGH, VisibilityRequestFlags::ALL)
+                                .want_fresh_within(candidate_freshness),
+                        );
                     }
                 }
             }
@@ -395,34 +400,29 @@ impl ClaimOperation {
     /// Called each tick during the Scouting phase so that entries don't expire
     /// before scouts/observers can service them.
     fn refresh_visibility_requests(&self, system_data: &mut OperationExecutionSystemData) {
-        // Unknown rooms need critical-priority visibility — but ONLY while they are
-        // still actually unknown. Re-asserting a CRITICAL request for a room we can
-        // already SEE is the scout self-pin bug (stall report follow-up L1): the entry
-        // never leaves the queue, and `best_unclaimed_for` ranks priority DESC then
-        // distance ASC — so for a scout STANDING IN that room it scores CRITICAL at
-        // distance 0 and always wins. The scout claims it, `tick_move_to_room_with_bid`
-        // reports "arrived" immediately (room membership is the arrival test) WITHOUT
-        // issuing a move, the claim is released, and `pre_run_job` promotes Idle back to
-        // PickTarget next tick — re-claiming the same room forever. The scout never
-        // moves; every OTHER room's `ScoutMission` then trips its 4-spawn give-up and is
-        // recorded unreachable. That is how the 103-room poison list was minted.
-        // Mirrors the candidate loop's freshness guard below (same function, same idea).
+        // Unknown rooms need critical-priority visibility. ADR 0046 D6: any sighting
+        // within the "known" horizon services an unknown room, so the every-tick
+        // re-assert is harmless — the ASSIGNER's freshness filter (not the entry's mere
+        // existence) decides servicing, so a room we can already see is never routed to.
+        //
+        // That filter is load-bearing, and this is why. Before ADR 0046 this loop
+        // re-asserted CRITICAL unconditionally while the greedy per-creep picker
+        // (`best_unclaimed_for`) ranked priority DESC then distance ASC — so for a scout
+        // STANDING IN the room it scored CRITICAL at distance 0 and always won. The scout
+        // claimed it, `tick_move_to_room_with_bid` reported "arrived" immediately (room
+        // membership is the arrival test) WITHOUT issuing a move, the claim was released,
+        // and `pre_run_job` promoted Idle back to PickTarget next tick — re-claiming the
+        // same room forever. The scout never moved; every OTHER room's `ScoutMission` then
+        // tripped its 4-spawn give-up and was recorded unreachable. That is how the
+        // 103-room poison list was minted (stall report follow-up L1, fixed on master in
+        // `e857c76`, superseded here structurally: the greedy picker and the per-room
+        // mission are both gone, and `want_fresh_within` is what keeps a seen room out of
+        // the serviceable set). Pinned by `assigner_never_routes_a_scout_to_a_fresh_room`.
         for room_name in &self.unknown_rooms {
-            let resolved = system_data
-                .mapping
-                .get_room(room_name)
-                .and_then(|e| system_data.room_data.get(e))
-                .and_then(|rd| rd.get_dynamic_visibility_data())
-                .map(|d| d.updated_within(Self::VISIBILITY_TIMEOUT))
-                .unwrap_or(false);
-            if resolved {
-                continue;
-            }
-            system_data.visibility.request(VisibilityRequest::new(
-                *room_name,
-                VISIBILITY_PRIORITY_CRITICAL,
-                VisibilityRequestFlags::ALL,
-            ));
+            system_data.visibility.request(
+                VisibilityRequest::new(*room_name, VISIBILITY_PRIORITY_CRITICAL, VisibilityRequestFlags::ALL)
+                    .want_fresh_within(Self::VISIBILITY_TIMEOUT),
+            );
         }
 
         // Candidates need high-priority visibility while they are unscored OR
@@ -444,11 +444,13 @@ impl ClaimOperation {
                 .map(|d| !d.updated_within(freshness))
                 .unwrap_or(true);
             if candidate.score.is_none() || stale {
-                system_data.visibility.request(VisibilityRequest::new(
-                    candidate.room_name,
-                    VISIBILITY_PRIORITY_HIGH,
-                    VisibilityRequestFlags::ALL,
-                ));
+                // ADR 0046 D6: the candidate declares the commit gate's real
+                // freshness need — the assigner keeps it serviced within
+                // `intel_freshness_ticks`, so the commit-time re-check passes.
+                system_data.visibility.request(
+                    VisibilityRequest::new(candidate.room_name, VISIBILITY_PRIORITY_HIGH, VisibilityRequestFlags::ALL)
+                        .want_fresh_within(freshness),
+                );
             }
         }
     }
@@ -2307,7 +2309,7 @@ mod live_world_decode {
     use specs::saveload::DeserializeComponents;
 
     /// Mirrors game_loop::WORLD_FORMAT_VERSION (private there). The assert below fails loudly on drift.
-    const EXPECTED_WORLD_FORMAT_VERSION: u32 = 27;
+    const EXPECTED_WORLD_FORMAT_VERSION: u32 = 28;
 
     struct DecodeAndDump<'p> {
         payload: &'p [u8],

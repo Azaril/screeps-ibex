@@ -25,6 +25,7 @@ use crate::room::data::*;
 use crate::room::room_status_cache::{RoomStatusCache, RoomStatusCacheClearSystem};
 use crate::room::roomplansystem::*;
 use crate::room::roomplanvisualizesystem::*;
+use crate::room::scoutassignment::ScoutAssignmentSystem;
 use crate::room::updateroomsystem::*;
 use crate::room::visibilitysystem::*;
 use crate::segments::*;
@@ -103,6 +104,16 @@ macro_rules! for_each_system {
         // push objectives this tick and before the spawn queue consumes its demand.
         $op!(SquadManagerSystem, "squad_manager", StageClass::Always);
         $op!(RunSquadUpdateSystem, "run_squad_update", StageClass::Always);
+        // ADR 0046: the scout fulfillment post-pass — AFTER every visibility
+        // producer above (operations, missions, squad manager) so it sees all
+        // same-tick demand, BEFORE RunJobSystem so scouts walk fresh tours
+        // this tick, and BEFORE SpawnRefillPricingSystem so its EV spawn bid
+        // is in the queue the refill pricing reads. SkipUnderCritical keeps
+        // observer-assignment parity with the pre-ADR shed class; the tour map
+        // (`ScoutAssignments`) is NEVER cleared at tick start, so on shed
+        // ticks scouts keep walking their persisted tours (jobs/movement
+        // remain never-shed).
+        $op!(ScoutAssignmentSystem, "scout_assignment", StageClass::SkipUnderCritical);
         // ADR 0044 P1: publish the refill sink price from the now-complete spawn queue (every
         // producer above has run) BEFORE the hauling pass's transfer snapshot reads it in RunJobSystem.
         $op!(SpawnRefillPricingSystem, "spawn_refill_pricing", StageClass::Always);
@@ -349,6 +360,29 @@ fn repair_entity_integrity(world: &mut World) {
             for creep in dead {
                 error!("INTEGRITY: dead creep entity {:?} removed from mission {:?}", creep, entity);
                 md.as_mission_mut().remove_creep(creep);
+            }
+        }
+    }
+
+    // ── OperationData: scrub dead creep references ────────────────────
+    //
+    // ADR 0046 D4: operations can own creep rosters now (the ScoutOperation
+    // fleet). Same serialize-time backstop as the mission scrub above —
+    // `remove_creep` handles the cleanup path; this catches any path that
+    // doesn't, before specs `ConvertSaveload for Entity` can panic.
+    {
+        let entities = world.entities();
+        let markers = world.read_storage::<SerializeMarker>();
+        let mut operations = world.write_storage::<OperationData>();
+
+        let is_valid = |e: Entity| -> bool { entities.is_alive(e) && markers.get(e).is_some() };
+
+        for (entity, od) in (&entities, &mut operations).join() {
+            let operation = od.as_operation();
+            let dead: Vec<Entity> = operation.get_creeps().into_iter().filter(|c| !is_valid(*c)).collect();
+            for creep in dead {
+                error!("INTEGRITY: dead creep entity {:?} removed from operation {:?}", creep, entity);
+                operation.remove_creep(creep);
             }
         }
     }
@@ -743,7 +777,17 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// reset). The market's opportunity-floor repair admission replaces the deleted S1 hard gate (this milestone
 /// makes the S1 deletion non-regressive). The tier enum + the tier-interleave path STAY in
 /// `screeps-econ-decision` for the sim's tournament arms; only the live bot's tickets go numeric.
-const WORLD_FORMAT_VERSION: u32 = 27;
+/// 28 = ADR 0046 (scout assignment post-pass + fleet EV) — ONE bump batching every shape change in the
+/// change set (design-review resolution #10): (a) `VisibilityEntry` gains `want_fresh_within: u32` (a
+/// positional field add inside the serialized `VisibilityQueueData`); (b) the `MissionData::Scout` variant
+/// is DELETED (the per-room ScoutMission is gone — bincode encodes enum variants by ordinal, so removing an
+/// interior variant shifts every later discriminant); (c) the serialized `ScoutState` machine inside
+/// `JobData::Scout` collapses to a plain tour-walking struct (`PickTarget`/`MoveToRoom`/`Idle` and the
+/// `idle_since` context field are deleted — the job-side opportunistic-request path with them). The
+/// persisted `unreachable` poison list is wiped by this reset BY DESIGN — no migration code; the empty-list
+/// thundering herd is bounded by tour budgeting (ADR 0046 D2.4 as amended). Mirror:
+/// `operations/claim.rs` `EXPECTED_WORLD_FORMAT_VERSION` (the offline world decoder) bumps in lockstep.
+const WORLD_FORMAT_VERSION: u32 = 28;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
