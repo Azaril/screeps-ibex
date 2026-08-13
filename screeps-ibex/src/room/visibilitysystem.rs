@@ -299,12 +299,27 @@ impl VisibilityQueue {
     /// Find the best unclaimed, non-observer-serviced entry with SCOUT flag,
     /// preferring highest priority then closest distance to `creep_pos`.
     pub fn best_unclaimed_for(&self, creep_pos: Position) -> Option<RoomName> {
+        self.best_unclaimed_for_at(creep_pos, game::time())
+    }
+
+    /// [`Self::best_unclaimed_for`] with the tick injected — the host-testable kernel
+    /// (`game::time()` needs the JS runtime, so the selection policy is untestable
+    /// inline; the L1 self-pin regression pin exercises this).
+    pub(crate) fn best_unclaimed_for_at(&self, creep_pos: Position, now: u32) -> Option<RoomName> {
         let creep_room = creep_pos.room_name();
-        let now = game::time();
 
         self.entries
             .iter()
             .filter(|e| e.allowed_types.contains(VisibilityRequestFlags::SCOUT))
+            // Never target the room the scout is ALREADY STANDING IN: presence IS
+            // visibility, so there is zero information to gain, and the movement layer
+            // reports "arrived" instantly on room membership — the creep would claim,
+            // instantly arrive, release, and re-claim every tick without ever issuing a
+            // move (the scout self-pin fixed point; stall report follow-up L1). The
+            // producer-side guard in `claim.rs::refresh_visibility_requests` stops the
+            // stale entry being re-asserted; this is the defence in depth that makes the
+            // fixed point unreachable regardless of which producer queued the room.
+            .filter(|e| e.room_name != creep_room)
             .filter(|e| !self.is_unreachable_now(e.room_name, now))
             .filter(|e| {
                 let rt = self.runtime.get(&e.room_name);
@@ -464,6 +479,50 @@ mod tests {
         assert!(q.is_unreachable_now(room, 0));
         q.clear_unreachable(room);
         assert!(!q.is_unreachable_now(room, 0));
+    }
+
+    /// THE scout self-pin regression pin (stall report follow-up L1). A scout standing
+    /// IN a queued room must never be handed that room as its target: presence IS
+    /// visibility, and the movement layer reports "arrived" on room membership, so the
+    /// creep would claim → instantly arrive → release → re-claim every tick and NEVER
+    /// issue a move. Combined with the 4-spawn give-up in `missions/scout.rs`, that
+    /// pinned the whole fleet and minted the 103-room unreachable list. The scout must
+    /// be handed the OTHER room even though the occupied one ranks strictly higher on
+    /// both sort keys (CRITICAL vs HIGH priority, distance 0 vs 1).
+    #[test]
+    fn best_unclaimed_never_returns_the_room_the_scout_is_standing_in() {
+        let here: RoomName = "E10N10".parse().unwrap();
+        let elsewhere: RoomName = "E11N10".parse().unwrap();
+        // Entries are built directly: `request()` needs `game::time()` (no JS runtime here).
+        let entry = |room: RoomName, priority: f32| VisibilityEntry {
+            room_name: room,
+            priority,
+            allowed_types: VisibilityRequestFlags::ALL,
+            expires_at: u32::MAX,
+            opportunistic: false,
+        };
+
+        let mut q = VisibilityQueue::default();
+        // The occupied room outranks the other on BOTH sort keys.
+        q.entries.push(entry(here, VISIBILITY_PRIORITY_CRITICAL));
+        q.entries.push(entry(elsewhere, VISIBILITY_PRIORITY_HIGH));
+
+        let pos = Position::new(
+            screeps::RoomCoordinate::new(25).unwrap(),
+            screeps::RoomCoordinate::new(25).unwrap(),
+            here,
+        );
+        assert_eq!(
+            q.best_unclaimed_for_at(pos, 0),
+            Some(elsewhere),
+            "a scout must never be assigned the room it already occupies"
+        );
+
+        // And with ONLY the occupied room queued there is no target at all — the job
+        // falls through to Idle and its explore path, rather than self-pinning.
+        let mut only_here = VisibilityQueue::default();
+        only_here.entries.push(entry(here, VISIBILITY_PRIORITY_CRITICAL));
+        assert_eq!(only_here.best_unclaimed_for_at(pos, 0), None);
     }
 }
 

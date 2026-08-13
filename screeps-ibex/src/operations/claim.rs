@@ -63,6 +63,15 @@ const ESCORT_OBJECTIVE_TTL: u32 = 4000;
 /// zero a whole discover cycle). ~One bucket-recovery horizon.
 const SELECT_CPU_HOLD_MAX_TICKS: u32 = 300;
 
+/// How long Select keeps re-sampling the commit gates before giving up on the cycle
+/// (stall report follow-up L3). Below-ring candidates cannot use the Scouting rolling
+/// pass (they must wait for `covered`), so this window is their equivalent: each tick
+/// re-runs the commit-time freshness/safety check, letting a candidate commit on the
+/// tick its own intel refreshes rather than losing the whole cycle to one unlucky
+/// sample. Comfortably longer than `intel_freshness_ticks` (250) so a scout arrival
+/// inside the window is actually observed.
+const SELECT_COMMIT_WINDOW_TICKS: u32 = 400;
+
 /// Maximum home rooms one claim mission may reserve (stall report §4): a claim
 /// used to consume EVERY eligible home, starving all other candidates in the
 /// same cycle via `used_home_rooms`. Two covers claimer + remote-build support.
@@ -386,8 +395,29 @@ impl ClaimOperation {
     /// Called each tick during the Scouting phase so that entries don't expire
     /// before scouts/observers can service them.
     fn refresh_visibility_requests(&self, system_data: &mut OperationExecutionSystemData) {
-        // Unknown rooms need critical-priority visibility.
+        // Unknown rooms need critical-priority visibility — but ONLY while they are
+        // still actually unknown. Re-asserting a CRITICAL request for a room we can
+        // already SEE is the scout self-pin bug (stall report follow-up L1): the entry
+        // never leaves the queue, and `best_unclaimed_for` ranks priority DESC then
+        // distance ASC — so for a scout STANDING IN that room it scores CRITICAL at
+        // distance 0 and always wins. The scout claims it, `tick_move_to_room_with_bid`
+        // reports "arrived" immediately (room membership is the arrival test) WITHOUT
+        // issuing a move, the claim is released, and `pre_run_job` promotes Idle back to
+        // PickTarget next tick — re-claiming the same room forever. The scout never
+        // moves; every OTHER room's `ScoutMission` then trips its 4-spawn give-up and is
+        // recorded unreachable. That is how the 103-room poison list was minted.
+        // Mirrors the candidate loop's freshness guard below (same function, same idea).
         for room_name in &self.unknown_rooms {
+            let resolved = system_data
+                .mapping
+                .get_room(room_name)
+                .and_then(|e| system_data.room_data.get(e))
+                .and_then(|rd| rd.get_dynamic_visibility_data())
+                .map(|d| d.updated_within(Self::VISIBILITY_TIMEOUT))
+                .unwrap_or(false);
+            if resolved {
+                continue;
+            }
             system_data.visibility.request(VisibilityRequest::new(
                 *room_name,
                 VISIBILITY_PRIORITY_CRITICAL,
@@ -677,32 +707,66 @@ impl ClaimOperation {
             }
         }
 
-        // Escort pre-clear (ADR 0017; combat-overhaul-plan.md §W3): emit an Escort screen for any MARGINAL
-        // threatened candidate BEFORE the prune below drops the threat-rejected ones. A NO-OP for clean
-        // claims and for any threat too heavy to be a light screen (see `escort_screen_decision`).
-        self.emit_escort_objectives(system_data, features);
+        // Once-per-cycle work (escorts + prune + the ranked summary). Detected state-free
+        // by "are there still prunable candidates?" — the prune below makes this false,
+        // so the retry ticks (L3, below) neither re-emit escorts nor spam the log. Using
+        // the candidate list rather than a new field keeps the serialized shape frozen
+        // (no WFV bump).
+        let first_pass = self.candidates.iter().any(|c| c.score.map(|(s, _)| s < 0.0).unwrap_or(true));
 
-        let total_before_prune = self.candidates.len();
-        let unscored = self.candidates.iter().filter(|c| c.score.is_none()).count();
-        let hostile = self
-            .candidates
-            .iter()
-            .filter(|c| c.score.map(|(s, _)| s < 0.0).unwrap_or(false))
-            .count();
+        if first_pass {
+            // Escort pre-clear (ADR 0017; combat-overhaul-plan.md §W3): emit an Escort screen for any MARGINAL
+            // threatened candidate BEFORE the prune below drops the threat-rejected ones. A NO-OP for clean
+            // claims and for any threat too heavy to be a light screen (see `escort_screen_decision`).
+            self.emit_escort_objectives(system_data, features);
 
-        // Prune candidates that are unscored (no visibility arrived) or hostile
-        // (negative score).
-        self.candidates.retain(|c| c.score.map(|(s, _)| s >= 0.0).unwrap_or(false));
+            let total_before_prune = self.candidates.len();
+            let unscored = self.candidates.iter().filter(|c| c.score.is_none()).count();
+            let hostile = self
+                .candidates
+                .iter()
+                .filter(|c| c.score.map(|(s, _)| s < 0.0).unwrap_or(false))
+                .count();
 
-        info!(
-            "ClaimOp [Select]: {} candidates total, {} unscored (pruned), {} hostile (pruned), {} remaining",
-            total_before_prune,
-            unscored,
-            hostile,
-            self.candidates.len()
+            // Prune candidates that are unscored (no visibility arrived) or hostile
+            // (negative score).
+            self.candidates.retain(|c| c.score.map(|(s, _)| s >= 0.0).unwrap_or(false));
+
+            info!(
+                "ClaimOp [Select]: {} candidates total, {} unscored (pruned), {} hostile (pruned), {} remaining",
+                total_before_prune,
+                unscored,
+                hostile,
+                self.candidates.len()
+            );
+        }
+
+        let created = self.try_commit_candidates(
+            system_data,
+            runtime_data,
+            maximum_rooms,
+            currently_owned_rooms,
+            features,
+            covered,
+            false,
+            first_pass,
         );
 
-        self.try_commit_candidates(system_data, runtime_data, maximum_rooms, currently_owned_rooms, features, covered, false, true);
+        // BELOW-RING COMMIT WINDOW (stall report follow-up L3 — the M2-near residual Wave 1
+        // left). Far candidates get a per-tick rolling commit during Scouting, so each one
+        // commits on the tick its OWN intel is fresh. Below-ring candidates are excluded
+        // from that pass (they must wait for `covered`, ADR 0038 D9) and previously got
+        // exactly ONE sample here before Select returned to Idle — so a candidate whose
+        // intel happened to be older than `intel_freshness_ticks` at that single instant
+        // lost the entire discover cycle (~840–5000 ticks live), and nothing schedules a
+        // scout to be present at that instant. Ten of thirteen live candidates are
+        // below-ring. Holding Select for a bounded window gives them the same per-tick
+        // freshness sampling the rolling pass gives far rooms. Bounded so the cycle always
+        // ends; exits immediately once anything commits.
+        let elapsed = self.phase_tick.map(|t| game::time().saturating_sub(t)).unwrap_or(u32::MAX);
+        if created == 0 && !self.candidates.is_empty() && elapsed < SELECT_COMMIT_WINDOW_TICKS {
+            return;
+        }
 
         // No adaptive-radius ratchet (ADR 0038 D1): the BFS searches the full claimer-viable range every
         // discover cycle, so there is no radius to widen/re-tighten. Expansion reach grows only by claiming
