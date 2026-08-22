@@ -42,6 +42,11 @@ This doc tracks **status and open work only**. It must stay small enough to read
 6. **Bulk documentation drift is a chore, not work.** See CHORE-1 — do not create one tracking entry
    per stale header.
 7. **Target ≤ 300 lines.** If it is longer, something that should have collapsed did not.
+8. **Every session closes with an update** (standing convention, operator 2026-08-22): before a
+   session ends, refresh §1's state, tick the active impl doc's checkboxes + log, and record any
+   FOUND WORK — new defects, discovered gaps, process lessons — either under its owning ADR in §6,
+   in the active impl doc, or (if unowned) in §7. Progress that lives only in a chat transcript is
+   lost progress.
 
 ---
 
@@ -58,9 +63,12 @@ B-1 blocked the private lane, so the operator inverted the order: MMO directly (
 |---|---|
 | MMO deploy (loud reset WFV 27→28) | **done 2026-08-22** — see WS-1 doc for verification |
 | One-shot `reset.features` fired — `Memory._features` reconciled to compiled defaults (`77dc9cc`) | done — note: this turns `military.offense` back ON (compiled default; had been manually off since the July drain era — Wave A's fixes are in this artifact) |
-| Observe one discover cycle, judge C1–C5 live | in progress |
+| Observe one discover cycle, judge C1–C5 live | in progress — **healthy through 3 checks** (CPU 14–36/140, bucket pinned 10000, 0 panics, 0 drain signatures). The claim pipeline is live and holding its L3 Select window; C2's failure signature (stale-intel skip) is ABSENT; below-ring candidates correctly deferred on ring patience while the post-reset frontier re-scouts. C3/C5 verdicts pending frontier coverage. |
 | L2 poison-list self-heal — ships **last** of the expansion program | pending live evidence |
 | Private soak (when B-1 clears) — now for the harness lane, not this deploy | deferred |
+
+> WS-2 runs concurrently: WS-1's remaining work is passive wall-clock observation (a 30-min review
+> cadence), so the one-workstream policy treats the pair as one active lane.
 
 ---
 
@@ -87,8 +95,10 @@ expansion program; collects the 0018 "has an SK farm ever run" evidence for free
 
 **Phase 1 — WS-2 · Combat review Tier −1 Wave B** →
 [`../implementation/ws-2-combat-wave-b.md`](../implementation/ws-2-combat-wave-b.md).
-D2/D3 → D4/D5/D6 → D9/D10 → D28 → the 0037 T1/T2 orphan decision. No WFV bump. **R19 does not gate
-this** (RULING-6). *Closes: 0037, the 2026-07-09 review as a live document.*
+**6 of 8 done 2026-08-22** (D2/D3 `8fa0c60`, D4/D5/D6 `be5ce24`, D28 `b26eba4` — all pure kernels,
+13 RED-verified pins, no WFV; ADR 0027 amended with the vacuous-clear rule). **Remaining: D9, D10**
+(the rover/live-adapter pair) **+ the 0037 T1/T2 orphan decision**. **R19 does not gate this**
+(RULING-6). *Closes: 0037, the 2026-07-09 review as a live document.*
 
 **Phase 2 — the triage pass: decide, don't build** (one session; create its impl doc — the
 verdicts must land as ADR amendments via `Design deltas`). Every §6/§8 item gets one of three
@@ -297,6 +307,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-22 (late)** — Wave B 6/8: D2/D3 safe-mode (`8fa0c60`), D4/D5/D6 roster churn (`be5ce24`), D28 vacuous clear (`b26eba4` + decision/eval submodules). 13 RED-verified pins; fence green; ADR 0027 amended. D9/D10 + 0037 decision remain. WS-1 observation healthy through 3 checks (claim pipeline live, C2 signature absent).
 
 - **2026-08-22** — **WFV 28 DEPLOYED TO LIVE MMO** (`77dc9cc`, wasm `d9b748497e4a`; operator inverted soak order, MMO-first). Loud reset clean: 0 panics, CPU 52→37/140, bucket 10000. `reset.features` one-shot built + fired + verified — live config at compiled-default parity (offense back ON; Wave A fixes in-artifact). Closes UNOWNED-7. Observation window open (C1–C5).
 - **2026-08-22** — Completion roadmap (Phases 0–6) recorded in §3; §1 updated to MMO-first.

@@ -4,13 +4,20 @@
 
 ## Resume point
 
-**Not started.** Parked behind WS-1 by the one-workstream policy. Nothing is blocking it
-technically — no WFV bump, no reset, no Docker dependency for the code work itself (only the soak
-would want a server).
+**6 of 8 defects fixed and pushed (2026-08-22 late). Next action: D9.**
 
-Start with D2 + D3: two small, self-contained fixes to `screeps-ibex/src/missions/safe_mode.rs`
-that protect a scarce irreversible resource. All eight defects below were re-verified present at
-HEAD on 2026-08-22.
+D9 = wire the engaged stuck-threshold ladder into the live bot. The sim's heal-cluster fix
+(`engaged_stuck_thresholds`, the traveller-vs-engaged ladder split in `screeps-rover` /
+`squad.rs` per the ADR 0033 slice-7 work) was never wired into the live adapter — zero
+`stuck_thresholds` hits in `screeps-ibex/src`. Start by finding the sim's wiring
+(`screeps-combat-agent` / rover `MoverConfig`) and mirroring it in the live `MovementSystem`
+construction. Then D10: `screeps-rover/src/movementsystem.rs:1678` returns `PathNotFound` for an
+INCOMPLETE flee result instead of using the partial path — a retreating creep under a swarm
+freezes; use the incomplete path (flee semantics: any distance gained beats standing still).
+Then the 0037 T1/T2 orphan decision (wire or delete — see plan).
+
+Method notes that held: every fix lands as a pure kernel + RED-verified pins; revert TEMP-RED
+injections with Edit, never `git checkout --` (that discarded uncommitted work once this session).
 
 ## Target
 
@@ -37,8 +44,11 @@ Grouped so each group can soak as one increment. **No WFV bump on any of these.*
 
 ## Design deltas
 
-None yet. D28's fix is a completion-rule change and should be written into ADR 0027 (objective
-lifecycle) when it lands, not left only here.
+- **D28 written into ADR 0027** (2026-08-22): the Resolved gate's design of record now carries the
+  vacuous-clear evidence form, its live-visibility R10 guard, and the is_defend exclusion.
+- **Found work (harness):** the lifecycle harness's empty-room scenarios model vision-gap arrivals
+  (vacuous_clear stays false); a live-visible-empty D28 scenario (vacuous_clear=true asserting the
+  Resolve) would close the loop offline. Small, optional, rides the next harness touch.
 
 ## Verification
 
@@ -50,4 +60,7 @@ lifecycle) when it lands, not left only here.
 
 ## Log
 
+- 2026-08-22 (late) — D2/D3 (`8fa0c60`), D4/D5/D6 (`be5ce24`), D28 (`b26eba4` + decision/eval
+  submodule commits, pushed). 13 RED-verified pins; ibex 327 / decision 345 / eval 114 green; wasm
+  clean; determinism fence passes. ADR 0027 amended. Remaining: D9, D10, 0037 decision.
 - 2026-08-22 — scoped from the combat review; all eight defects re-verified present at HEAD.

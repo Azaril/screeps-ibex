@@ -346,6 +346,19 @@ Every `ObjectiveKind` (objective_queue.rs:81-93), where it is ADDED
 lifecycle `reconcile` **Resolved → withdraw** (clean win) and **`mark_unwinnable`** (give-up), plus the
 queue's **`expire`** (TTL elapsed AND not claimed AND no live deadline lease — objective_queue.rs:348).
 
+**The Resolved gate (design of record, as refined).** A clean clear requires in-room members with no
+focus and no lose-verdict, plus ONE of two evidence forms: (a) **`engaged_once`** — the squad fought
+and the room is now clear (the original rule; ADR 0035 D4 added the `retreated_from_contact`
+exclusion so a LOST fight cannot mis-resolve); or (b) **the vacuous clear** (combat review D28) —
+the target room is LIVE-visible this tick with zero hostile creeps. (b) exists because an
+uncontested clear of an ALREADY-EMPTY room can never latch `engaged_once` (the latch needs an
+in-room focus and an empty room offers none), so a successfully-massed squad used to hold until the
+budgets forced a GaveUp. Two boundaries are load-bearing: live visibility (a cached-empty DTO must
+never resolve — the R10 vacuous-intel class), and `is_defend` exclusion (a defend garrison's quiet
+hold is deliberate — FIX B2 — and its terminal is `objective_gone` when the producer stops
+asserting). Kernel: `lifecycle::reconcile`; the evidence is manager-computed
+(`ReconcileSnapshot.vacuous_clear`), keeping the kernel pure.
+
 | Kind | ADD (producer → owner) | Dedicated REMOVE (beyond resolve/expire) |
 |------|------------------------|------------------------------------------|
 | `Secure{room}` | war.rs:534 owned-room threat (Defense), war.rs:589 neighbour threat (Defense), war.rs:1294→1427 AttackFlag (Attack) | — (resolve/expire) |
