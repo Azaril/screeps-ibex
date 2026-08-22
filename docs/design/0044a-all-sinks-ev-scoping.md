@@ -1,4 +1,4 @@
-# ADR 0044 A3 — All-Sinks-EV: Scoping Document
+# ADR 0044a — All-Sinks-EV: Scoping Document
 
 **Status:** Decision-ready (scoping). Synthesized from three independent investigation briefs and one adversarial code review (all claims below re-verified against the code at the cited file:line).
 **Date:** 2026-07-06

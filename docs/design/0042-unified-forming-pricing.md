@@ -1,6 +1,6 @@
 # ADR 0042 — Unified energy pricing for combat squad forming (the R_net model)
 
-- **Status:** Accepted + **P0 IMPLEMENTED & VALIDATED ON PRIVATE (2026-07-08)** — bid + economic give-up live; deferred refinements R1–R4 + the `opportunity_floor>0` (gated on ADR 0043 A2) tracked below. Supersedes the interim `forming_completion_bid(present, ticks)` escalation (ADR 0040 spawn lane, committed but band-scaled). **MMO deploy pending operator final review.**
+- **Status:** Accepted + **P0 IMPLEMENTED & VALIDATED ON PRIVATE (2026-07-08)** — bid + economic give-up live; deferred refinements R1–R4 + the `opportunity_floor>0` (gated on ADR 0043 A2) tracked below. Supersedes the interim `forming_completion_bid(present, ticks)` escalation (ADR 0040 spawn lane, committed but band-scaled). **Shipped to MMO 2026-07-28** inside the combat Wave A artifact (`ab692bd`); verified live in [combat-systems-review-2026-07-09.md](../reviews/combat-systems-review-2026-07-09.md) §7.2a.
 - **Date:** 2026-07-07
 - **Deciders:** William Archbell
 - **Related:** ADR 0040 (the e/t currency, `value_e`, §D5.4 `R_O`, the spawn-request policy), ADR 0038 (`room_net_roi` / reservable-remote economic pricing), ADR 0031 (capability force composition + `pairing_p_win`), ADR 0037 (count-quorum winnability veto), ADR 0028/0034 (the lifecycle/forming harness); memory [[combat-ev-economic-and-pwin-gating]], [[prefer-per-tick-optimal-over-hysteresis]], [[sim-determinism-fence]].

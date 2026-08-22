@@ -1,6 +1,6 @@
 # ADR 0038 — Expansion reach-gating + economic (net-ROI) claim value
 
-- **Status:** **Implemented + COMMITTED (master `cf5e8be`, 2026-07-01); MMO deploy pending operator go-ahead.**
+- **Status:** **Implemented + LIVE.** Committed master `cf5e8be` (2026-07-01); its reset shipped with the WFV-24 deploy and it has been live on MMO since. (Header corrected 2026-08-22 — it had read "MMO deploy pending operator go-ahead" long after the deploy happened.)
   Operator-directed redesign of claim/expansion selection, decided this session: **combined one-pass** change
   (unblock + value-unify together), **ADR-first**, WFV 22→23 reset approved. Landed: the pure
   `claim_economics.rs` kernel (13 tests) + `RoomEconomyFacts::owned_colony`; `claim.rs` reach-gating + cadence +

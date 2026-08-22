@@ -13,19 +13,47 @@
 
 ---
 
+> ## ✅ CLOSEOUT — all in-flight work was tied off the same day (2026-08-22)
+>
+> This document was written as a diagnosis, and the operator then closed out everything it found.
+> **The repo is now in the clean state §5 recommended.** What changed, in order:
+>
+> 1. **Working tree emptied.** The stale rover-eval scenario work was committed
+>    (`c4b3d17` in the submodule, pointer bump `bd569b7`). No uncommitted files, no stashes.
+> 2. **ADR 0046 merged.** Rebased onto `e857c76`, both conflicts resolved (see §3.2 for how),
+>    gated, and fast-forwarded onto master. **Master is now WFV 28.**
+> 3. **All gates run and green:** 320 lib tests (318 + 2 new pins), wasm check + wasm clippy clean,
+>    and — for the first time on this branch — the **`sim_is_deterministic_over_rounds`
+>    determinism fence passes**.
+> 4. **The self-pin regression pin was reconstructed.** 0046 deleted `best_unclaimed_for`, which
+>    took L1's regression test with it. The guarantee now lives in a named pure kernel,
+>    `entry_needs_service`, pinned by two RED-verified tests (§3.2).
+> 5. **Everything pushed to `origin`** — master plus 49 commits across 8 submodules, ending a
+>    ~7-week local-only backlog.
+> 6. **Doc hygiene done:** stale status headers on ADR 0038 and ADR 0042 corrected, the duplicate
+>    ADR 0044 renumbered to **0044a**, all worktrees and merged branches removed.
+>
+> **The one thing deliberately NOT done: no deploy.** The operator scoped this tie-off to the repo.
+> Nothing has shipped since `ab692bd` (2026-07-28), and master now carries a WFV 27→28 loud reset
+> whenever you do deploy. The tag **`wfv27-deployable-e857c76`** preserves the last no-reset
+> deployable point if you still want the cheap observe-one-discover-cycle path first.
+>
+> The body below is the analysis of record, kept as written. Where a finding is now resolved it is
+> marked **[RESOLVED 2026-08-22]** rather than deleted, so the reasoning survives.
+
 ## 0. The 30-second answer
 
-Three workstreams are open, in this order of urgency:
+Three workstreams were open when this was written:
 
 1. **Expansion stall (Aug 11–12).** Root-caused, fixed, committed on `master` — **but never
-   deployed anywhere.** `master` is 2 commits (`09c36db`, `e857c76`) ahead of the last thing that
-   ever shipped. The last session ended by asking you a direct question and never got an answer.
+   deployed anywhere.** The last session ended by asking a direct question that never got an
+   answer. *(Still undeployed by choice; the question was answered 2026-08-22 — merge 0046.)*
 2. **ADR 0046 (scout redesign).** ~1500 lines, fully implemented, 318 tests green — sitting
-   **unmerged in a git worktree branch** (`worktree-agent-abc0e57ea9f15e4d8`), un-soaked,
-   un-fence-tested, carrying a WFV 27→28 loud reset. The `master` copy of the ADR still says
-   *Proposed*; the worktree copy says *Accepted + implemented*.
+   **unmerged in a git worktree branch**, un-soaked, un-fence-tested, carrying a WFV 27→28 loud
+   reset. **[RESOLVED 2026-08-22 — merged, fence now passes.]**
 3. **Combat review Tier −1.** Wave A shipped and is live-verified on MMO; **Wave B was never
-   started** (7 of the 9 recommended Tier −1 defects remain, plus new D28).
+   started** (7 of the 9 recommended Tier −1 defects remain, plus new D28). *(Still open — this is
+   now the top code workstream.)*
 
 Everything else — ADR 0040 (accepted, WFV-27 live on MMO), ADR 0042/0043/0044 economy work, the
 G4 offense migration, the combat Wave A drain fix — is genuinely finished and deployed.
@@ -38,16 +66,16 @@ G4 offense migration, the combat Wave A drain fix — is genuinely finished and 
 |---|---|---|---|
 | **Live MMO (shardX)** | `ab692bd` + decision submodule `f6c084a` — WFV 27 + combat Wave A | **2026-07-28** | `b269682` §7.2a; session `36c4583d` final message ("CPU 16/130 with a full, recovering bucket") |
 | **Docker private server** | same Wave A build (private-soaked ~7k ticks before the MMO push) | 2026-07-28 | `b269682` §7.2a |
-| **`master` HEAD** | `e857c76` | 2026-08-12 | 2 commits ahead of the deployed artifact |
-| **`origin/master`** | `ce7069e` | 2026-07-01 | **119 commits behind local `master` — nothing has been pushed in ~7 weeks** |
+| **`master` HEAD** | `f81c415` (was `e857c76` when written) | 2026-08-22 | 6 commits ahead of the deployed artifact, now including ADR 0046 |
+| **`origin/master`** | in sync with local master | 2026-08-22 | **[RESOLVED]** was `ce7069e`, 119 commits behind |
 
-`WORLD_FORMAT_VERSION = 27` (`screeps-ibex/src/game_loop.rs:746`). Neither `09c36db` nor `e857c76`
-bumps it, so **both are deployable today with no reset.**
+**`WORLD_FORMAT_VERSION` is now 28** (ADR 0046 merge). It was 27 when this was written, and
+`09c36db`/`e857c76` did not bump it — so if you want a no-reset deploy of just the expansion fix,
+deploy the tag **`wfv27-deployable-e857c76`**, not master.
 
-**Submodules with unpushed local commits** (same 7-week backlog): combat-decision 15,
-combat-eval 12, sim-core 7, combat-agent 5, rover 4, combat-engine 1, rest-api 1.
-foreman is clean. Superproject pointers are current for every submodule **except**
-`screeps-rover-eval` (see §3.1).
+**Submodules:** all unpushed work is now published — 49 commits across combat-decision (15),
+combat-eval (12), sim-core (7), combat-agent (5), rover (4), rover-eval (4), combat-engine (1) and
+rest-api (1). foreman was already clean. Every superproject pointer is current.
 
 ---
 
@@ -61,7 +89,7 @@ foreman is clean. Superproject pointers are current for every submodule **except
   opportunity-floor repair admission, spawn bids.
 - **ADR 0042 — R_net forming pricing.** P0 implemented + private-validated 2026-07-08
   (`d3367bb`, `7c1401a`, `91a8503`, `7fd12d0`). Rode to MMO inside the Wave A build.
-  *Its own status line still reads "MMO deploy pending operator final review" — stale; see §4.*
+  *(Its status header said "MMO deploy pending operator final review" — corrected 2026-08-22.)*
 - **ADR 0043 — band-normalization ledger.** A3/A5/A6 + the A1 refill lane wired live
   (`a73ee0b`, `2ab94ad`, `2062a62`, `8df0974`).
 - **ADR 0044 (transfer market = min-cost flow).** Accepted `2a43764`; P0 two-stage reduced-cost
@@ -121,15 +149,50 @@ foreman is clean. Superproject pointers are current for every submodule **except
 
 ## 3. IN-FLIGHT
 
-### 3.1 Uncommitted working-tree work
+### 3.1 Uncommitted working-tree work — **[RESOLVED 2026-08-22]**
 
 | What | State |
 |---|---|
-| `screeps-rover-eval/src/scenario.rs` (+63 lines) — `generate_realistic(seed)` + the `realistic_rooms_stay_near_optimal` 30-seed sweep test | **Uncommitted in the submodule**; superproject pointer shows `67a3e777…-dirty`. This is the rover-eval half of the ADR 0044 cross-sim realistic-terrain workstream (the sim-core side shipped as `db32580` / `eab74c6`). **Verified: `cargo test --no-run` exits 0 — it compiles.** ~6 weeks stale. |
+| `screeps-rover-eval/src/scenario.rs` (+63 lines) — `generate_realistic(seed)` + the `realistic_rooms_stay_near_optimal` 30-seed sweep test | Was **uncommitted in the submodule** (pointer showed `67a3e777…-dirty`) — the rover-eval half of the ADR 0044 cross-sim realistic-terrain workstream (the sim-core side shipped as `db32580` / `eab74c6`). Verified compiling, then **committed as `c4b3d17`** with the superproject pointer bumped in `bd569b7`. It is the natural entry point for the R19 chokepoint re-tune. |
 
-Nothing else is uncommitted; there are no untracked files and no stashes.
+Nothing else was uncommitted; there were no untracked files and no stashes.
 
-### 3.2 Unmerged branches / worktrees
+### 3.2 Unmerged branches / worktrees — **[RESOLVED 2026-08-22]**
+
+> **How the ADR 0046 merge actually went.** `git merge-tree` predicted it exactly: commit 1
+> (`888e3db`) rebased clean, and **only commit 2 conflicted, in exactly two files, two hunks total.**
+>
+> - **`visibilitysystem.rs` — took 0046 wholesale.** It deletes `best_unclaimed_for`,
+>   `best_unclaimed_for_at` and `has_unclaimed_scout_eligible` outright; the greedy per-creep picker
+>   is replaced by the global `build_tours` pass. After resolution the only surviving reference to
+>   `best_unclaimed_for` anywhere in the tree is a history comment. No dangling callers.
+> - **`claim.rs` — the one genuine semantic conflict.** Both sides fix the same bug by different
+>   means: L1a guards at the **producer** (skip re-asserting CRITICAL for an already-resolved room),
+>   0046 filters at the **assigner** (producers re-assert idempotently declaring
+>   `want_fresh_within`; the assigner derives service state from intel age). Took 0046's mechanism —
+>   its tour planner needs the entry *present* in the demand set to reason about it, so removing
+>   entries at the producer would blind it — but kept L1's diagnostic reasoning in the comment,
+>   because that explains *why* the freshness filter is load-bearing and would otherwise be lost.
+> - **L3 auto-merged**, as predicted: 0046's claim.rs edits are confined to lines ~351–425 plus a
+>   test module, and `run_select` sits at 655.
+>
+> **The one real loss, and its replacement.** Deleting `best_unclaimed_for` also deleted
+> `best_unclaimed_never_returns_the_room_the_scout_is_standing_in` — the pin proving the self-pin
+> fixed point cannot return. That guarantee was re-established as a named pure kernel,
+> `entry_needs_service(intel_age, want_fresh_within)`, used by the demand filter: a scout standing
+> in a room sees it, so `intel_age` is 0, and 0 is never `>` any `want_fresh_within` — including an
+> imperative 0. Pinned by `occupied_room_never_needs_service` (sweeping the window across 0, 1, 100,
+> 250, default TTL, `u32::MAX`) and `imperative_entry_still_excludes_the_occupied_room`. **Both
+> RED-verified:** flipping the predicate to `>=` re-admits the occupied room and fails exactly those
+> two tests and nothing else. Landed in `f81c415`.
+>
+> **Adversarial diff review findings** (on the merged result): WFV 28 bump present with the
+> `EXPECTED_WORLD_FORMAT_VERSION` mirror-assert in `claim.rs` intact (review resolution #10 holds);
+> `ScoutAssignments.tours` is fully replaced each pass and `entry_fail` is `retain`-pruned against
+> the live demand set, so neither accumulates dead entity keys — the dangling-ref class does not
+> apply, and nothing here is serialized. One minor finding fixed (`demand.sort_by` →
+> `sort_by_key` on a determinism-critical ordering). One benign note: `last_observed` is never
+> pruned, but it is keyed by room, bounded by observer range, and ephemeral across resets.
 
 | Branch | Ahead of master | Contents |
 |---|---|---|
@@ -146,7 +209,7 @@ Nothing else is uncommitted; there are no untracked files and no stashes.
 
 | ADR | Status | Gap |
 |---|---|---|
-| **0046** scout assignment + fleet EV | Proposed on master / *Accepted + implemented* in the worktree | The status divergence **is** the open decision: merge + reset, or shelve. |
+| **0046** scout assignment + fleet EV | **[RESOLVED]** Accepted + implemented, merged to master `f81c415` | Was Proposed on master / Accepted in the worktree. Merged 2026-08-22; master is WFV 28. Deploy (and its loud reset) is still pending. |
 | **0045** power-creep operators | Proposed | Design complete, no code. Awaiting acceptance. |
 | **0041** combat boost layer | **Accepted**, implementation pending (P0 dark-first) | Zero code — `military/boostqueue.rs` predates it (Feb) and is unrelated. Blocks ADR 0008a's boosted-assault frontier (T-COMP-1/5, T-TOWER-3, T-NPC-7) and combat-review R1 (enemy-boost blindness, the "top MMO risk"). |
 | **0039** real-stack self-play sim | Proposed | Paused (per memory: the border-oscillation motivation turned out to be bot formation expel; rover exonerated). |
@@ -224,14 +287,14 @@ G4 migration marathon; ended cleanly on a dismantle-danger simplification).
 1. **`docs/execution/g4-offense-plan.md` does not exist.** The O1–O7 checklist lives in
    `docs/plans/combat-overhaul-plan.md` §5 and is mirrored in `docs/execution/phase-2.md` §2.0.
    The name appears only as prose inside those two files. Nothing is missing — the pointer is.
-2. **Two ADRs numbered 0044** — `0044-transfer-market-min-cost-flow.md` (Accepted) and
-   `0044-a3-all-sinks-ev-scoping.md` (Decision-ready scoping). A numbering collision, not a
+2. **[RESOLVED 2026-08-22 — renumbered to `0044a-all-sinks-ev-scoping.md`.]** Two ADRs numbered 0044 — `0044-transfer-market-min-cost-flow.md` (Accepted) and
+   `0044a-all-sinks-ev-scoping.md` (Decision-ready scoping). A numbering collision, not a
    content conflict; the A3 doc should probably become `0044a`.
-3. **ADR 0046 status divergence.** `master` says *Proposed*; the unmerged worktree copy says
+3. **[RESOLVED 2026-08-22]** ~~**ADR 0046 status divergence.**~~ `master` said *Proposed*; the unmerged worktree copy said
    *Accepted + implemented*. Whichever way the decision goes, one of these is wrong today.
-4. **ADR 0042's status line says "MMO deploy pending operator final review"** — but its code rode
+4. **[RESOLVED 2026-08-22 — header fixed.]** ADR 0042's status line said "MMO deploy pending operator final review" — but its code rode
    to MMO inside the Wave A artifact on 2026-07-28. Stale header.
-5. **ADR 0038's status line says "MMO deploy pending operator go-ahead"** — superseded; its reset
+5. **[RESOLVED 2026-08-22 — header fixed.]** ADR 0038's status line said "MMO deploy pending operator go-ahead" — superseded; its reset
    shipped with the 2026-07-01 WFV-24 deploy and it has been live for weeks.
 6. **`docs/plans/combat-overhaul-plan.md` bills itself as the single forward-looking SSOT**, but
    the 2026-07-01 reconciliation (DOC-1) already flagged that claim as stale, and its §4 resume
@@ -241,9 +304,9 @@ G4 migration marathon; ended cleanly on a dismantle-danger simplification).
 7. **`docs/execution/phase-2.md` has not been updated since 2026-06-18.** Its §2 RESUME POINT and
    §2.0 status log stop at G4-O6. Six ADR waves, three MMO deploys, and two reviews have happened
    since. Nothing in it is *wrong*, but it is a June artifact and should not be read as current.
-8. **Nothing has been pushed to `origin` in ~7 weeks** — 119 superproject commits and 45 submodule
+8. **[RESOLVED 2026-08-22 — all pushed.]** Nothing had been pushed to `origin` in ~7 weeks — 119 superproject commits and 45 submodule
    commits exist only on this machine. A single point of failure, not a correctness issue.
-9. **Stale branches live only on `origin`, not locally.** Every local branch other than `master` is
+9. **[PARTLY RESOLVED 2026-08-22 — all local branches and worktrees deleted; the two stale remote branches remain, deliberately.]** Stale branches live only on `origin`, not locally. Every local branch other than `master` is
    fully merged (0 unique commits vs master) and safe to delete: `new-room-planning`,
    `docs/review-planning`, and the detached `blissful-shaw-165bc1`. What *is* divergent is on the
    remote: **`origin/new-room-planning`** carries 305 unique commits whose tip is `fe0cf5b`
@@ -263,6 +326,26 @@ G4 migration marathon; ended cleanly on a dismantle-danger simplification).
 ---
 
 ## 5. Recommended pick-back-up plan
+
+> **⚠ Steps 0–4 below are DONE as of 2026-08-22, with one deliberate deviation.** The operator
+> answered the Step-0 fork with **"merge ADR 0046"** rather than "deploy first", and scoped the
+> tie-off to the repo — so Steps 1–2 (deploy + observe) were **not** performed, and Step 3's merge
+> was executed directly. Step 4 (doc statuses) is done.
+>
+> **What is actually next, in order:**
+>
+> 1. **Decide the deploy shape.** Master is WFV 28, so deploying it is a loud reset. Two paths:
+>    (a) deploy `wfv27-deployable-e857c76` first for a no-reset read of the three expansion signals,
+>    *then* reset onto master; or (b) go straight to master and take the reset now. ADR 0046 was
+>    built to make the reset safe (it removes the poison-list minting mechanism structurally), so
+>    (b) is defensible — but nothing on master has been soaked.
+> 2. **Private soak, whichever path.** ADR 0046 has never run against a live world. Its §5 success
+>    criteria are the checklist: the unreachable list stays empty of 1-hop entries, the stale-intel
+>    skip disappears from Select captures, and scouts visibly tour instead of pinning at 3.
+> 3. **Then MMO** (already operator-authorized for this work), and read the three signals.
+> 4. **Then combat Tier −1 Wave B** — the top open code workstream (Step 5 below, unchanged).
+>
+> The original plan text is kept below for its detail on gates and observation method.
 
 **Step 0 — answer the open question (5 minutes).** Session `624f61bc` has been blocked on exactly
 one fork for nine days. The recommendation on file is sound and is repeated below.
