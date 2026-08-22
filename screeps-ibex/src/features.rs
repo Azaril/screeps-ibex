@@ -20,6 +20,7 @@ pub fn load_reset() -> ResetFlags {
         environment: js_bool(&reset, "environment"),
         memory: js_bool(&reset, "memory"),
         room_plans: js_bool(&reset, "room_plans"),
+        features: js_bool(&reset, "features"),
     }
 }
 
@@ -28,6 +29,18 @@ pub fn clear_reset() {
     crate::memory_helper::path_set("_features.reset.environment", false);
     crate::memory_helper::path_set("_features.reset.memory", false);
     crate::memory_helper::path_set("_features.reset.room_plans", false);
+    crate::memory_helper::path_set("_features.reset.features", false);
+}
+
+/// One-shot: delete the persisted `Memory._features` tree so this tick's
+/// [`load`] repopulates it from `Features::default()` — reconciling the live
+/// config to the compiled defaults. Needed because [`load`] writes the FULL
+/// resolved struct back every tick, so once a key exists its serde-default
+/// never fires again and a retuned compiled default is silently shadowed
+/// forever by the stale persisted copy (the expansion-stall §1.2 hazard).
+pub fn reset_features_to_defaults() {
+    let root = crate::memory_helper::root();
+    crate::memory_helper::del(&root, "_features");
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -35,6 +48,8 @@ pub struct ResetFlags {
     pub environment: bool,
     pub memory: bool,
     pub room_plans: bool,
+    /// Reconcile `Memory._features` to compiled defaults (one-shot).
+    pub features: bool,
 }
 
 // ─── Feature flag structs ──────────────────────────────────────────────────────
@@ -825,6 +840,7 @@ pub fn load() -> Features {
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("environment"), &JsValue::from_bool(false));
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("memory"), &JsValue::from_bool(false));
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("room_plans"), &JsValue::from_bool(false));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("features"), &JsValue::from_bool(false));
         let _ = js_sys::Reflect::set(js_features.as_ref(), &JsValue::from_str("reset"), &obj);
     }
 

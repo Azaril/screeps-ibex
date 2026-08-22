@@ -1050,6 +1050,14 @@ pub fn tick() {
 
     let reset = crate::features::load_reset();
 
+    // One-shot feature-flag reconcile: wipe the persisted `_features` tree so
+    // the `features::load()` below repopulates it from compiled defaults.
+    // Must run before `clear_reset()`/`load()` touch the tree.
+    if reset.features {
+        info!("Reset: reconciling Memory._features to compiled defaults");
+        crate::features::reset_features_to_defaults();
+    }
+
     //
     // Deserialize world state.
     //
