@@ -32,7 +32,7 @@ Grouped so each group can soak as one increment. **No WFV bump on any of these.*
 - [ ] **Live-adapter gaps** — the sim believes these work; the bot never got them
   - [ ] **D9** — the engaged stuck-threshold ladder was never wired into the live bot (zero `stuck_thresholds` hits in `screeps-ibex/src`)
   - [ ] **D10** — rover discards incomplete flee results (`screeps-rover/src/movementsystem.rs:1678`), so retreating creeps freeze under a swarm
-- [ ] **D28** — an uncontested `Secure` over a hostile-free room can never reach `Resolved`: the terminal requires `engaged_once`, which latches only in-room *with* a focus, and an empty room offers no focus. Let `resolved` fire for an uncontested objective with in-room members, live visibility and zero hostiles.
+- [x] **D28** (`b26eba4`) — an uncontested `Secure` over a hostile-free room can never reach `Resolved`: the terminal requires `engaged_once`, which latches only in-room *with* a focus, and an empty room offers no focus. Let `resolved` fire for an uncontested objective with in-room members, live visibility and zero hostiles.
 - [ ] Decide the fate of the **T1/T2 neighbour kernels** orphaned by Wave A's D27 (`war_decision.rs:182,327` have no non-test callers; `war.rs:531` passes `tower_danger: 0.0`) — wire or delete. Owned by ADR 0037.
 
 ## Design deltas
