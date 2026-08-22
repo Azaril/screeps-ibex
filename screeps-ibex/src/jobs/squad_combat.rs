@@ -358,6 +358,8 @@ impl MoveToRoom {
                     let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, target_tile);
                     mr.range(0);
                     apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
+                    // D9: formation-slot moves carry the engaged ladder (see execute_formation_movement).
+                    mr.stuck_thresholds(StuckThresholds::engaged());
 
                     // Only transition to Engaged when the squad itself has
                     // progressed past Rallying. This prevents individual
@@ -881,6 +883,14 @@ impl Engaged {
                     if let Some(anchor) = anchor {
                         mr.anchor(anchor);
                     }
+                    // D9 (review §1): an ENGAGED member's kernel-decided moves (kite/advance) carry
+                    // rover's shared engaged ladder — stuck repaths keep the default cadence but
+                    // never price a detour around the heal-the-focus cluster (the ADR 0033 slice-7
+                    // fix the sim has had since; travellers keep the default ladder and its
+                    // working friendly-avoid — this is the sim's exact in-room/traveller split).
+                    if engaged {
+                        mr.stuck_thresholds(StuckThresholds::engaged());
+                    }
                 }
                 CombatIntent::Flee { from, range } => {
                     let targets: Vec<FleeTarget> = from.iter().map(|p| FleeTarget { pos: *p, range: range as u32 }).collect();
@@ -1224,6 +1234,11 @@ fn execute_formation_movement(
         let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, target_tile);
         mr.range(0);
         apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
+        // D9 (review §1): formation members are ENGAGED movers — their stuck repaths stay
+        // squadmate-transparent (rover's shared engaged ladder; the sim applies the identical
+        // ladder to its formation members). Slot geometry + the resolver deconflict the box; a
+        // friendly-avoid detour around it is never right.
+        mr.stuck_thresholds(StuckThresholds::engaged());
         Some(())
     })();
 
