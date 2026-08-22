@@ -827,17 +827,40 @@ impl<'a> System<'a> for RunSquadUpdateSystem {
             let living_count = squad_ctx.members.len();
             let slot_count = squad_ctx.layout.as_ref().map(|l| l.slot_count()).unwrap_or(1);
 
-            // Only update if the formation no longer fits the living count.
-            if living_count < slot_count {
+            if formation_needs_update(living_count, slot_count) {
                 squad_ctx.update_formation_for_living_count();
             }
         }
     }
 }
 
+/// D5 (combat review §1): the layout must track the living count in BOTH directions. The old
+/// condition was `living < slots` — shrink-only — so a REFILLED member joined a layout with no
+/// seat for it: its slot index resolved past the layout's offsets to the `(0,0)` fallback
+/// (`get_offset`), a phantom seat stacked on the anchor. `update_formation_for_living_count` is
+/// already count-driven for arbitrary N (and re-compacts slot indices), so growth is the same one
+/// call. Pure for the pin.
+pub(crate) fn formation_needs_update(living_count: usize, slot_count: usize) -> bool {
+    living_count != slot_count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D5 pin (combat review §1): the formation layout must track the living count in BOTH
+    /// directions. Shrink-only (`<`) left a REFILLED member with a slot index past the layout's
+    /// offsets, and `get_offset`'s out-of-range fallback is `(0, 0)` — a phantom seat stacked on
+    /// the anchor for the rest of the fight.
+    #[test]
+    fn formation_updates_on_refill_growth_not_just_death_shrink() {
+        assert!(formation_needs_update(3, 2), "refill grew the roster past the layout → regrow (the D5 case)");
+        assert!(formation_needs_update(1, 2), "death shrank the roster → degrade (unchanged behavior)");
+        assert!(!formation_needs_update(2, 2), "exact fit → leave the layout alone");
+        assert!(!formation_needs_update(1, 1), "solo squad with the 1-slot none() layout → no churn");
+        // The phantom mechanism itself: an out-of-range slot resolves to the anchor tile.
+        assert_eq!(FormationLayout::line(2).get_offset(2), (0, 0), "out-of-range slot IS the (0,0) fallback");
+    }
 
     #[test]
     fn attack_target_resolve_focus_keeps_structures_as_position_only() {

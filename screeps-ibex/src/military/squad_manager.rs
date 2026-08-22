@@ -419,6 +419,25 @@ fn forming_state(
     (forming, forming_progress)
 }
 
+/// D4 (combat review §1): the travel/rally machinery must NOT re-capture a squad whose fight is
+/// live. `engaged_once` alone is not enough (a wiped-out-of-room or fully-retreated squad must be
+/// re-captured so the roster re-masses); `in_room_any` alone is not enough (a traveling squad whose
+/// lead just crossed in still needs the gather machinery until it genuinely engages). Pure so the
+/// D4 refill-recapture pin is host-testable.
+fn fight_owns_squad_frame(engaged_once: bool, in_room_any: bool) -> bool {
+    engaged_once && in_room_any
+}
+
+/// D6 (combat review §1): whether a squad occupies one of the `MAX_FORMING_SQUADS` offense pacing
+/// slots. The cap exists to serialize the HIGH-priority spawn burst of rosters still ASSEMBLING —
+/// an ENGAGED squad refilling battle casualties is not assembling, and counting it silently turned
+/// the forming cap into an offense-concurrency reducer (2 engaged-damaged squads ⇒ zero new offense
+/// claims, forever). Mirrors `forming_state`'s `!engaged_once` semantics — the two must not
+/// disagree. Defense never counts (REC-008).
+fn counts_toward_forming_cap(is_defense: bool, engaged_once: bool, requested_slots: usize, filled_slots: usize) -> bool {
+    !is_defense && !engaged_once && requested_slots > 0 && filled_slots < requested_slots
+}
+
 /// REC-004(b): whether the travel-departure clock (`departed_at`) may be CLEARED this tick. Only once the
 /// squad has GENUINELY engaged (the travel phase is over for this generation) — never on a transient
 /// `in_target_room` poke. Pre-fix the stamp was deleted on EVERY non-traveling tick, so an
@@ -2424,12 +2443,17 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // intercept, not just `Defend{..}`) is EXEMPT from the forming pace — defenders deploy
                 // immediately (FIX A) and must never queue behind offense. Counting only OFFENSE forming makes
                 // the cap serialize offense rosters at <= MAX_FORMING_SQUADS without ever starving base defense.
-                if is_defense_objective(&o.kind, o.owner) {
-                    return false;
-                }
+                // D6: an ENGAGED squad refilling battle casualties is not "forming" — counting it
+                // here silently reduced offense concurrency (the pure `counts_toward_forming_cap`
+                // kernel carries the pin; `forming_state` at the lease already excluded engaged).
+                let is_defense = is_defense_objective(&o.kind, o.owner);
                 let requested = o.force.squads.first().map(|c| c.slots.len()).unwrap_or(0);
-                let filled = data.squad_contexts.get(*se).map(|c| c.filled_slot_count()).unwrap_or(0);
-                requested > 0 && filled < requested
+                let (filled, engaged_once) = data
+                    .squad_contexts
+                    .get(*se)
+                    .map(|c| (c.filled_slot_count(), c.engaged_once))
+                    .unwrap_or((0, false));
+                counts_toward_forming_cap(is_defense, engaged_once, requested, filled)
             })
             .count();
         let claim_anchor = homes.first().map(|h| h.name);
@@ -3186,7 +3210,18 @@ fn compute_squad_orders(
         || screeps_combat_decision::deploy_then_retreat_allowed(present_wins_or_stalls, have_target_intel, quorum_present);
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
-        if !ready_to_depart {
+        // D4 (combat review §1): once the squad has GENUINELY engaged and still has a member in the
+        // target room, the FIGHT owns the squad frame. A mid-fight slot refill spawning at home
+        // flips `all_arrived` false (and can break the depart gate), which used to drag the whole
+        // squad back through this rally/travel machinery — the RALLY arm Held every member
+        // (fighters frozen mid-fight) and the assault arm re-anchored the box (kiting dead for the
+        // whole replacement window). Engaged members keep their kernel orders (kite/advance via the
+        // arrived arms below); the refill member self-drives to the target room through the job's
+        // own travel — the rec002-pinned engaged-arm behavior that preserves out-of-room travel
+        // orders. The exemption drops the moment no member is in-room (wipe or full retreat), and
+        // the travel machinery re-captures the roster exactly as before.
+        let fight_owns_squad = fight_owns_squad_frame(ctx.engaged_once, in_room_any);
+        if !ready_to_depart && !fight_owns_squad {
             // RALLY/FORMING: hold at home and group up while the roster spawns. With MULTI-HOME SPAWN the
             // members are at DIFFERENT homes; a cross-room formation march toward one home would re-introduce
             // the very frozen-anchor stall this fix removes (and needlessly pull a member off its own spawn,
@@ -3204,7 +3239,7 @@ fn compute_squad_orders(
                     requested_slots, uncontested, if uncontested { "quorum" } else { "full roster" }
                 );
             }
-        } else if !all_arrived {
+        } else if !all_arrived && !fight_owns_squad {
             // ── MOVEMENT-STALL FIX (ADR 0028 K0): SOLO travel to a SHARED rally, THEN assault in formation.
             //
             // The squad spawned from MANY homes (multi-home spawn preserved) so its members are rooms apart.
@@ -4250,6 +4285,31 @@ mod tests {
         assert!(!squad_is_wiped(0, 0), "fresh squad, nothing spawned yet → not wiped");
         assert!(!squad_is_wiped(4, 2), "still has living members → not wiped");
         assert!(squad_is_wiped(4, 0), "spawned members and all are gone → wiped");
+    }
+
+    /// D4 pin (combat review §1): a mid-fight slot refill must NOT hand an engaged squad back to
+    /// the rally/travel machinery. The exemption fires only while the fight is live (engaged AND a
+    /// member in-room); a wiped-out-of-room or retreated squad is re-captured, and a never-engaged
+    /// traveling squad is never exempt.
+    #[test]
+    fn engaged_in_room_squad_is_exempt_from_travel_recapture() {
+        assert!(fight_owns_squad_frame(true, true), "engaged + member in-room → the fight owns the frame");
+        assert!(!fight_owns_squad_frame(true, false), "engaged but nobody in-room (wipe/retreat) → re-capture");
+        assert!(!fight_owns_squad_frame(false, true), "lead crossed in but never engaged → gather machinery still owns it");
+        assert!(!fight_owns_squad_frame(false, false), "traveling → travel machinery owns it");
+    }
+
+    /// D6 pin (combat review §1): the MAX_FORMING_SQUADS pacing cap counts only ASSEMBLING offense
+    /// rosters. An ENGAGED squad refilling battle casualties (filled < requested with engaged_once)
+    /// must not consume a pacing slot — with the old counter, two engaged-damaged squads froze all
+    /// new offense claims indefinitely.
+    #[test]
+    fn engaged_damaged_squads_do_not_consume_the_forming_cap() {
+        assert!(!counts_toward_forming_cap(false, true, 4, 2), "engaged, refilling casualties → NOT forming");
+        assert!(counts_toward_forming_cap(false, false, 4, 2), "assembling (never engaged) → forming");
+        assert!(!counts_toward_forming_cap(true, false, 4, 2), "defense never counts (REC-008)");
+        assert!(!counts_toward_forming_cap(false, false, 4, 4), "full roster → not forming");
+        assert!(!counts_toward_forming_cap(false, false, 0, 0), "no requested force → not forming");
     }
 
     #[test]
