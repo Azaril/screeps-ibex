@@ -139,6 +139,23 @@ pub fn quantized_staleness_multiplier(age: u32, want_fresh_within: u32) -> f32 {
     (ratio * 4.0).floor() / 4.0
 }
 
+/// Does this entry still need servicing, given the room's current intel age?
+///
+/// This one predicate carries the scout self-pin guarantee that the deleted
+/// `VisibilityQueue::best_unclaimed_for` current-room filter used to carry
+/// (stall report follow-up L1, master `e857c76`). A scout standing in a room
+/// SEES it, so that room's `intel_age` is 0 — and 0 is never `>` any
+/// `want_fresh_within`, including an imperative 0. So the room a scout occupies
+/// can never enter the demand set, can never become a tour head, and the
+/// claim→instant-arrive→release→re-claim fixed point that minted the 103-room
+/// poison list is unreachable by construction rather than by a special case.
+///
+/// Pinned by `occupied_room_never_needs_service` and
+/// `imperative_entry_still_excludes_the_occupied_room`.
+pub fn entry_needs_service(intel_age: u32, want_fresh_within: u32) -> bool {
+    intel_age > want_fresh_within
+}
+
 /// One demand entry as the tour builder sees it.
 #[derive(Debug, Clone)]
 pub struct TourDemand {
@@ -512,7 +529,7 @@ impl<'a> System<'a> for ScoutAssignmentSystem {
             .visibility_queue
             .entries
             .iter()
-            .filter(|e| intel_age(e.room_name) > e.want_fresh_within)
+            .filter(|e| entry_needs_service(intel_age(e.room_name), e.want_fresh_within))
             .map(|e| {
                 let age = intel_age(e.room_name);
                 let rate = tier_rate_et(e.priority) * quantized_staleness_multiplier(age, e.want_fresh_within);
@@ -530,7 +547,7 @@ impl<'a> System<'a> for ScoutAssignmentSystem {
             })
             .filter(|d| d.scoutable || d.observable)
             .collect();
-        demand.sort_by(|a, b| a.room.cmp(&b.room));
+        demand.sort_by_key(|d| d.room);
 
         // ── Observer-throughput projection (resolution #7) ────────────────
         // Per observer, drop the top in-range OBSERVE-able entries it can
@@ -1049,6 +1066,41 @@ mod tests {
         assert_eq!(quantized_staleness_multiplier(u32::MAX, 250), 3.0);
         // want_fresh_within = 0 (imperative) never divides by zero.
         assert_eq!(quantized_staleness_multiplier(5, 0), 3.0);
+    }
+
+    // ── Scout self-pin regression (stall report L1, master `e857c76`) ───────
+    //
+    // These two pins replace `best_unclaimed_never_returns_the_room_the_scout_is
+    // _standing_in`, which died with `best_unclaimed_for` when this ADR deleted
+    // the greedy per-creep picker. The guarantee is the same and must not
+    // regress: a scout must never be routed to the room it already occupies.
+
+    #[test]
+    fn occupied_room_never_needs_service() {
+        // Presence IS visibility: the room a scout stands in has intel_age 0, so
+        // it can never enter the demand set and can never become a tour head.
+        // This is the fixed point that minted the 103-room poison list.
+        for want_fresh_within in [0, 1, 100, 250, DEFAULT_VISIBILITY_TTL, u32::MAX] {
+            assert!(
+                !entry_needs_service(0, want_fresh_within),
+                "a room with fresh intel (age 0 — a scout is standing in it) must never need service, \
+                 but it did at want_fresh_within={want_fresh_within}"
+            );
+        }
+    }
+
+    #[test]
+    fn imperative_entry_still_excludes_the_occupied_room() {
+        // The nastiest variant: an operator-imperative `want_fresh_within = 0`
+        // entry. Even that must not re-open the fixed point — the scout would
+        // claim, arrive instantly on room membership WITHOUT issuing a move,
+        // release, and re-claim forever.
+        assert!(!entry_needs_service(0, 0), "imperative entry must still exclude the occupied room");
+        // But it DOES demand service the moment the room is even one tick stale.
+        assert!(entry_needs_service(1, 0), "an imperative entry services a 1-tick-stale room");
+        // And a normal entry only once it exceeds its own window, not before.
+        assert!(!entry_needs_service(250, 250));
+        assert!(entry_needs_service(251, 250));
     }
 
     // ── Observer-throughput projection (review resolution #7) ───────────────
