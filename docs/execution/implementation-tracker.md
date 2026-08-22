@@ -95,10 +95,10 @@ expansion program; collects the 0018 "has an SK farm ever run" evidence for free
 
 **Phase 1 — WS-2 · Combat review Tier −1 Wave B** →
 [`../implementation/ws-2-combat-wave-b.md`](../implementation/ws-2-combat-wave-b.md).
-**6 of 8 done 2026-08-22** (D2/D3 `8fa0c60`, D4/D5/D6 `be5ce24`, D28 `b26eba4` — all pure kernels,
-13 RED-verified pins, no WFV; ADR 0027 amended with the vacuous-clear rule). **Remaining: D9, D10**
-(the rover/live-adapter pair) **+ the 0037 T1/T2 orphan decision**. **R19 does not gate this**
-(RULING-6). *Closes: 0037, the 2026-07-09 review as a live document.*
+**CODE-COMPLETE 2026-08-23**: D2/D3 `8fa0c60`, D4/D5/D6 `be5ce24`, D28 `b26eba4`, D9/D10
+`1a85a57` + rover `850a06b`, T1/T2 ruled retained-by-design. 15 RED-verified pins, no WFV;
+ADR 0027 amended. **Remaining: the private soak (B-1) before these ride an MMO deploy.**
+*Closes: 0037's decision item and the 2026-07-09 review's Tier −1 as a live work list.*
 
 **Phase 2 — the triage pass: decide, don't build** (one session; create its impl doc — the
 verdicts must land as ADR amendments via `Design deltas`). Every §6/§8 item gets one of three
@@ -186,7 +186,7 @@ One line per item.
 - `0034` — no convergence gates in `param_sweep.rs`; renewable-rally bias sim-only, never live-wired.
 - `0035` — FU1 scout-first request/await pipeline; FU2 give-up for a committed squad that never engages.
 - `0036` — live raze confirmation blocked on private-server world mechanics (B-1).
-- `0037` — **decide the fate of T1/T2 kernels orphaned by D27** (`war_decision.rs:182,327` have no non-test callers; `war.rs:531` passes `tower_danger: 0.0`). See RULING-3.
+- `0037` — ~~T1/T2 orphan decision~~ **RULED 2026-08-23: retained by design** (war.rs:550 documents it; owned-path `tower_danger: 0.0` is the neighbour-only-signal design). Remaining: T3 seam adds no candidate and only logs under `war_debug`.
 - `0039` — P2 cohesion-kernel extraction, P3 unified self-play loop, P4 render corpus.
 
 **Economy**
@@ -262,7 +262,7 @@ wire it or delete it — not necessarily work.
 | Readiness tranche | `military/damage.rs:33,39,64,78,99,115` | `defender_spawn_readiness`, `net_tower_damage`, `should_towers_fire`, `estimated_ticks_to_kill` — built, tested, uncalled. One coherent unfinished tranche. |
 | `issue_virtual_anchor_flee` | `military/formation.rs:398` | The **only** squad-level flee construct; nothing replaced it ⇒ squads have no coordinated retreat. Adjacent to review D10. |
 | `Job::describe` layer | `jobs/jobsystem.rs:99,105` + ~15 jobs | Every job implements it; nothing dispatches it. A whole overlay with no renderer. |
-| T1/T2 neighbour kernels | `war_decision.rs:182,327` | Orphaned by D27's seam removal. See RULING-3. |
+| T1/T2 neighbour kernels | `war_decision.rs:182,327` | **Decided: retained by design** — sim/test-covered, awaiting the offense-side candidate feed (war.rs:550). Not dead code. |
 | `HoldModel::Suppress` | `room_economics.rs:88,191` | Unreachable — SK farming runs a duplicate ROI kernel at `sourcekeeper.rs:99`. |
 | `StructureIdentifier` | `structureidentifier.rs:7,32` | Superseded half of a live module. |
 
@@ -307,6 +307,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-23** — **Wave B CODE-COMPLETE**: D9/D10 landed (`1a85a57` + rover `850a06b` — shared engaged ladder now ONE implementation in rover, wired live; flee uses partial paths); T1/T2 ruled retained-by-design. 15 pins total. The 2026-07-09 review Tier −1 work list is closed; soak pending B-1. World checks 1–3 healthy.
 
 - **2026-08-22 (late)** — Wave B 6/8: D2/D3 safe-mode (`8fa0c60`), D4/D5/D6 roster churn (`be5ce24`), D28 vacuous clear (`b26eba4` + decision/eval submodules). 13 RED-verified pins; fence green; ADR 0027 amended. D9/D10 + 0037 decision remain. WS-1 observation healthy through 3 checks (claim pipeline live, C2 signature absent).
 

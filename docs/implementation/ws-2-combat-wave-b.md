@@ -1,23 +1,13 @@
 # Combat Tier −1 Wave B — implementation
 
-**Workstream:** WS-2 · **Advances:** ADR 0008a, ADR 0037, [combat review 2026-07-09](../reviews/combat-systems-review-2026-07-09.md) · **Status:** active
+**Workstream:** WS-2 · **Advances:** ADR 0008a, ADR 0037, [combat review 2026-07-09](../reviews/combat-systems-review-2026-07-09.md) · **Status:** code-complete — soak pending (B-1)
 
 ## Resume point
 
-**6 of 8 defects fixed and pushed (2026-08-22 late). Next action: D9.**
-
-D9 = wire the engaged stuck-threshold ladder into the live bot. The sim's heal-cluster fix
-(`engaged_stuck_thresholds`, the traveller-vs-engaged ladder split in `screeps-rover` /
-`squad.rs` per the ADR 0033 slice-7 work) was never wired into the live adapter — zero
-`stuck_thresholds` hits in `screeps-ibex/src`. Start by finding the sim's wiring
-(`screeps-combat-agent` / rover `MoverConfig`) and mirroring it in the live `MovementSystem`
-construction. Then D10: `screeps-rover/src/movementsystem.rs:1678` returns `PathNotFound` for an
-INCOMPLETE flee result instead of using the partial path — a retreating creep under a swarm
-freezes; use the incomplete path (flee semantics: any distance gained beats standing still).
-Then the 0037 T1/T2 orphan decision (wire or delete — see plan).
-
-Method notes that held: every fix lands as a pure kernel + RED-verified pins; revert TEMP-RED
-injections with Edit, never `git checkout --` (that discarded uncommitted work once this session).
+**CODE-COMPLETE (2026-08-23). All 8 defects fixed + the T1/T2 ruling made. Remaining: the
+private-server soak wave once B-1 clears (elevated `Start-Service com.docker.service`), watching
+the D4/D5 churn signatures (hold-tick spikes, Loose ratchets after casualties). After a clean
+soak these ride the next MMO deploy and this doc is DELETED per the impl-doc lifecycle.**
 
 ## Target
 
@@ -40,7 +30,7 @@ Grouped so each group can soak as one increment. **No WFV bump on any of these.*
   - [x] **D9** (`1a85a57`) — the engaged stuck-threshold ladder was never wired into the live bot (zero `stuck_thresholds` hits in `screeps-ibex/src`)
   - [x] **D10** (rover `850a06b`) — rover discards incomplete flee results (`screeps-rover/src/movementsystem.rs:1678`), so retreating creeps freeze under a swarm
 - [x] **D28** (`b26eba4`) — an uncontested `Secure` over a hostile-free room can never reach `Resolved`: the terminal requires `engaged_once`, which latches only in-room *with* a focus, and an empty room offers no focus. Let `resolved` fire for an uncontested objective with in-room members, live visibility and zero hostiles.
-- [ ] Decide the fate of the **T1/T2 neighbour kernels** orphaned by Wave A's D27 (`war_decision.rs:182,327` have no non-test callers; `war.rs:531` passes `tower_danger: 0.0`) — wire or delete. Owned by ADR 0037.
+- [x] **T1/T2 decision: RETAIN, no code change** — the Wave A D27 commit itself documents it (war.rs:550): the kernels stay in `screeps-combat-decision` as sim/test-covered decision code for a future offense-side candidate feed; `tower_danger: 0.0` on the owned path is BY DESIGN (the neighbour-only signal — an owned room's towers are ours). The reconciliation's "orphaned" framing was too strong.
 
 ## Design deltas
 
@@ -60,6 +50,7 @@ Grouped so each group can soak as one increment. **No WFV bump on any of these.*
 
 ## Log
 
+- 2026-08-23 — D9 (`1a85a57`: rover `StuckThresholds::engaged()` shared constructor, agent delegation, live wiring at the two mirror sites) + D10 (rover `850a06b`: flee uses partial paths). 2 more RED-verified pins. T1/T2 ruled retained-by-design (war.rs:550 already documented it). CODE-COMPLETE; soak pending B-1.
 - 2026-08-22 (late) — D2/D3 (`8fa0c60`), D4/D5/D6 (`be5ce24`), D28 (`b26eba4` + decision/eval
   submodule commits, pushed). 13 RED-verified pins; ibex 327 / decision 345 / eval 114 green; wasm
   clean; determinism fence passes. ADR 0027 amended. Remaining: D9, D10, 0037 decision.
