@@ -137,8 +137,8 @@ Nothing else is uncommitted; there are no untracked files and no stashes.
 | `worktree-agent-a365489048f5b1403` | 0 (merged) | Hauler concurrency — already in master via `26f8312`. Worktree has stray dirty submodule pointers; safe to delete. |
 | `worktree-agent-afb8dd11f694e32b3` | 0 (merged) | ADR 0044 A3 Arch 1 — already in master. Safe to delete. |
 | `blissful-shaw-165bc1` (detached `e480ed9`) | 0 | Zombie-war-mission fix — already on master. Safe to delete. |
-| `new-room-planning` | 306 ahead / 305 behind | Long-dead divergent branch (last touched pre-July). |
-| `docs/review-planning` | — | Historical. |
+| `new-room-planning` | **0** (fully merged) | Local tip `21e1f2f` *is* the merge-base with master — it is an ancestor, nothing unique on it. Safe to delete. (The `git branch -vv` "306 ahead / 305 behind" is relative to `origin/new-room-planning`, not master — see §4.9.) |
+| `docs/review-planning` | **0** (fully merged) | Ancestor of master, local and remote. Safe to delete. |
 
 ### 3.3 Proposed / accepted-but-unimplemented ADRs
 
@@ -243,8 +243,13 @@ G4 migration marathon; ended cleanly on a dismantle-danger simplification).
    since. Nothing in it is *wrong*, but it is a June artifact and should not be read as current.
 8. **Nothing has been pushed to `origin` in ~7 weeks** — 119 superproject commits and 45 submodule
    commits exist only on this machine. A single point of failure, not a correctness issue.
-9. **`new-room-planning` (306 ahead / 305 behind)** — no doc or memory entry explains what is on it
-   or whether anything there is still wanted. Candidate for deletion after a look.
+9. **Stale branches live only on `origin`, not locally.** Every local branch other than `master` is
+   fully merged (0 unique commits vs master) and safe to delete: `new-room-planning`,
+   `docs/review-planning`, and the detached `blissful-shaw-165bc1`. What *is* divergent is on the
+   remote: **`origin/new-room-planning`** carries 305 unique commits whose tip is `fe0cf5b`
+   (2026-02-10 — it predates the entire rewrite), and **`origin/bindgen`** carries 298 unique
+   commits from **2021**. Neither is referenced by any doc or memory entry. Low-stakes cleanup,
+   but nothing local depends on either.
 10. **A dead workflow artifact** referenced by memory: the Wave-2 ADR 0046 design-review output at
     `…\05c3d02c…\tasks\w4dpnhtzo.output` is 0 bytes. The review was successfully re-run (28
     findings, four reviewers; full JSON under `…\624f61bc…\tasks\ws40tlrlm.output`) and **all 28
@@ -306,8 +311,10 @@ none of them needs a reset.
   open combat/expansion work, so it parallelizes cleanly if you want a second track.
 
 **Housekeeping, any time:** push `master` plus all 45 submodule commits to `origin`; delete the
-three merged worktrees (`a365489048f5b1403`, `afb8dd11f694e32b3`, `blissful-shaw-165bc1`); rename
-the duplicate ADR 0044; triage or delete `new-room-planning`.
+three merged worktrees (`a365489048f5b1403`, `afb8dd11f694e32b3`, `blissful-shaw-165bc1`) and the
+three fully-merged local branches; rename the duplicate ADR 0044; decide whether the two stale
+remote branches (`origin/new-room-planning` @ 2026-02-10, `origin/bindgen` @ 2021) are worth
+keeping.
 
 ---
 
