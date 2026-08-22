@@ -49,54 +49,78 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ### WS-1 · Get WFV 28 verified and live → [`../implementation/ws-1-ship-wfv28.md`](../implementation/ws-1-ship-wfv28.md)
 
-**State: BLOCKED on tooling (see §2). Nothing else should start.**
+**State: ACTIVE — deployed straight to MMO 2026-08-22 (operator decision), observing.**
 
-`master` (WFV 28) carries ADR 0046 plus the expansion fixes and has **never run against
-any world**. This is the only genuinely half-finished thing in the project — everything else is
-either shipped or not started.
+B-1 blocked the private lane, so the operator inverted the order: MMO directly (pre-authorized
+2026-08-11), with the soak plan's C1–C5 criteria judged against live. Full record: the WS-1 doc.
 
 | Step | State |
 |---|---|
-| Private soak per [`adr-0046-private-soak-plan.md`](adr-0046-private-soak-plan.md) | **blocked** — Docker |
-| Judge against ADR 0046 §5 criteria (C1–C5 in the plan) | pending soak |
-| MMO deploy + observe | **deliberately held** — live is healthy at 7 rooms; nothing forces the reset |
+| MMO deploy (loud reset WFV 27→28) | **done 2026-08-22** — see WS-1 doc for verification |
+| One-shot `reset.features` fired — `Memory._features` reconciled to compiled defaults (`77dc9cc`) | done — note: this turns `military.offense` back ON (compiled default; had been manually off since the July drain era — Wave A's fixes are in this artifact) |
+| Observe one discover cycle, judge C1–C5 live | in progress |
 | L2 poison-list self-heal — ships **last** of the expansion program | pending live evidence |
-
-**Deploy-risk note (from the 2026-08-22 code sweep):** WFV 28 has never executed, yet these ship
-default-ON: `military.offense`, `source_keeper.farming`, `derelict.declaim`,
-`derelict.breach_sealed`, `claim.on` (rapid-spread, `max_concurrent_missions: 4`), `visualize.on`.
-Review the set before the MMO step, not before the private step.
+| Private soak (when B-1 clears) — now for the harness lane, not this deploy | deferred |
 
 ---
 
 ## 2. BLOCKED
 
-- **B-1 · `com.docker.service` is Stopped/Manual; starting it needs Administrator.** Symptom is
-  `docker ps` **hanging**, not erroring, while Docker Desktop, its pipes and the WSL distro all look
-  healthy. Fix (elevated): `Start-Service com.docker.service` then
-  `Set-Service com.docker.service -StartupType Automatic`. Detail: soak plan §0.
-  **This one blocker gates far more than WS-1:** ADR 0046's soak, H5 parity oracle, P2.M2-LIVE,
-  M4 exit criteria 1–11, ADR 0036 live-raze confirmation, ADR 0028's `run_defended_lifecycle`
-  closeout, and the dismantle-seam soak. It is the highest-leverage unblock in the project.
+- **B-1 · `com.docker.service` is Stopped/Manual; starting it needs Administrator.** Symptom:
+  `docker ps` **hangs** (not errors) while everything else looks healthy. Fix (elevated):
+  `Start-Service com.docker.service` + `Set-Service … -StartupType Automatic`; detail in soak plan
+  §0. Gates the whole private-server lane: H5 parity oracle, P2.M2-LIVE, M4 exit criteria, 0036
+  live-raze, 0028 closeout, the dismantle-seam soak. Highest-leverage unblock in the project.
 
 ---
 
-## 3. NEXT — ordered queue, not started
+## 3. NEXT — the completion roadmap (decided 2026-08-22)
 
-Each is one workstream. Do not begin one while §1 is occupied.
+Goal: **finish what is started before starting anything new.** Ordered so each phase closes the
+maximum number of open ADR tails; Phase 2 is a *decision* pass, not a build pass. One workstream
+active at a time (§1).
 
-1. **WS-2 · Combat review Tier −1 Wave B** → [`../implementation/ws-2-combat-wave-b.md`](../implementation/ws-2-combat-wave-b.md). D2, D3 (safe-mode: hair trigger at
-   `CRITICAL_STRUCTURE_MIN_HITS = 5000`, and a fires-once-ever latch), D4, D5, D6 (roster churn),
-   D9, D10 (live-adapter gaps), D28. No WFV bump — soaks as one wave, no reset. Closes the
-   2026-07-09 review as a live document. **R19 does not gate this** (see RULING-6).
-2. **WS-3 · ADR 0010 boost producer → ADR 0041 boost layer.** 0041 is the highest-value item on the
-   board (gates review risk R1, enemy-boost blindness, and the whole boosted-assault frontier) but
-   it is **blocked on 0010**: nothing in the bot ever calls `boostCreep`, and `BoostQueue` is a dead
-   pipe. 0010 L0 first, then 0041.
-3. **WS-4 · R19 chokepoint re-tune.** Its rover-eval sweep is already committed (`c4b3d17`).
-   Resolve RULING-6 as part of it.
-4. **WS-5 · ADR 0045 power creeps.** Pure greenfield, zero interaction with the above — genuinely
-   parallelizable, which is exactly why it must wait until §1 and WS-2 are closed.
+**Phase 0 — close WS-1** (above). Observe live, judge C1–C5, L2 last. Ride-alongs while in the
+deploy loop: UNOWNED-4 (`search_radius` retune once scouting is healthy), UNOWNED-5/6 (features.rs
+doc/flag contradictions). *Closes: 0046→Live, 0038, 0017's deploy residue, 0021 re-head, the
+expansion program; collects the 0018 "has an SK farm ever run" evidence for free.*
+
+**Phase 1 — WS-2 · Combat review Tier −1 Wave B** →
+[`../implementation/ws-2-combat-wave-b.md`](../implementation/ws-2-combat-wave-b.md).
+D2/D3 → D4/D5/D6 → D9/D10 → D28 → the 0037 T1/T2 orphan decision. No WFV bump. **R19 does not gate
+this** (RULING-6). *Closes: 0037, the 2026-07-09 review as a live document.*
+
+**Phase 2 — the triage pass: decide, don't build** (one session; create its impl doc — the
+verdicts must land as ADR amendments via `Design deltas`). Every §6/§8 item gets one of three
+verdicts: **schedule** (into Phases 3–6), **amend out** (shrink the ADR's end state — candidates:
+0030 `EngagementTempo` → Withdraw/fold into 0031; 0020 S5/S6/S7 keep-or-cut; 0026a's six deferred
+modes; 0039 P2–P4; 0025a residual → close as documented-mitigated), or **do now** (the §8
+wire-or-delete one-liners, then **UNOWNED-3: remove `#![allow(dead_code)]`** so the compiler
+enforces the register). *Exit criterion: every remaining §6 line is inside a scheduled phase.
+Plausibly closes 6–10 ADRs by amendment.*
+
+**Phase 3 — WS-3 · Boost pipeline (ADR 0010 L0 → 0041).** The biggest completion unlock: 0041
+gates review risk R1 (enemy-boost blindness, the top MMO risk) and the whole boosted-assault
+frontier, but is **blocked on 0010** — nothing calls `boostCreep`; `BoostQueue` is a dead pipe.
+*Closes: 0010, 0041; unblocks 0019 boosted-TOUGH, 0020-TOUGH, 0008a Tier 3, 0008 S2.*
+
+**Phase 4 — WS-4 · R19 chokepoint re-tune.** One tournament pass on realistic terrain (entry point
+already committed: rover-eval `c4b3d17`). *Closes six tuning tails as a batch — 0019 S4-TUNE,
+0024 FU#4, 0026 L6c, 0031a/0031b's invalidated sweeps, 0032 `value_e`, 0033 kite retune — which is
+why RULING-6 held them.*
+
+**Phase 5 — economy completion.** The 0043 band→EV conversions (A2/A4/A7/A9/A10, A11, A12,
+C1–C7), 0042 `opportunity_floor` + R1–R4, 0044/0044a P3 all-sinks activation, 0007 item 4,
+0040 §D8 reserve retirement. Mechanical batch work against a shipped market.
+*Closes: 0007, 0040, 0042, 0043, 0044, 0044a.*
+
+**Phase 6 — remaining designs, only what survives Phase 2.** WS-5 (0045 power creeps) plus
+whichever of 0011/0012/0013/0014/0015/0016 the triage keeps (0013's spending half is already
+delegated to 0045; 0014 may reduce to the W4 `WarDecl` hook owned by 0008). New builds, so last
+by policy.
+
+*Convergence: Phases 0–2 ≈ a week of sessions, taking the corpus from 2 Closed to ~15–20 Closed;
+Phases 3–5 are the three real build programs; Phase 6 is a choice, not a debt.*
 
 ---
 
@@ -104,11 +128,11 @@ Each is one workstream. Do not begin one while §1 is occupied.
 
 | Where | Artifact | WFV | Date |
 |---|---|---|---|
-| Live MMO (shardX) | `ab692bd` + decision `f6c084a` | 27 | 2026-07-28 |
-| Docker private | same | 27 | 2026-07-28 |
-| `master` | HEAD (WFV-anchored; do not pin a SHA here — it drifts every commit) | **28 — never executed anywhere** | since 2026-08-22 |
+| Live MMO (shardX) | `77dc9cc` (wasm `d9b748497e4a`) | **28** | 2026-08-22 |
+| Docker private | `ab692bd` (stale — refresh when B-1 clears) | 27 | 2026-07-28 |
+| `master` | HEAD (WFV-anchored; do not pin a SHA here — it drifts every commit) | 28 — **live on MMO** | since 2026-08-22 |
 
-**Anything committed after `ab692bd` is undeployed.** Use this as the test when an ADR claims a
+**The deployed-artifact test point is now `77dc9cc`** (2026-08-22); anything after it is undeployed. Use this as the test when an ADR claims a
 deploy — pre-split ADRs claimed deploy dates predating the only real one (fixed by the doc split).
 `wfv27-deployable-e857c76` is the last no-reset point. Live MMO baseline 2026-08-22: 7 rooms,
 GCL 12, CPU 18.5/140, bucket 10000 flat.
@@ -202,9 +226,12 @@ One line per item.
   `:657`.
 - **UNOWNED-6 · `construction.allow_replan`** (`features.rs:97`) is read by no code — an operator
   flipping it gets nothing.
-- **UNOWNED-7 · Stale `Memory._features` overrides** can both shadow retunes and silently revert
-  them — a live-operations hazard for every default-ON flag. Needs a versioned posture or a
-  refresh procedure.
+- ~~**UNOWNED-7 · Stale `Memory._features` overrides**~~ **CLOSED 2026-08-22** by the
+  `reset.features` one-shot (`77dc9cc`): setting `Memory._features.reset.features = true` rebuilds
+  the persisted tree from compiled defaults next tick (self-clearing, like the other reset flags).
+  Fired and live-verified on MMO the same day — `military.offense` reconciled `false→true`, new
+  keys appeared, flag self-cleared. **Deliberate retunes now go through this pattern**, never a
+  hand-edit that then shadows future defaults.
 - ~~**CHORE-1 · 29 ADR headers are stale.**~~ **CLOSED 2026-08-22 by the design/implementation
   split.** All 56 ADRs were rewritten as pure end-state designs; status moved here and to
   [`../implementation/`](../implementation/). The drift class is now structurally impossible — an
@@ -270,6 +297,9 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-22** — **WFV 28 DEPLOYED TO LIVE MMO** (`77dc9cc`, wasm `d9b748497e4a`; operator inverted soak order, MMO-first). Loud reset clean: 0 panics, CPU 52→37/140, bucket 10000. `reset.features` one-shot built + fired + verified — live config at compiled-default parity (offense back ON; Wave A fixes in-artifact). Closes UNOWNED-7. Observation window open (C1–C5).
+- **2026-08-22** — Completion roadmap (Phases 0–6) recorded in §3; §1 updated to MMO-first.
 
 - **2026-08-22** — **Design/implementation split.** All 56 ADRs rewritten as pure end-state designs; status moved here and to `../implementation/`. Status vocabulary reduced to Decided/Draft/Superseded/Withdrawn (+ note types). Closes CHORE-1 structurally. Adversarial verify caught 4 design-loss regressions and 19 lesser ones, all remediated and re-verified. Rollback tag: `pre-doc-split`.
 - **2026-08-22** — Full ADR-corpus reconciliation (56 verified, 29 drifted); this tracker created; rulings 1–7 recorded.
