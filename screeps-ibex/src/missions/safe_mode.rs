@@ -14,12 +14,29 @@ use specs::*;
 /// at risk, consider safe mode.
 const SAFE_MODE_DPS_THRESHOLD: f32 = 300.0;
 
-/// Minimum hits on a critical structure before we trigger safe mode.
-/// If any spawn or storage drops below this, it's an emergency.
-const CRITICAL_STRUCTURE_MIN_HITS: u32 = 5000;
-
 /// Cooldown between safe mode evaluations (ticks).
 const EVAL_INTERVAL: u32 = 5;
+
+/// A critical structure counts as "about to be destroyed" below this fraction
+/// of its max hits (2/5 ⇒ 2000 for a 5000-hit spawn). The old absolute floor
+/// (`CRITICAL_STRUCTURE_MIN_HITS = 5000`) EQUALLED spawn max hits, so any
+/// scratch armed the trigger and a single poke could spend the scarce,
+/// irreversible safe-mode charge (combat review 2026-07-09 D2).
+fn critical_floor(hits_max: u32) -> u32 {
+    (hits_max * 2) / 5
+}
+
+/// Pure arming decision (host-testable; the D2 pins live on this).
+///
+/// Safe mode only blocks hostile ACTIONS, so the low-HP arm additionally
+/// requires the hostiles to have actual damage output — a damaged spawn plus a
+/// harmless scout must never spend the charge. The dismantler arm keeps its
+/// original shape: burst DPS above [`SAFE_MODE_DPS_THRESHOLD`] with a
+/// WORK-carrier adjacent to a spawn is an emergency at any HP.
+fn safe_mode_should_arm(spawn_hits: &[(u32, u32)], hostile_dps: f32, dismantler_adjacent_to_spawn: bool) -> bool {
+    let critical_low = spawn_hits.iter().any(|&(hits, max)| hits < critical_floor(max));
+    (critical_low && hostile_dps > 0.0) || (dismantler_adjacent_to_spawn && hostile_dps > SAFE_MODE_DPS_THRESHOLD)
+}
 
 /// Mission to evaluate and activate safe mode as a last resort defense.
 ///
@@ -108,11 +125,6 @@ impl Mission for SafeModeMission {
             return Ok(MissionResult::Running);
         }
 
-        // If we already activated safe mode, just monitor until it expires.
-        if self.activated {
-            return Ok(MissionResult::Running);
-        }
-
         let current_tick = game::time();
         if current_tick.saturating_sub(self.last_eval_tick) < EVAL_INTERVAL {
             return Ok(MissionResult::Running);
@@ -125,6 +137,20 @@ impl Mission for SafeModeMission {
             Some(r) => r,
             None => return Ok(MissionResult::Running),
         };
+
+        // While a safe mode WE latched is still running, just monitor — but the latch
+        // clears the moment it expires, so the room can safe-mode again in a later
+        // emergency. The old latch was permanent: a room could auto-safe-mode at most
+        // once EVER (combat review 2026-07-09 D3). The serialized field is kept (its
+        // removal would be a WFV shape change); only its lifetime changed.
+        if self.activated {
+            let still_active = room.controller().map(|c| c.safe_mode().unwrap_or(0) > 0).unwrap_or(true);
+            if still_active {
+                return Ok(MissionResult::Running);
+            }
+            info!("[SafeMode] Safe mode expired in room {} -- re-arming the evaluator", room_data.name);
+            self.activated = false;
+        }
 
         let structures = match room_data.get_structures() {
             Some(s) => s,
@@ -164,25 +190,17 @@ impl Mission for SafeModeMission {
             }
         }
 
-        // Check if any critical structure is in danger.
-        let mut critical_in_danger = false;
-
-        // Check spawns.
-        for spawn in structures.spawns() {
-            if spawn.hits() < CRITICAL_STRUCTURE_MIN_HITS {
-                warn!(
-                    "[SafeMode] Spawn '{}' at critical HP: {}/{}",
-                    spawn.name(),
-                    spawn.hits(),
-                    spawn.hits_max()
-                );
-                critical_in_danger = true;
+        // Gather the arming-decision inputs (the decision itself is the pure
+        // `safe_mode_should_arm` kernel above).
+        let spawn_hits: Vec<(u32, u32)> = structures.spawns().iter().map(|s| (s.hits(), s.hits_max())).collect();
+        for &(hits, max) in &spawn_hits {
+            if hits < critical_floor(max) {
+                warn!("[SafeMode] Spawn at critical HP: {}/{} (floor {})", hits, max, critical_floor(max));
             }
         }
 
-        // Check if hostiles are dismantling (WORK parts near structures).
-        if has_work_parts && total_hostile_dps > SAFE_MODE_DPS_THRESHOLD {
-            // Check if any hostile with WORK parts is adjacent to a critical structure.
+        let mut dismantler_adjacent_to_spawn = false;
+        if has_work_parts {
             for hostile in hostiles {
                 let has_work = hostile.body().iter().any(|p| p.part() == Part::Work && p.hits() > 0);
                 if !has_work {
@@ -192,13 +210,13 @@ impl Mission for SafeModeMission {
                 for spawn in structures.spawns() {
                     if hostile.pos().get_range_to(spawn.pos()) <= 1 {
                         warn!("[SafeMode] Dismantler adjacent to spawn '{}'!", spawn.name());
-                        critical_in_danger = true;
+                        dismantler_adjacent_to_spawn = true;
                     }
                 }
             }
         }
 
-        if !critical_in_danger {
+        if !safe_mode_should_arm(&spawn_hits, total_hostile_dps, dismantler_adjacent_to_spawn) {
             return Ok(MissionResult::Running);
         }
 
@@ -261,5 +279,49 @@ impl Mission for SafeModeMission {
         }
 
         Ok(MissionResult::Running)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// D2 pin: spawn max hits is 5000 and the OLD floor was exactly 5000, so any
+    /// scratch (4999/5000) armed the trigger and could spend the irreversible
+    /// safe-mode charge. A scratch must never arm, at any hostile DPS.
+    #[test]
+    fn scratched_spawn_never_arms() {
+        assert!(!safe_mode_should_arm(&[(4999, 5000)], 300.0, false));
+        assert!(!safe_mode_should_arm(&[(4999, 5000)], 10_000.0, false));
+        // Healthy spawn, plain hostiles: nothing to do.
+        assert!(!safe_mode_should_arm(&[(5000, 5000)], 500.0, false));
+    }
+
+    /// D2 pin: the low-HP arm requires actual hostile damage output — a damaged
+    /// spawn plus a harmless scout (0 DPS) must not spend the charge; the same
+    /// damage with any real DPS must.
+    #[test]
+    fn deep_damage_arms_only_with_damage_output() {
+        assert!(safe_mode_should_arm(&[(1999, 5000)], 10.0, false));
+        assert!(!safe_mode_should_arm(&[(1999, 5000)], 0.0, false));
+    }
+
+    /// The dismantler arm keeps its original shape: WORK burst above the DPS
+    /// threshold with a carrier adjacent to a spawn is an emergency at ANY HP;
+    /// below the threshold it is not.
+    #[test]
+    fn dismantler_burst_arms_at_full_hp() {
+        assert!(safe_mode_should_arm(&[(5000, 5000)], 350.0, true));
+        assert!(!safe_mode_should_arm(&[(5000, 5000)], 250.0, true));
+    }
+
+    /// The floor is 2/5 of max hits (2000 for a 5000-hit spawn) — strictly below
+    /// max, so the D2 class (floor == max) cannot silently return.
+    #[test]
+    fn critical_floor_is_a_real_fraction_of_max() {
+        assert_eq!(critical_floor(5000), 2000);
+        assert!(critical_floor(5000) < 5000);
+        assert!(!safe_mode_should_arm(&[(2000, 5000)], 100.0, false), "at the floor: not below it");
+        assert!(safe_mode_should_arm(&[(1999, 5000)], 100.0, false), "one below the floor arms");
     }
 }
