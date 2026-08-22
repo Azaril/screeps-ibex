@@ -1,8 +1,6 @@
 # ADR 0008a - Combat Tactics & Behavior Catalog (+ experiment register)
 
-- **Status:** Proposed (catalog v0 - each entry is a testable hypothesis, tuned empirically via the experiment register; not a one-time decision)
-- **Implemented subset (2026-06-18, via G3/G3-tail):** T-FOCUS-1 focus-fire, T-ENGAGE coupled-hysteresis engage/retreat, T-HEAL heal assignment, and T-POS pathfinding-scored kiting are shipped in `screeps-combat-decision` and self-play-validated (EXP-SQUAD-KITE-1). The remaining catalog entries and the EXP register below are still forward-looking — see the [master plan doc](../plans/combat-overhaul-plan.md) §5 (EXP-REGISTER).
-- **Post-rework readiness review (2026-06-29):** with the combat-squad overhaul (ADR 0008/0019/0020/0029/0031/0032 — capability-driven force-sizing, the EV position/action kernel, the global squad↔objective auction) now largely landed, a code-grounded pass re-scored every catalog entry for impact + implementability. The result — a per-tactic readiness matrix, the prioritized build order for what is high-impact **and** now-buildable, the boost-layer foundational enabler, and the validation plan — is the new **[Implementation Recommendations & Plan](#implementation-recommendations--plan-2026-06-29-readiness-review)** section immediately below.
+- **Status:** Decided
 - **Date:** 2026-06-17
 - **Deciders:** William Archbell
 - **Related:** Companion to [ADR 0008](0008-combat-and-squad-architecture.md) (combat & squad architecture - this details its Section 4 tactics model); [ADR 0006](0006-eval-and-iteration-harness.md) (the combat micro-sim + private-server gate that validate these); [ADR 0003](0003-behavior-modeling.md) (the anchor mover the positioning tactics ride on); [ADR 0015](0015-testing-and-validation-strategy.md) (tactics are the experimental SHELL - tuned by sim/server, not unit-tested); [ADR 0014](0014-empire-strategy-and-posture.md) (target valuation under a WarDecl). Execution: [phase-2.md](../execution/phase-2.md) workstream G (tactics in the manager) + the experiment register below. Engine ground truth: [engine-mechanics.md](../references/engine-mechanics.md), verified against the cloned engine.
@@ -11,113 +9,50 @@
 
 ---
 
-## Implementation Recommendations & Plan (2026-06-29 readiness review)
+## Cross-cutting enablers & mechanism map
 
-> **Purpose.** A reviewable, code-grounded prioritization of the catalog now that the combat-squad overhaul has landed. Every readiness/impact call below was checked against the *actual* current code (combat-decision crate + `screeps-ibex/src/military` + `missions`/`operations`/`jobs`), not the catalog's own prose — where the code and an older catalog line disagree, the code wins and it is flagged. Anchors are `path:line`. **Impact** = strategic value to the live MMO bot right now. **Readiness:** `DONE` = already shipped (verified in code), `READY` = the capability is already produced by the generalized force-sizing/assembler path (no new template needed), `PARTIAL` = primitives/hooks exist, contained work remains, `BLOCKED` = needs a major prerequisite that isn't built (almost always the boost layer or a new intel field).
+> **Purpose.** The catalog below is a flat list of behaviors; this section carries the two things that
+> cut across it — **where each mechanism lives in the code** (navigation), and the **dependencies
+> between tactics** (which tactic cannot exist until another capability does). Anchors are `path:line`.
 
-### What the rework already shipped (do NOT rebuild)
+### Where the catalog's mechanisms live
 
-The overhaul did more than the 2026-06-18 note claims. The following are live and verified — treat them as the baseline, not as work:
+- **Target selection / focus-fire (section A):** EV target ordering with the net-heal kill-inequality gate + rampart-shield exclusion + damage-spill assignment — `ev_target_order` [lib.rs:356], `assign_focus_fire` [lib.rs:383], `heal_reaching` (creep + tower same-tick Hb) [lib.rs:316], written per-member into `TickOrders.attack_target` [squad_manager.rs:2398].
+- **Positioning / kiting (section B):** the range-3 hold + melee-evade-before-goal + edge repulsors — `decide_movement` [lib.rs:699], `kite_repulsors` [lib.rs:659], the unified per-tile scorer `score_tile` [kite.rs:445] + integer `ThreatField`/chaser-reachability layers [kite.rs:336], and the unified EV-of-(position×action) kernel `plan_squad_ev` [kernel.rs:339].
+- **Tower drain + NO-GO (section C):** the force-sizing oracle picks Breach-vs-Drain accounting for tower energy, sizes the soak, and gates winnability — `assess` [force_sizing.rs:189], `move_to_drain_standoff` [lib.rs:759], war.rs `plan.winnable()` skip + `UnwinnableTarget` backoff [war.rs:1431, objective_queue.rs:391]; tower hold-fire vs confirmed drainers with a bounded probe [tower.rs:231/367].
+- **Breach (section D):** attacker's-eye min-cut corridor (`BREACH_HIT_WEIGHT=4096`, fingerprint-gated re-plan) [dismantle.rs:155/199, dismantlebehavior.rs:184], WORK-only dismantle doctrine [doctrine.rs:224], drain-then-breach handoff [force_sizing.rs:264 -> lib.rs:1505], abort/route-around impassable/over-horizon [dismantlebehavior.rs:39, dismantle.rs:211].
+- **Heal adjacency (section E):** `assign_heals` prefers adjacent-12 over ranged-4, mortal-first, drain-tank-first [lib.rs:1589/1245].
+- **Engage / commit / retreat / valuation (section F):** Lanchester winnability gate + coupled hysteresis + stalemate disengage [lib.rs:1300/1428/1488], `clear_force` escalate-vs-abandon with quad cap [force_sizing.rs:333], energy-equivalent `value_e` valuation feeding the global Hungarian auction [objective_value.rs:93, assignment.rs:491], war.rs winnability + ROI gate [war.rs:1405].
+- **Compositions (section G):** the capability-driven assembler *produces* the swarm quad, the harasser and the garrison tank+healer on demand via `assemble_force` [composition.rs:380] from a sized `RequiredForce` — the catalog's compositions are outputs of the sizing oracle, not fixed templates.
+- **Controller warfare (section H):** de-claim salvage takeover [salvage.rs:417 -> doctrine.rs:575], self-room unclaim on `upgrade_blocked` [colony.rs:186], the declaim strike primitive [squad_combat.rs:1172].
+- **Defense (section I) + NPC (section J):** remote RANGED interceptor + invader cleanup via GarrisonDefense [war.rs:709/798], lvl-0 core snipe [war.rs:1063], SK kite-kill [sourcekeeperfarm.rs:355], stronghold deploy/decay gate [war.rs:1069/1152], the reactive safe-mode floor [safe_mode.rs:190], tower danger ordering [tower.rs:348], `estimated_ticks_to_kill` [damage.rs:62].
+- **Sizing inputs the gates consume:** `project_enemy` [squad_manager.rs:397] (enemy `hits`, which must carry the boosted-TOUGH eHP pool per T-HEAL-3), `project_defense` [squad_manager.rs:387] (`repair_per_tick`, per T-BREACH-3), `estimated_heal` [threatmap.rs:315] (reachable-healer scoping, per T-HEAL-3), `assess` [force_sizing.rs:204] (the T-BREACH-3 safety margin), the room combat DTO [squad_manager.rs:1718] (where own-rampart pos+hits must be threaded for T-DEF-1), `build_combat_body` [bodies.rs:74/95] (MOVE back-loading + the parity assert, T-POS-3), `best_tile` [kernel.rs:652] (the exit-tile cost, T-POS-5), the two count-based RMA pipelines [lib.rs:587/633] (the shield check, T-BREACH-5).
 
-- **Target selection / focus-fire (all of A's core):** EV target ordering with the net-heal kill-inequality gate + rampart-shield exclusion + damage-spill assignment — `ev_target_order` [lib.rs:356], `assign_focus_fire` [lib.rs:383], `heal_reaching` (creep + tower same-tick Hb) [lib.rs:316], written per-member into `TickOrders.attack_target` [squad_manager.rs:2398]. **T-FOCUS-1/2/3 DONE.**
-- **Positioning / kiting (B's core):** the range-3 hold + melee-evade-before-goal + edge repulsors are the *reachable* live path (the catalog's "lives only in an unreachable fallback" line is STALE) — `decide_movement` [lib.rs:699], `kite_repulsors` [lib.rs:659], the unified per-tile scorer `score_tile` [kite.rs:445] + integer `ThreatField`/chaser-reachability layers [kite.rs:336], and the unified EV-of-(position×action) kernel `plan_squad_ev` [kernel.rs:339]. **T-POS-1/2/7 DONE.**
-- **Tower drain + NO-GO (C's core):** the force-sizing oracle picks Breach-vs-Drain accounting for tower energy, sizes the soak, and gates winnability — `assess` [force_sizing.rs:189], `move_to_drain_standoff` [lib.rs:759], war.rs `plan.winnable()` skip + UnwinnableTarget backoff [war.rs:1431, objective_queue.rs:391]; tower hold-fire vs confirmed drainers with bounded probe [tower.rs:231/367]. **T-TOWER-1/4/5 + T-DEF-3 DONE.**
-- **Breach (D's core):** attacker's-eye min-cut corridor (`BREACH_HIT_WEIGHT=4096`, fingerprint-gated re-plan) [dismantle.rs:155/199, dismantlebehavior.rs:184], WORK-only dismantle doctrine [doctrine.rs:224], drain-then-breach handoff [force_sizing.rs:264 → lib.rs:1505], abort/route-around impassable/over-horizon [dismantlebehavior.rs:39, dismantle.rs:211]. **T-BREACH-1/2/6/8 DONE.**
-- **Heal adjacency (E):** `assign_heals` prefers adjacent-12 over ranged-4, mortal-first, drain-tank-first [lib.rs:1589/1245]. **T-HEAL-2 DONE.**
-- **Engage/commit/retreat/valuation (F):** Lanchester winnability gate + coupled hysteresis + stalemate disengage [lib.rs:1300/1428/1488], `clear_force` escalate-vs-abandon with quad cap [force_sizing.rs:333], energy-equivalent `value_e` valuation feeding the global Hungarian auction [objective_value.rs:93, assignment.rs:491], war.rs winnability+ROI gate [war.rs:1405]. **T-ENGAGE-1/2/3/5 DONE.**
-- **Controller (H) + defense (I) + NPC (J) that are live:** de-claim salvage takeover [salvage.rs:417 → doctrine.rs:575], self-room unclaim on `upgrade_blocked` [colony.rs:186], remote RANGED interceptor + invader cleanup via GarrisonDefense [war.rs:709/798], lvl-0 core snipe + SK kite-kill + stronghold deploy/decay gate [war.rs:1063, sourcekeeperfarm.rs:355, war.rs:1069/1152]. **T-CTRL-4/5, T-DEF-3/6, T-NPC-1/2/8/9 DONE.**
-- **Compositions (G):** the capability-driven assembler means the unboosted swarm quad, the harasser, and the garrison tank+healer are *produced on demand* by `assemble_force` [composition.rs:380] from a sized `RequiredForce` — no fixed template needed. **T-COMP-2/6 READY-by-construction; T-COMP-7 READY (minus rampart-seek, see T-DEF-1).**
+### Cross-tactic dependencies
 
-### Readiness matrix (all not-yet-done catalog entries)
+Several catalog entries are not independent — they are only meaningful once another capability exists:
 
-| Tactic | Impact | Readiness | One-line status |
-|---|---|---|---|
-| **T-HEAL-3** eHP / reachable-heal estimation | **High** | PARTIAL | `estimated_heal` sums *unreachable* healers + `project_enemy` hardcodes `hits=0` so boosted-TOUGH eHP never reaches the EV → the (shipped) winnability gates eat wrong inputs |
-| **T-BREACH-3** size WORK to beat net repair | **High** | PARTIAL | net-repair veto exists offensively, but `project_defense` hard-codes `repair_per_tick=0.0`, repair is a room scalar not per-tile, and the 2× safety margin isn't applied |
-| **T-DEF-5** predictive safe-mode | **High** | PARTIAL | only the reactive floor fires; all predictive inputs (`breach_rampart_hits`, attack dps) are collected but unwired |
-| **T-DEF-1** rampart-anchored defenders | **High** | PARTIAL | the single biggest defensive multiplier (0 dmg on cover) is absent; needs own-ramparts in the room DTO + a cover-seek term + survival-veto exemption |
-| **T-DEF-2** tower+defender focus coordination | **High** | PARTIAL | tower focus is done; missing the broadcast of `best_target` into the squad focus (and depends on T-DEF-1 for a defender worth coordinating) |
-| **T-CTRL-1** siege-opener CLAIM-strike safe-mode denial | **High** | PARTIAL | bot does the *opposite* (treats hostile safe-mode as a hard veto); needs to invert available-but-inactive into a deny-arm + co-commit a declaimer; declaim primitive exists [squad_combat.rs:1172] |
-| **T-POS-3** MOVE-parity body sizing | **High** | PARTIAL | ratios correct but MOVE is round-robined not back-loaded, so parity breaks under front-attrition; no parity assert |
-| **T-POS-5** stay-off-exit-tiles | Med | PARTIAL | kite path has an edge term; the EV kernel `best_tile` has none → engaged squads near a border can be shoved out |
-| **T-BREACH-5** never RMA a held breach | Med | PARTIAL | selection excludes shields, but the two count-based RMA pipelines [lib.rs:587/633] fire on raw in-range count without a shield check |
-| **T-DEF-4** priority-kill the controller-attacker | Med | PARTIAL | CLAIM is detected but valued 0 → sorts LAST; needs a CLAIM-near-controller priority bump in tower order + `ev_target_order` |
-| **T-HEAL-1** boost-aware concentrate/pre-heal | Med | PARTIAL | greedy pre-heal shipped, but heal output hardcodes 12/4 (no ×4 boosted) and `heal_power` isn't recomputed as HEAL parts die |
-| **T-FOCUS-4** RMA falloff in the heal ledger | Med | PARTIAL | rampart-skip half done; falloff-credit so single-target shooters don't double-book RMA-softened targets is absent |
-| **T-POS-4** mass-vs-single RMA EV | Med | PARTIAL | uses a cluster-count heuristic, not the `mass>single` falloff comparison; shares the falloff table with T-FOCUS-4 |
-| **T-TOWER-2** range-managed dismantle line | Med | PARTIAL | corridor minimizes hits only, blind to tower falloff band + tower-repair subtraction |
-| **T-TOWER-6** two-phase pre-heal step-out | Med | PARTIAL | heal half done; missing the "step out one tile to drop tower dmg below heal-coverable" move |
-| **T-BREACH-4** breach-then-hold-then-pour | Med | PARTIAL | column-collapse + drain heal exist; no discrete HOLD→POUR FSM / `hold_open_ticks` |
-| **T-BREACH-7** stack dismantlers within a life | Med | PARTIAL | continuous member count emerges, but no same-tile adjacency-sum + staggered-respawn continuity (defers to a nonexistent heavy-assault arm) |
-| **T-NPC-6** stronghold core-snipe (one-rampart) | Med | PARTIAL | breach primitive reusable; missing the min-tower-DPS approach-tile pick + stronghold-specific scoping |
-| **T-NPC-7** per-level stronghold ladder | Med | PARTIAL | level admission gated by energy; the boosted per-level comp ladder is BLOCKED on boosts |
-| **T-CTRL-3** reserve-denial parts race | Med | PARTIAL | strike primitive exists, but reserve/claim missions hard-ABORT on a foreign reservation; needs a race-then-handoff producer + enemy claim-part counting |
-| **T-ENGAGE-4** wave-wipe cohesive respawn / renew | Med | PARTIAL | lifecycle has the `wiped` skeleton; no `wave_index`, `handle_wave_wipe`, or spawn-time renew |
-| **T-TOWER-7** drain-then-economic-attrition | Med | PARTIAL | drain is always a breach prelude; no standalone "hold a NO-GO room indefinitely" + cost-exchange gate (opponent-dependent) |
-| **T-POS-8** cornered commit-or-eject | Med | PARTIAL | survival veto avoids dying-in-place; no deterministic commit-vs-eject EV |
-| **T-POS-9** don't-kite-vs-ranged switch | Med | PARTIAL | ingredients exist; `should_kite` keys on melee-near only, no Σranged>Σmelee classifier |
-| **T-COMP-3** core/power-bank ATTACK duos | High | PARTIAL | SK duo done; core forces RANGED (fine), power-bank duo unbuilt |
-| **T-COMP-4** drain pair | High | PARTIAL | sized, but strict cross-heal adjacency not enforced; boosted variant blocked |
-| **T-FOCUS-5** offensive drain recognition | Low | PARTIAL | tower-side sawtooth exists; no per-hostile hits-history on the squad side |
-| **T-POS-6** mirror-Y armour-rotation retreat | Low | PARTIAL | `mirror_y` defined but **zero callers**; inert (strict moving box was deliberately dropped) |
-| **T-COMP-1** boosted RA+HEAL brick quad | **High** | BLOCKED | boost layer |
-| **T-COMP-5** boosted dismantle/siege quad | **High** | BLOCKED | boost layer (×200 dismantle) |
-| **T-TOWER-3** boosted in-bunker heal-train | Med | BLOCKED | boost layer |
-| **T-DEF-7** drop HEAL on cover-only defenders | Low | BLOCKED | inert until T-DEF-1 |
-| **T-DEF-8** pre-positioned standing defender | Med | BLOCKED | needs T-DEF-1 + a per-room threat-recency memory |
-| **T-CTRL-2** forced-downgrade-then-breach | Med | BLOCKED | needs downgrade-clock intel + a staged long-campaign objective |
-| **T-CTRL-6** spawn-kill the newborn | Low | BLOCKED | needs enemy `spawn.spawning` intel + emergence-tile prediction |
-| **T-NPC-3/4/5** power-bank trio | Low | BLOCKED | whole workstream deliberately removed in O5; fresh build |
+- **T-DEF-1 (rampart-anchored defenders) is the defensive keystone.** Threading **our** ramparts (pos + hits) into the room combat DTO, plus a cover-seek term and a survival-veto exemption in `score_tile`, is what makes **T-DEF-2** (broadcast the tower's `best_target` into the squad focus) worth coordinating and makes **T-DEF-7** (drop HEAL on cover-only defenders) meaningful at all. **T-DEF-8** additionally needs a per-room threat-recency memory.
+- **The RMA falloff table is shared.** T-FOCUS-4 (falloff credit in the heal ledger), T-POS-4 (mass-vs-single selection) and the credit half of T-BREACH-5 all consume one `{0:1, 1:1, 2:0.4, 3:0.1}` table; they are one mechanism seen from three call sites.
+- **T-CTRL-1 inverts an existing veto.** The siege-opener CLAIM strike requires treating an *available-but-inactive* hostile safe mode as a reason to field the strike (not as a hard veto), and co-emitting an offensive Declaim sub-objective alongside the siege so the strike lands the same tick.
+- **New intel is the gate on three controller/defense tactics:** T-CTRL-2 needs the downgrade clock, T-CTRL-6 needs enemy `spawn.spawning` + an emergence-tile prediction, T-DEF-5's predictive arm needs `breach_rampart_hits` + attack DPS reaching the safe-mode decision (the reactive floor and the `upgrade_blocked` guard stay underneath it).
+- **T-CTRL-3 needs a race-then-handoff producer.** Reserve/claim missions that hard-abort on a foreign reservation cannot express the parts race; the denial producer must out-claim first and hand off to the reserver.
 
-### Recommended build order (high-impact AND now-implementable)
+### The boost layer (foundational enabler)
 
-Sequenced for ROI and to honor the **defense-first MMO-deploy posture** (combat-overhaul memory: "VERDICT GO, DEFENSE-ONLY-FIRST"). Offensive depth (Tier 3) and the boost layer follow the defensive hardening.
+A single system gates the whole boosted-assault frontier — **T-COMP-1, T-COMP-5, T-TOWER-3, T-NPC-7**, the boosted drain/siege variants, and the deep-energy-bunker / L3+ stronghold winnable set (without it those targets read "unwinnable -> heavy assault"). It is four coupled pieces:
 
-**Tier 0 — Correctness fixes that make the *already-shipped* winnability/sizing machinery actually correct.** Highest ROI: small diffs that fix wrong *inputs* to gates that already exist, so the whole EV/auction/abandon stack starts making right decisions.
+1. **Availability scan:** `EconomyAssessmentSystem` populates `available_boosts` [economy.rs:226] from labs/storage/terminal per room.
+2. **Boost ladder in sizing:** `force_sizing`/`optimize_composition` [composition.rs:524] scale HEAL x4 (XLHO2), TOUGH x0.3 eHP (XGHO2), dismantle x200 (XZH2O), etc., gated on availability + the conservative mineral/throughput floor (the boost-commit policy under Open behavioral questions).
+3. **Request + gate wiring:** `BodyType::Sized.required_boosts()` [composition.rs:121] returns the ladder's picks; `queue_slot_spawn` [squad_manager.rs:1548] emits `BoostRequest`s and the assault-ready transition gates on `is_ready` (the `BoostQueue` [boostqueue.rs] is the existing carrier).
+4. **ThreatField boosted-TOUGH:** model boosted-TOUGH damage reduction [kite.rs:42] so boosted enemies are sized correctly in both directions (an unmodelled x0.3 over-counts incoming).
 
-1. **T-HEAL-3 — fix the winnability gate's inputs.** *Without this, the (shipped) abandon/escalate gates abandon winnable fights and feed unwinnable ones.* (a) `project_enemy` [squad_manager.rs:397] must derive enemy `hits` from the boosted-TOUGH eHP pool instead of hard-coding `0`, so eHP reaches the EV; (b) gate `estimated_heal` [threatmap.rs:315] on *reachable* healers (adjacent-12 + ranged-3) relative to the focus, mirroring `heal_reaching` [lib.rs:316], instead of summing all hostile heal. **Validate:** EXP-FOUND-1/2 conformance + a paired-seed scenario where a distant healer no longer suppresses commit.
-2. **T-BREACH-3 — finish net-repair WORK sizing.** Un-stub `project_defense repair_per_tick=0.0` [squad_manager.rs:387] (the data is already on `RoomThreatData`), price repair per-*tile* via `tower_repair_at_range` at the chosen blocker, and apply the 2× safety margin in `assess` [force_sizing.rs:204]. **Validate:** EXP-BREACH-1 (completion/abort matches sign-of-net against a repaired wall).
+The full boost design is [ADR 0041](0041-combat-boost-layer.md); this section records only what the catalog depends on.
 
-**Tier 1 — Cheap, self-contained, high-value.** Each is a contained diff in one or two files.
+### Out of scope
 
-3. **T-POS-3 — back-load MOVE + parity assert** in `build_combat_body` [bodies.rs:74/95] so kiters/drains keep parity as front parts die; add the assert/test. **Validate:** EXP-KITE-1 with mid-life part attrition.
-4. **T-DEF-4 — CLAIM-attacker priority bump** (gated on `upgrade_blocked==0`) in the tower danger order [tower.rs:348] and `ev_target_order` [lib.rs:356]; needs the controller pos in the room DTO. **Validate:** EXP-DEF-2 (`upgrade_blocked` stays 0).
-5. **T-BREACH-5 — hard-suppress RMA against an all-shielded breach** in the two count-based pipelines [lib.rs:587/633] (permit RMA only when ≥1 in-range hostile is unshielded). **Validate:** sim — RMA vs 4 shielded defenders nets 0.
-6. **T-POS-5 — exit-tile discipline in the EV kernel:** add a high (not ∞) exit-tile cost to `best_tile` [kernel.rs:652], in-combat, with the intentional-retreat exception. **Validate:** EXP-KITE-2 (0 unplanned room exits).
-
-**Tier 2 — Defensive hardening cluster (aligns with defense-first deploy).**
-
-7. **T-DEF-5 — predictive safe-mode arm.** OR a predictive trigger into the reactive floor [safe_mode.rs:190]: `projected_ticks_to_breach = inner_rampart_hits / breach_dps` vs `defense_kill_time` (`estimated_ticks_to_kill` [damage.rs:62]); keep the reactive floor and the `upgrade_blocked` guard. All inputs already collected. **Validate:** EXP-DEF-2 (fires while spawn still full; 0 false positives over an attacker sweep).
-8. **T-DEF-1 — rampart-anchored defenders** (then fast-follows **T-DEF-2** focus-broadcast and **T-DEF-7** drop-HEAL-on-cover). The one real prerequisite is threading **our** ramparts (pos + hits) into the room combat DTO [squad_manager.rs:1718] — a contained addition — then a cover-seek term + survival-veto exemption in `score_tile` [kite.rs:445] and an anchored GarrisonDefense stance. Biggest defensive multiplier in the game; T-DEF-2/7 become trivial once the defender stands on cover. **Validate:** EXP-DEF-1 (0 defender deaths / 0 structures lost vs a heavy siege on a maintained rampart).
-
-**Tier 3 — Offensive depth (after the defensive soak proves out).**
-
-9. **T-CTRL-1 — siege-opener CLAIM-strike** to deny enemy safe mode: invert the `safe_mode` hard veto [force_sizing.rs:200] into "available-but-inactive ⇒ field the strike," co-emit an offensive Declaim sub-objective with the player-room siege, guarantee the same-tick land, hold the 1000-tick cadence. Reuses the declaim primitive [squad_combat.rs:1172] + DeclaimAttack doctrine. **Validate:** EXP-CTRL-1 (server — safe mode never activates during the opener).
-10. **T-TOWER-2 + the RMA-EV pair (T-FOCUS-4 / T-POS-4).** Tower-falloff-aware corridor scoring [dismantlebehavior.rs:184 + total_tower_damage]; and a shared RMA falloff table so RMA selection and the focus ledger both use `{0:1,1:1,2:0.4,3:0.1}` (folds T-FOCUS-4 + T-POS-4 + the credit half of T-BREACH-5 into one change). **Validate:** EXP-BREACH-1 (lower HEAL at the chosen range) + sim RMA accounting within 5%.
-
-### Foundational enabler (high-impact, large): the boost layer
-
-A single missing system blocks the entire boosted-assault frontier — **T-COMP-1, T-COMP-5, T-TOWER-3, T-NPC-7**, the boosted drain/siege variants, and the deep-energy-bunker / L3+ stronghold winnable set (today those read "unwinnable → heavy assault," an arm that doesn't exist). It is end-to-end work, recommended as its own workstream after Tier 2:
-
-1. **Availability scan:** `EconomyAssessmentSystem` populates `available_boosts` (currently always `HashMap::new()` [economy.rs:226]) from labs/storage/terminal per room.
-2. **Boost ladder in sizing:** `force_sizing`/`optimize_composition` [composition.rs:524] scale HEAL ×4 (XLHO2), TOUGH ×0.3 eHP (XGHO2), dismantle ×200 (XZH2O), etc., gated on availability + the conservative mineral/throughput floor (operator policy, 2026-06-17 §Resolved).
-3. **Request + gate wiring:** `BodyType::Sized.required_boosts()` [composition.rs:121] returns the ladder's picks; `queue_slot_spawn` [squad_manager.rs:1548] emits `BoostRequest`s and the assault-ready transition gates on `is_ready` (the `BoostQueue` [boostqueue.rs] already exists, just unfed/unconsumed).
-4. **ThreatField boosted-TOUGH:** model boosted-TOUGH damage reduction [kite.rs:42] (today v1 over-counts incoming) so boosted enemies are sized correctly both ways.
-
-### Explicitly deferred / out of scope now
-
-- **Power-bank trio (T-NPC-3/4/5)** — deliberately removed in O5 [war.rs:1192]; revive only as a dedicated power-economy workstream.
-- **T-CTRL-2 (forced-downgrade campaign), T-CTRL-6 (spawn-kill), T-DEF-8 (standing defender)** — each needs a new intel field (downgrade clock / `spawn.spawning` / threat-recency) and/or a staged-campaign lifecycle; low ROI vs the Tier 0–2 set.
-- **T-POS-6 (mirror-Y rotation)** — inert by design (strict moving box replaced by rally + per-member goals); skip unless a rigid armoured retreat box returns.
-- **T-ENGAGE-4 (wave-wipe/renew), T-TOWER-7 (economic attrition), T-POS-8/9, T-FOCUS-5, T-BREACH-4/7** — real but second-order; revisit after the deploy soak surfaces a concrete need.
-
-### Validation approach (applies to every item above)
-
-1. **Per-change sim** through `screeps-combat-eval`'s `register()`/`report()` EXP suite (the named EXP-* gate per item) + hard-exact conformance vectors — the sim runs the bot's *real* decision code (no fork), and is now bit-deterministic (see the determinism fence).
-2. **Paired-seed engagement diffs** (N=9, terrain/body/offset jitter) vs the stored `(scenario, seed, SHA)` baseline for any tactic that changes an engagement outcome.
-3. **seg-57 MMO canary** — cohesion/orphan/kill-efficiency metrics emitted in both sim and live; "sim says fixed, live says scattering" tightens the parity budget and finds the missing mechanic.
-4. **Defense-first private-server soak** before any MMO change, per the deploy posture; only Tier 0–2 (defensive + correctness) ship ahead of the offensive Tier 3.
-5. **WORLD_FORMAT_VERSION:** none of Tier 0–1 changes serialized shape; T-DEF-1's room-DTO ramparts and any new intel field (T-HEAL-3 eHP is transient) must check whether they touch persisted state and bump WFV (currently 14) with the usual loud-reset note if so.
+- **Power-bank trio (T-NPC-3/4/5)** — belongs to a dedicated power-economy workstream, not to this catalog's combat frontier.
+- **T-POS-6 (mirror-Y rotation)** — inert by design: the strict moving box was deliberately replaced by rally + per-member goals, so nothing calls `mirror_y`. It stays catalogued in case a rigid armoured retreat box returns.
 
 ---
 
@@ -178,7 +113,7 @@ Four invariants, all derived from fixed engine constants, underpin every tactic 
 
 **T-POS-1 — Hold-range-3 ranged anchor.** *Robustness: robust.*
 - **Trigger:** our ranged creep is in combat and the nearest hostile with melee ATTACK parts (`threatmap` `melee_dps>0`) is at range >3, OR we have a clear shot with no melee threat within range 2.
-- **Behavior:** hold the tile keeping the primary target at exactly range 3 (max RANGED reach, 0 melee return — melee does 0 at range ≥2). Each tick fire (rangedAttack or RMA per T-POS-4), then step toward range 3: away if <3, closer if >3. Prefer the move minimizing terrain rate (avoid swamp) and keeping interior position (x,y ∈ 2..=47). This is the **missing ordered-path kite** ADR 0008 §4 calls out — the logic exists only in the unreachable `fallback_movement` today.
+- **Behavior:** hold the tile keeping the primary target at exactly range 3 (max RANGED reach, 0 melee return — melee does 0 at range ≥2). Each tick fire (rangedAttack or RMA per T-POS-4), then step toward range 3: away if <3, closer if >3. Prefer the move minimizing terrain rate (avoid swamp) and keeping interior position (x,y ∈ 2..=47). This is the **ordered-path kite** ADR 0008 §4 calls for.
 - **Params:** `hold_range` = 3 (sweep 2..3); `approach_when_range_gt` = 3; focus = highest (heal_per_tick then melee_dps) hostile.
 - **Metric:** sim — over an N-tick melee engagement our creep takes 0 melee damage (range never drops to 1) while dealing ≥10·RA/tick; our-HP-lost / enemy-HP-lost < 0.3 vs an equal-cost melee body.
 - Source: Overmind `Movement.ts`; https://docs.screeps.com/api/#Creep.rangedAttack.
@@ -500,7 +435,7 @@ Concrete 50-part RCL8 breakdowns. Boosts: TOUGH XGHO2 ×0.3, HEAL XLHO2 ×48/par
 - **Trigger:** a hostile-OWNED but militarily-dead room with sources we want; controller reachable now or breachable (`ControllerAccess::ReachableNow | Breachable`).
 - **Behavior:** spawn exactly ONE declaimer (more is idle — only one strike/1000 ticks lands). It travels with high-cost routing, strikes once, then `DeclaimState::Wait(25)` re-checks until upgradeBlocked clears or the controller goes neutral. The mining-outpost pipeline takes the room over via normal candidate flow once it decays to neutral. If walled in (Sealed), breach dismantlers run first (the M10 corridor) and the declaimer holds.
 - **Params:** `declaimer_count` = 1 (hard); body `[Claim,Move]` repeat, min 1 max 4; `wait_ticks` = 25; gate spawn on `ControllerAccess::ReachableNow`; breach-first on Sealed; `features.derelict.declaim` kill-switch (default TRUE).
-- **Metric:** server (validated live) — derelict controller reaches neutral and the outpost claims/mines it; declaimer count never exceeds 1; no CLAIM bodies wasted against a walled controller.
+- **Metric:** server — derelict controller reaches neutral and the outpost claims/mines it; declaimer count never exceeds 1; no CLAIM bodies wasted against a walled controller.
 - Source: in-repo `salvage.rs` / `declaim.rs` (sources pending).
 
 **T-CTRL-5 — Self-room no-win abort on `upgrade_blocked`.** *Robustness: robust.*
@@ -537,7 +472,7 @@ Concrete 50-part RCL8 breakdowns. Boosts: TOUGH XGHO2 ×0.3, HEAL XLHO2 ×48/par
 
 **T-DEF-3 — Conserve tower energy vs a confirmed drainer (bounded probe).** *Robustness: mixed.*
 - **Trigger:** a hostile's hitpoint sawtooth shows it re-entered the room with MORE hits than it left (`drain_cycles ≥ DRAIN_CONFIRM_CYCLES`), OR `is_likely_tower_drain` fires.
-- **Behavior:** stop firing at the confirmed drainer by default; fire at non-drainer hostiles normally. Periodically test with a bounded probe: at most `MAX_PROBE_STRIKES` volleys, spaced `PROBE_COOLDOWN`, pressing to the kill only if a volley drops it ≥ `MIN_PROBE_PROGRESS` (its off-room healer is gone). Already in `tower.rs`; the tactic is to KEEP it and tune the constants. Never let a drainer pull steady energy.
+- **Behavior:** stop firing at the confirmed drainer by default; fire at non-drainer hostiles normally. Periodically test with a bounded probe: at most `MAX_PROBE_STRIKES` volleys, spaced `PROBE_COOLDOWN`, pressing to the kill only if a volley drops it ≥ `MIN_PROBE_PROGRESS` (its off-room healer is gone). The probe lives in `tower.rs`; the constants below are the sweepable part. Never let a drainer pull steady energy.
 - **Params:** `DRAIN_CONFIRM_CYCLES` = 1; `MAX_PROBE_STRIKES` = 3; `PROBE_COOLDOWN` = 20 (sweep 10-40); `MIN_PROBE_PROGRESS` = 200 (sweep 100-400).
 - **Metric:** sim — total tower energy on the drainer over 1000 ticks bounded to ≤ `MAX_PROBE_STRIKES·N·10` = 180; a real attacker whose healer dies is still finished within `PROBE_COOLDOWN` + kill-time once a probe succeeds.
 - Source: https://docs.screeps.com/defense.html.
@@ -558,7 +493,7 @@ Concrete 50-part RCL8 breakdowns. Boosts: TOUGH XGHO2 ×0.3, HEAL XLHO2 ×48/par
 
 **T-DEF-6 — Remote/reserved-room defense: cheap mobile RANGED interceptor.** *Robustness: robust.*
 - **Trigger:** a `hostile_warrants_defender` creep in a RESERVED/outpost remote (no ramparts to anchor on). Owned rooms use T-DEF-1; remotes use this.
-- **Behavior:** spawn a cheap kiting RANGED+MOVE interceptor (no TOUGH/HEAL vs unboosted invaders) and kite at range 3, RMA only when ≥2 hostiles cluster. Against NPC invaders this suffices: invaders are unboosted, can't move between rooms, can't follow into a controlled neighbor. Keep `is_room_safe` keyed on `militarily_active` (the post-`4fae295` fix) so inert husks don't false-trigger.
+- **Behavior:** spawn a cheap kiting RANGED+MOVE interceptor (no TOUGH/HEAL vs unboosted invaders) and kite at range 3, RMA only when ≥2 hostiles cluster. Against NPC invaders this suffices: invaders are unboosted, can't move between rooms, can't follow into a controlled neighbor. `is_room_safe` must be keyed on `militarily_active` so inert hostile husks don't false-trigger the gate (an inert-structure key silently blocks ALL outpost spawning).
 - **Params:** interceptor body = RA:MOVE 1:1 to budget (5RA+5MOVE ~1250e baseline); `kite_range` = 3; mass-attack when hostiles_within_3 ≥ 2; `MAX_DEFENSE_SOURCE_DISTANCE` = 10.
 - **Metric:** sim — a standard melee invader (10 ATTACK + 10 MOVE) vs a 5RA+5MOVE interceptor kiting at range 3: interceptor takes 0 damage, kills in `ceil(invader_hp/250)`; remote miners resume within the interceptor's ttl; interceptor deaths → 0 vs unboosted invaders.
 - Source: https://docs.screeps.com/invaders.html; https://wiki.screepspl.us/Invader/.
@@ -597,7 +532,7 @@ Concrete 50-part RCL8 breakdowns. Boosts: TOUGH XGHO2 ×0.3, HEAL XLHO2 ×48/par
 
 **T-NPC-3 — Power-bank decay-window go/no-go gate.** *Robustness: robust.*
 - **Trigger:** a power bank is sighted; evaluate BEFORE committing a duo.
-- **Behavior:** launch ONLY if `ticks_to_decay > power_bank_min_ticks_needed(min_distance) = 3334 (kill) + dist·50 (travel) + 270 (serial duo spawn) + 200 (margin)`, AND under the concurrency cap, AND power ≥ a min-ROI floor. A fresh 5000-decay bank is farmable only within ~24 tiles; a half-decayed bank is a no-go at any distance. This is the existing `war.rs` gate — keep kill_time IN the window (the pre-D5 bug green-lit unfinishable banks).
+- **Behavior:** launch ONLY if `ticks_to_decay > power_bank_min_ticks_needed(min_distance) = 3334 (kill) + dist·50 (travel) + 270 (serial duo spawn) + 200 (margin)`, AND under the concurrency cap, AND power ≥ a min-ROI floor. A fresh 5000-decay bank is farmable only within ~24 tiles; a half-decayed bank is a no-go at any distance. `kill_time` MUST be inside the window — a gate that omits it green-lights unfinishable banks.
 - **Params:** `BANK_HITS` = 2_000_000; `DUO_DPS` = 600 (20-ATTACK cap); `DUO_SPAWN_TICKS` = 270; `MARGIN_TICKS` = 200; `min_roi_power` = 2000 (sweep 1000-3000); `max_concurrent` = min(2, room_count).
 - **Metric:** sim — zero abandoned half-killed banks; launched-bank completion rate ~100% across dist 0-30; the gate matches actual completion.
 - Source: https://docs.screeps.com/power.html; https://wiki.screepspl.us/Power/.
@@ -777,7 +712,7 @@ Ordered so foundations (1v1 arithmetic, focus-fire, kiting) validate before comp
 
 17. **EXP-PARITY — Sim-to-real divergence budget (nightly).** *Hypothesis:* the sim's per-tick state (positions/hits/deaths/intent stream) stays within the divergence budget vs the server on the named combat scenarios. *Scenario:* run every gated scenario above through both sim and Docker server. *Metric:* per-tick divergence vs the tracked budget. *Gate:* within budget; sim scores trusted only within it. This is the anti-overfit backstop — if "sim says fixed, MMO says scattering," the budget tightens and the missing mechanic is found (the seg-57 canary).
 
-**Register status (2026-06-19):** the register is now a runnable, metric-producing suite in the **`screeps-combat-eval`** crate (P2.H5): `register()` runs each experiment through the H4 sim (`run_engagement`), extracts measured metrics, and gates them; `report()` is the tuning dashboard. **Run + passing (7):** EXP-FOUND-1 (kill inequality), EXP-KITE-1 (0 melee at MOVE parity + tower-uncontaminated DPS), EXP-FOCUS-1 (3×ranged clear a turtle in 3t), EXP-TOWER-1 (edge drain bleeds the tower to 0), EXP-COMP-1 (DPS-vs-heal-wall comparison: quad 5t < duo 15t), **EXP-BREACH-1** (U7 — ranged siege breaks the rampart *shield* before the spawn; gates the shield-first apply mechanic via `destroyed_kinds`), **EXP-NEST-1** (U7 — 3-tower defender nest deals attributed tower damage, creep DPS==0, bleeds attackers). Plus EXP-SQUAD-KITE-1 (the earlier G3-tail self-play validation, in `screeps-combat-agent`). The **U5 `metrics` module** (five families; tower damage attributed separately from creep DPS; cohesion via the shared `measure`) and the **U6 `scoring` module** (self-play + Draw adjudication on residual HP-slope, not HP level) now back the suite — see the [master plan](../plans/combat-overhaul-plan.md) §5(b) U-roadmap. **Still pending:** FOUND-2, KITE-2, FOCUS-2, TOWER-2, BREACH-2 (breach-then-pour), the full COMP uniform-brick-vs-2+2+TOUGH sweep, DEF-1/2 (richer), ENGAGE-1, NPC-1, CTRL-1 (need controllers), PARITY (server). Tracked as EXP-REGISTER in the [master plan doc](../plans/combat-overhaul-plan.md) §5.
+**Where the register runs.** The register is a runnable, metric-producing suite in the **`screeps-combat-eval`** crate: `register()` runs each experiment through the sim (`run_engagement`), extracts measured metrics, and gates them; `report()` is the tuning dashboard. Two modules back it: **`metrics`** (five families; tower damage attributed separately from creep DPS; cohesion via the shared `measure`) and **`scoring`** (self-play + Draw adjudication on residual HP-*slope*, not HP level — a Draw must not reward a losing side that is merely still standing). Experiments needing rooms/controllers the sim does not yet model (CTRL-*) and the sim-vs-server PARITY gate run on the Docker private server instead. A companion self-play validation, EXP-SQUAD-KITE-1, lives in `screeps-combat-agent`.
 
 ---
 
@@ -785,15 +720,13 @@ Ordered so foundations (1v1 arithmetic, focus-fire, kiting) validate before comp
 
 **Resolved (operator, 2026-06-17):**
 - **Quad composition →** *let EXP-COMP-1 decide.* No upfront default — build both the uniform RA+HEAL brick (T-COMP-1) and the 2-ranged+2-healer split (T-COMP-2), run the self-play experiment, adopt the winner. (So G3/EXP-COMP-1 must implement both and gate on the comparison.)
-- **Marginal-claim escort layer →** *build it* (phase-2 P2.W3 / T-CTRL-5 neighbor): the Escort{room} pre-clear objective ships in this overhaul; Marginal claims are no longer auto-rejected.
+- **Marginal-claim escort layer →** *build it* — Marginal claims are escorted by an `Escort{room}` pre-clear objective, not auto-rejected (see T-CTRL-5).
 - **Reserve denial (T-CTRL-3) →** *build the proactive de-reservation capability, but gate it behind a feature flag defaulting OFF.* Reactive denial (when an enemy reserves our target) stays always-on; proactive de-reservation of enemy remotes is operator-enabled per the flag (the G-11 whitelist / `features.rs` pattern), not autonomous yet.
 - **Boost-commit policy →** *conservative floor:* gate boosted assaults (T-TOWER-3, T-COMP-1/5, T-NPC-7) behind a stored-mineral / lab-throughput floor; when short, downgrade to unboosted (NO-GO collapses to N≥2 in-bunker, T-TOWER-4) or wait — never drain the economy for an assault. (Exact floor is a tunable; see the boost-commit row.)
 
-**Still open (sim-tunable or pending):**
-> (Quad composition and boost-commit policy moved to **Resolved** above on 2026-06-17; their stale "still open" duplicates were removed 2026-06-18.)
+**Still open (sim-tunable or operator-owned):**
 - Kill-healer-first-vs-softest default `w`: the crossover (T-FOCUS-3) is comp-dependent. Pick a single `heal_relief_weight` that maximizes kills/energy across the MMO opponent mix (tank+healer, mass-ranged, boosted-quad) rather than overfitting one — but the operator owns whether the bot biases aggressive (lower w, snap free kills) or healer-collapsing (higher w).
 - Drain aggressiveness / the one opponent read: T-TOWER-7 (drain-then-attrition) wins the energy exchange only if the enemy's towers naively fire on a confirmed drain; if they hold fire it stalls and we must escalate to a breach. How aggressively should the bot commit to pure economic drain before escalating, and how long does it probe before concluding the defender is holding fire?
-- Marginal-claim escort (ADR 0017 / T-CTRL-5 neighbor): the Securing/escort layer is DEFERRED to this overhaul — until it ships, Marginal claims are rejected outright. Operator call: build the escort/pre-clear layer (recovers some winnable contested expansions) or keep treating Marginal as Reject (simpler, loses them)?
 - Proactive vs reactive reserve denial (T-CTRL-3): should the bot proactively de-reserve enemy remotes (robust engine-math, but invites escalation) or only react when an enemy reserves OUR target? This is a posture/diplomacy decision under ADR 0014.
 - drain_body_heavy is undersized: it carries 20 HEAL (240/tick), below the 300/tick two edge towers deal, so it slowly dies unboosted. Raise the unboosted heavy drain to 25 HEAL, or gate 2+ tower drains behind XLHO2 boost (the `drain_body_for_tower_dps` switch fires at >13 required HEAL but the heavy body still under-delivers)? Operator picks the cost/safety tradeoff.
 - Anti-flap persistence windows (escort-release 20t, abort-persistence 20t, establishment-stall 3000t, avoid-cooldown, abandon-hysteresis 5t) are tuned-live-only per ADR 0017 — too eager abandons winnable rooms, too patient bleeds creeps. The operator must set the live observation budget and acceptable false-abandon vs false-persist rates, since the sim cannot fully model a real attacker's cadence.

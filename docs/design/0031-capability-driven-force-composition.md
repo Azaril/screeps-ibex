@@ -1,6 +1,6 @@
 # ADR 0031 — Capability-driven force composition
 
-- **Status:** Accepted + IMPLEMENTED (2026-06-27). RequiredForce vector, `emit_requirement`, `assemble_force` (monotonic `1..=MAX_SIZED_MEMBERS`), `optimize_composition` (tuned per 0031b), `ForceDoctrine` (seven activators), single-`EnemyForce` unify (§2(f), `97d9944`) all code-complete in decision+bot. OPEN follow-ups: Tier-2 weapon-archetype into EV search (§2(e)); Tier-3 param axes (0031a §4); escalate-vs-abandon on `assemble_force`=`None` (#38).
+- **Status:** Decided
 - **Date:** 2026-06-27
 - **One line:** Consolidates ADR 0026 §9 / 0029 / 0030 and **supersedes their `template() + sized_for` sizing mechanism**, replacing it with a capability-vector emitter, a deterministic role-distribution assembler (bridging to an EV optimizer), and a pure-classifier doctrine driving one squad-generation path.
 
@@ -39,9 +39,9 @@ All composition logic lives in `screeps-combat-decision` (the decision crate, no
 
 The **anti-creep overlay** (`overlay_anti_creep`, `:215-230`, Layer C): when defenders are observed (`dps > 0`), runs `clear_force` over `enemy_force` and, if winnable, sets `anti_creep_parts` and raises `heal_parts` — so a guarded structure gets both a structure weapon AND an anti-creep weapon. **INERT with no defenders** (creep-free calibration beds stay unperturbed). The emitter is a pure fold over Vec-ordered inputs (determinism fence `emit_requirement_is_deterministic_over_objectives`, `:678`).
 
-### 2(c) The composition model — all BUILT
+### 2(c) The composition model
 
-**BUILT — `assemble_force` (the deterministic role-distribution builder; the per-candidate body builder under the optimizer).** `assemble_force(&RequiredForce, member_energy) -> Option<SquadComposition>` (`composition.rs:359-412`) turns the vector directly into a fielded composition, no template, no catalog. It is no longer a top-level producer on its own — `optimize_composition` (below) is the composition decision and calls `assemble_force` to build each EV candidate from the per-rung-scaled requirement:
+**`assemble_force` — the deterministic role-distribution builder; the per-candidate body builder under the optimizer.** `assemble_force(&RequiredForce, member_energy) -> Option<SquadComposition>` (`composition.rs:359-412`) turns the vector directly into a fielded composition, no template, no catalog. It is no longer a top-level producer on its own — `optimize_composition` (below) is the composition decision and calls `assemble_force` to build each EV candidate from the per-rung-scaled requirement:
 1. `probe_energy = member_energy.min(PREFERRED_MEMBER_ENERGY)` (`:362`) — split a force into more, smaller, bankable members rather than one un-spawnable ~5000e blob.
 2. Frozen Vec-ordered demand list `[(Healer, heal), (Dismantler, dismantle), (RangedDPS, immune_struct + anti_creep), (Tank, tough)]` (`:366-371`) — RANGED carries both immune-structure DPS and anti-creep kill (same part, additive demand).
 3. Per demanded role: `cap = single_role_cap(role, probe_energy)`; if `cap == 0` → **None** (terminal defer). `count = total.div_ceil(cap).max(1)`; `per_member = total.div_ceil(count)` (ceil so Σ ≥ total, never under-sizes).
@@ -51,13 +51,13 @@ The **anti-creep overlay** (`overlay_anti_creep`, `:215-230`, Layer C): when def
 
 This is the marginal-capability-per-energy fill specialized to the current 1:1 role↔dimension map; a future overlapping dimension would generalize to the full scarcest-dimension auction (the frozen order being its tie-break).
 
-**BUILT — `optimize_composition` (the EV-maximizing optimizer, D16/D17).** The top-level composition decision (`composition.rs:513-594`). `force_ceiling`'s presumed 3+5 budget is **DELETED** as the producer — the EV/commit decision is **per-candidate**, scored from each candidate's OWN `capabilities()`, with no reference squad. The optimizer treats composition as a multi-dimensional optimization that **maximizes expected value**:
+**`optimize_composition` — the EV-maximizing optimizer (D16/D17).** The top-level composition decision (`composition.rs:513-594`). `force_ceiling`'s presumed 3+5 budget is **DELETED** as the producer — the EV/commit decision is **per-candidate**, scored from each candidate's OWN `capabilities()`, with no reference squad. The optimizer treats composition as a multi-dimensional optimization that **maximizes expected value**:
 
 > `EV(C) = P(win | C) · target_value − cost(C)`, with `cost = w_energy·energy + w_creep·creeps` and `P(win) = win_probability(heal, incoming) · win_probability(deliverable_struct_dps·window, required_kill)`. The `dynamic_margin` inflates the observed hostile force (incoming DPS + enemy hits) so a growing threat still loses.
 
-`optimize_composition(objective, defense, enemy, target_value, onsite_window, coordination, importance, honor_verdict, params) -> Option<SquadComposition>` runs ONE parameterized, bit-deterministic search over the **over-power ladder** (`OVER_POWER_LADDER = [1.0, 1.25, 1.5, 2.0]`) × the **TOUGH ladder** (`TOUGH_LADDER = [0.0, 0.1, 0.2]`), building each candidate by scaling `emit_requirement`'s (per-objective weapon-mixed) requirement by the rung and adding `ceil(t·fighter_parts)` TOUGH, then calling `assemble_force` — so the creep-split (n_fighters × n_healers, `1..=MAX_SIZED_MEMBERS`) is *derived* by `assemble_force`'s role-set fill, not separately enumerated. It commits the max-EV candidate iff (`honor_verdict` ⇒ `EV > commit_ev_threshold`), else `None` (the honest unwinnable defer, D10); an always-field doctrine commits the max-EV candidate regardless (deterministic tie-break: max EV, then lowest k, then lowest tough, then fewest members). `CompositionParams` (NOT `Serialize`) carries the tournament-tunable knobs. `emit_requirement` (T1) survives as the optimizer's per-rung requirement source; `win_probability` (`force_sizing.rs:366`) survives as its probability model. The seed constants `HOLD_MARGIN` (`:27`), `COORDINATED_DPS_MARGIN` (`:34`), `PREFERRED_MEMBER_ENERGY` (`composition.rs:43`) are threaded through `CompositionParams` (`hold_margin` / `over_power_margin` / `member_energy`) and are now swept knobs (`CompositionParams::default` reproduces them so the swap is behavior-preserving for the calibration gates). Small-many-vs-few-big, over-power, and armor all **emerge** from the search. **Tuning result (ADR 0031b):** the Tier-1 count × margin sweep across all four bed regimes confirmed the seeds are Pareto-optimal across regimes and KEPT (no `default()` change). Weapon `archetype` is NOT yet an EV-search dimension — it is still selected upstream by the objective (`optimizer_ceiling_budget`'s fighter weapon); promoting it into the search is the Tier-2 follow-up (D17 / 0031a §2B).
+`optimize_composition(objective, defense, enemy, target_value, onsite_window, coordination, importance, honor_verdict, params) -> Option<SquadComposition>` runs ONE parameterized, bit-deterministic search over the **over-power ladder** (`OVER_POWER_LADDER = [1.0, 1.25, 1.5, 2.0]`) × the **TOUGH ladder** (`TOUGH_LADDER = [0.0, 0.1, 0.2]`), building each candidate by scaling `emit_requirement`'s (per-objective weapon-mixed) requirement by the rung and adding `ceil(t·fighter_parts)` TOUGH, then calling `assemble_force` — so the creep-split (n_fighters × n_healers, `1..=MAX_SIZED_MEMBERS`) is *derived* by `assemble_force`'s role-set fill, not separately enumerated. It commits the max-EV candidate iff (`honor_verdict` ⇒ `EV > commit_ev_threshold`), else `None` (the honest unwinnable defer, D10); an always-field doctrine commits the max-EV candidate regardless (deterministic tie-break: max EV, then lowest k, then lowest tough, then fewest members). `CompositionParams` (NOT `Serialize`) carries the tournament-tunable knobs. `emit_requirement` (T1) survives as the optimizer's per-rung requirement source; `win_probability` (`force_sizing.rs:366`) survives as its probability model. The seed constants `HOLD_MARGIN` (`:27`), `COORDINATED_DPS_MARGIN` (`:34`), `PREFERRED_MEMBER_ENERGY` (`composition.rs:43`) are threaded through `CompositionParams` (`hold_margin` / `over_power_margin` / `member_energy`) and are now swept knobs (`CompositionParams::default` reproduces them so the swap is behavior-preserving for the calibration gates). Small-many-vs-few-big, over-power, and armor all **emerge** from the search. **Tuning result (ADR 0031b):** the Tier-1 count × margin sweep across all four bed regimes found the seeds Pareto-optimal across regimes, so they stand as the defaults. Weapon `archetype` is the axis the search does *not* yet range over — it is selected upstream by the objective (`optimizer_ceiling_budget`'s fighter weapon); promoting it into the search is Tier 2 (D17 / 0031a §2B).
 
-**RESIDUAL — `optimizer_ceiling_budget` (the renamed 3+5, used only for the requirement-assess).** `force_ceiling`'s deleted presumed budget survives in ONE narrow role: `optimizer_ceiling_budget(objective, member_energy, onsite_window)` (`composition.rs:602-624`) reproduces the IDENTICAL 3-fighter + 5-healer ceiling math purely as the BUDGET `emit_requirement` assesses *winnability* against (so the structure/clear arms' `winnable` verdict stays conservative). It does NOT shape any fielded candidate — the per-candidate EV/commit decision is budget-free (each candidate is scored from its own `capabilities()`, §2c above). The verdict it produces is not even the gate (the EV commit is, D16); it only keeps `from_assessment` conservative. **A budget-free `emit_requirement` is the documented follow-up to fully retire it** (§5 Deferred) — once the structure/clear arms size from the per-candidate parts directly, the last presumed-shape constant in the pipeline is gone.
+**`optimizer_ceiling_budget` — the narrow surviving 3+5 budget, used only for the requirement-assess.** `force_ceiling`'s deleted presumed budget survives in ONE narrow role: `optimizer_ceiling_budget(objective, member_energy, onsite_window)` (`composition.rs:602-624`) reproduces the IDENTICAL 3-fighter + 5-healer ceiling math purely as the BUDGET `emit_requirement` assesses *winnability* against (so the structure/clear arms' `winnable` verdict stays conservative). It does NOT shape any fielded candidate — the per-candidate EV/commit decision is budget-free (each candidate is scored from its own `capabilities()`, §2c above). The verdict it produces is not even the gate (the EV commit is, D16); it only keeps `from_assessment` conservative. **A budget-free `emit_requirement` is the documented follow-up to fully retire it** (§5 Deferred) — once the structure/clear arms size from the per-candidate parts directly, the last presumed-shape constant in the pipeline is gone.
 
 **The research-grounded knob set (ADR 0031a) + the tuning result (ADR 0031b).** A four-bot survey (Overmind, The-International, TooAngel, community meta — `docs/design/0031a-force-composition-tunable-params.md`) confirmed the count-axis knobs (our `hold_margin 1.3`/`over_power 1.5` seeds sit dead-center of the field's 1.2–1.5 bracket) and surfaced the structural gaps our count-only search lacks — the **body/archetype axis**:
 - **`archetype` (weapon select) — the biggest gap + the original failure.** Weapon (RangedBlob / MeleeAttack / WorkDismantle / derived Drainer) becomes a **tuned EV-search dimension**, no longer fixed upstream by `doctrine.fighter_role`. The DOCTRINE constrains the *feasible* archetypes for the objective (an immune core ⇒ only RANGED; a dismantle-able ring ⇒ WORK, or RANGED when creep-defended; creep-clear ⇒ RANGED/MELEE) and the EV search picks the best within that set — so `EV(C)` itself rejects a weapon mismatch (the measured WORK-siege-vs-guard = 0 damage). `fighter_role` becomes a feasible-set constraint, not a fixed pick.
@@ -76,10 +76,10 @@ This is the marginal-capability-per-energy fill specialized to the current 1:1 r
 4. ALWAYS-FIELD floor + scale: a `!honor_verdict()` doctrine raises `required` to at least `default_floor_force()` (`RequiredForce { heal_parts: 4, anti_creep_parts: 4 }`, `:241`) — a max, so it scales UP with threat, never below floor, never a hardcoded template.
 5. `assemble_force(&required, member_energy)`, stamp `retreat_threshold`.
 
-> **Heal floor — over-heals a CONFIRMED-undefended target (investigated 2026-06-28; FIXED 2026-06-28, decision `5db7948`→this fix).**
-> The Lanchester sizing is already CORRECT: `RequiredForce::from_assessment` → `defender_heal_parts_for_dps(incoming_dps)` (`bodies.rs:120`) returns **`heal_parts = 0` when `incoming_dps <= 0`**, and for an undefended core `incoming = tower_dps + enemy_dps = 0`. We size heal **PARTS** (a Lanchester-derived continuous count), discretized to **ROLES** in `assemble_force` via `count = ceil(parts/cap).max(1)` (§2c #4) — a role with 0 parts is dropped entirely, so parts→roles is fine.
-> The defect is step 4's floor (`doctrine.rs:350`, `required.heal_parts = required.heal_parts.max(4)`): it is a HEDGE for an **UNSCOUTED** room (`dps=0` because we have *no intel* → don't field a naked force into the unknown), but it ALSO fires on a **CONFIRMED-undefended** room (`dps=0` from *fresh intel* → genuinely clear), overriding the oracle's correct `0` → `4` parts → `ceil(4/cap)` ≈ **2 wasted Healer slots** (the live undefended-core `[Healer, Healer, RangedDPS]` squad). It conflates *unscouted/unknown* with *confirmed-clear* — the same no-vision-vs-confirmed-clear distinction the rally intel-reliability fix turned on ([[combat-ev-economic-and-pwin-gating]] / the rally fix `1550301`).
-> **Fix direction (small, precedented):** gate the always-field floor on NOT-confirmed-undefended, reusing the existing undefended detector `optimize_composition` already has (`tower_dps == 0.0 && incoming == 0.0`, `composition.rs:578` — the FIX-3 gate). Keep the floor when intel is STALE/ABSENT (the hedge is correct there) and for genuinely-defended targets. Offline-provable: a confirmed-undefended (fresh intel, dps=0) target → `heal_parts = 0` → no Healer slot; an unscouted (no intel) target → floor retained. Low risk; defense (`GarrisonDefense`) behavior on a real/unknown threat is unchanged.
+> **The always-field heal floor must NOT fire on a CONFIRMED-undefended target.**
+> The Lanchester sizing is already correct on its own: `RequiredForce::from_assessment` → `defender_heal_parts_for_dps(incoming_dps)` (`bodies.rs:120`) returns **`heal_parts = 0` when `incoming_dps <= 0`**, and for an undefended core `incoming = tower_dps + enemy_dps = 0`. Heal is sized in **PARTS** (a Lanchester-derived continuous count) and discretized to **ROLES** in `assemble_force` via `count = ceil(parts/cap).max(1)` (§2c #4) — a role with 0 parts is dropped entirely, so parts→roles is faithful.
+> The hazard is step 4's floor (`required.heal_parts.max(4)`). It is a HEDGE for an **UNSCOUTED** room (`dps = 0` because there is *no intel* → don't field a naked force into the unknown), but taken naively it also fires on a **CONFIRMED-undefended** room (`dps = 0` from *fresh intel* → genuinely clear), overriding the oracle's correct `0` and buying ~2 wasted Healer slots. That conflates *unknown* with *confirmed-clear* — the same distinction the rally intel-reliability rule turns on ([[combat-ev-economic-and-pwin-gating]]).
+> **So the floor is gated on NOT-confirmed-undefended**, reusing the undefended detector `optimize_composition` already carries (`tower_dps == 0.0 && incoming == 0.0`). The floor is kept when intel is STALE or ABSENT (where the hedge is correct) and for genuinely-defended targets. Offline-provable both ways: confirmed-undefended (fresh intel, dps = 0) → `heal_parts = 0` → no Healer slot; unscouted (no intel) → floor retained. Defense (`GarrisonDefense`) against a real or unknown threat is unaffected.
 
 The **seven doctrines** across three priority-ordered registries: OFFENSE `default_doctrines()` = [NpcCore, SiegeBreach, PlayerRaid, GatedPlayerRaid (ADR 0029 §7/D7), HarassRemote]; `sk_doctrines()` = [SkSuppression]; `defense_doctrines()` = [GarrisonDefense] (separate so defender selection is distinct from offense ClearCreeps). `decide_doctrine` returns the first activator that fires. Gated (`honor_verdict=true`): NpcCore, SiegeBreach, GatedPlayerRaid. Always-field (`false`): PlayerRaid, HarassRemote, GarrisonDefense, SkSuppression. GarrisonDefense fields a continuous blob from `clear_force` — member count emerges, so the historic W9N8 1↔2 defense flap is structurally impossible (`doctrine.rs:413-431`).
 
@@ -89,7 +89,7 @@ Every force-producing site routes through `decide_doctrine(...).and_then(|d| pla
 
 Dismantle counts as strength: `assess_engage`'s `our_strength` adds `dismantle_power`, **gated on a hostile structure being present** (the P0a correction — adding dismantle to `our_dps` everywhere mis-scores it as anti-creep in creep-killability, so the fix is scoped to the structure-engagement strength only; CreepClearWins-safe). A WORK+HEAL siege now reads positive strength and engages instead of retreating at t0.
 
-### 2(f) Single enemy-force source of truth (#41) — DONE (`97d9944`)
+### 2(f) Single enemy-force source of truth (#41)
 
 Enemy CREEP combat power had **two** representations: `DefenseProfile.enemy_dps` (read by the structure-SIZING path `assess`) and `EnemyForce.dps` (read by the EV path `optimize_composition`/`pairing_p_win` + `clear_force`). They were kept disjoint by a "don't double-count" convention (each path read only one), which made `DefenseProfile.enemy_dps` **dead in the modern EV/optimize path** and forced every floor/predicate that touched the enemy to remember BOTH channels — the heal-floor and owned-floor work both had to AND `defense.enemy_dps == 0` with `enemy_force.dps == 0` (`defense_confirmed_undefended`). A footgun: a producer that updated one channel and not the other would silently desync the survivability sizing from the P(win) sizing.
 
@@ -100,77 +100,63 @@ Enemy CREEP combat power had **two** representations: `DefenseProfile.enemy_dps`
 - **Producers** (`war.rs` InvaderCore + ResourceDenial arms, `squad_manager::project_defense`, the eval's `derive_profile`) no longer write `defense.enemy_dps`; the same site already builds the `EnemyForce` carrying the enemy creep dps (war.rs's `estimated_enemy_dps`, the eval's `defender_force`/`enemy_force_of`).
 - The **confirmed-undefended** predicate now reads ONE channel (`enemy_force.dps`); the dead `defense.enemy_dps == 0` term is gone.
 
-**Reconciliation.** The review flagged a possible latent inconsistency — `war.rs` set `defense.enemy_dps = threat.estimated_dps` while the EV path built `EnemyForce` from `estimated_enemy_dps`. In the as-built code these are the **same value**: `AttackCandidate.estimated_enemy_dps` is itself assigned `threat_data.estimated_dps` at the producer, and `threatmap.estimated_dps` is the room's Σ Attack/RangedAttack dps. So the unification is **read-equivalent** — `assess` now reads the identical dps it read before, just from the one channel. The eval calibration is preserved because `derive_profile.enemy_dps` and `defender_force().dps` both sum the SAME defender creeps' attack+ranged power; the `OracleCalibration`/`SizingWins` beds are creep-free (`defender_force` returns `None` → dps 0 either way), and `CreepClearWins` uses `clear_force` directly (untouched). **NO double price:** `assess` consumes the value to size survivability heal; the EV path consumes it for P(win) — different consumers of one value.
+**Reconciliation.** The unification looks like it could change sizing — `war.rs` set `defense.enemy_dps = threat.estimated_dps` while the EV path built `EnemyForce` from `estimated_enemy_dps` — but these are the **same value**: `AttackCandidate.estimated_enemy_dps` is itself assigned `threat_data.estimated_dps` at the producer, and `threatmap.estimated_dps` is the room's Σ Attack/RangedAttack dps. So the unification is **read-equivalent**: `assess` reads the identical dps, just from the one channel. The eval calibration is preserved because `derive_profile.enemy_dps` and `defender_force().dps` both sum the SAME defender creeps' attack+ranged power; the `OracleCalibration`/`SizingWins` beds are creep-free (`defender_force` returns `None` → dps 0 either way), and `CreepClearWins` uses `clear_force` directly (untouched). **NO double price:** `assess` consumes the value to size survivability heal; the EV path consumes it for P(win) — different consumers of one value.
 
 **Not a code change here (#41 cross-ref):** `EnemyForce.dps` is the Attack/RangedAttack dps only — `dps == 0` ≠ harmless (a CLAIM declaimer / WORK dismantler / lone HEAL creep can be dangerous at dps 0). Harmlessness is a SEPARATE signal (`hostile_warrants_defender`, computed from parts at the threatmap producer). Cross-ref the owned-floor closure in ADR 0027.
 
 **WFV:** none — `DefenseProfile`/`EnemyForce`/`ForceAssessment` are transient compute structs, not `Serialize`.
 
-### 2(g) Drain tactic — status + follow-ups (#39)
+### 2(g) Drain tactic (#39)
 
-**DONE (P2/P3, 2026-06-29, decision `79ebd32` / super `8b89f46`).** The oracle DECIDES `AssaultMode::Drain` and
-sizes a sustainable TOUGH+HEAL comp (`assess` drain branch): the soak is judged at the **falloff standoff**
-(`tower_dps_at_drain_standoff` — the range the runtime holds, not point-blank), so a finite-tower base a direct
-breach can't out-heal is drainable; `required_heal = standoff_dps` (sustainable part), `required_tank_hp =
-(standoff_dps − required_heal)·drain_ticks` → TOUGH parts only when `mode==Drain`. **EV guard:** never an
-infinite-energy tower (`DRAIN_INFINITE_TOWER_ENERGY=50_000` → `dt=0`, filtered from the soak) or an
-unsustainable target (`tank_sustain >= drain_damage` veto → unwinnable), never downgrades a winning breach
-(the breach branch returns first). The bot THREADS the oracle's `assault_mode` via the ephemeral
-`ObjectiveRuntimeEntry` → `StrategyInfo` so the previously-inert `DrainBreach` / `move_to_drain_standoff` /
-`drain_stance` fire live. Offline-proven incl. an oracle-driven end-to-end test (drain stance DERIVED from
-`assess().mode==Drain`, not hardcoded).
+**The oracle DECIDES `AssaultMode::Drain` and sizes a sustainable TOUGH+HEAL comp** (`assess` drain branch).
+The soak is judged at the **falloff standoff** (`tower_dps_at_drain_standoff` — the range the runtime actually
+holds, not point-blank), which is what makes a finite-tower base drainable even when a direct breach cannot
+out-heal it: `required_heal = standoff_dps` (the sustainable part) and `required_tank_hp =
+(standoff_dps − required_heal)·drain_ticks` → TOUGH parts, only when `mode == Drain`. **EV guards:** never
+drain an infinite-energy tower (`DRAIN_INFINITE_TOWER_ENERGY = 50_000` → `dt = 0`, filtered out of the soak);
+never drain an unsustainable target (`tank_sustain >= drain_damage` ⇒ unwinnable); and never downgrade a
+winning breach (the breach branch returns first). The bot threads the oracle's `assault_mode` through the
+ephemeral `ObjectiveRuntimeEntry` → `StrategyInfo`, so `DrainBreach` / `move_to_drain_standoff` /
+`drain_stance` are DERIVED from `assess().mode == Drain` rather than hardcoded anywhere.
 
-**FOLLOW-UP 1 (the substantive one) — MULTI-member tank-forward heal coordination — DONE IN-SIM 2026-06-29**
-(decision `96474f2` / eval `8b41eee`). The oracle-sized multi-member drain comp was RosterWiping (sizing
-right, runtime coordination wrong — all members bunched at the standoff so the healers ate tower fire + died).
-Built (pure tactics, lib.rs): `drain_tank_index` (max `hits_max`, stable lowest-index tie-break);
-`drain_member_goals` via `project_from_nest` (pure integer geometry) — the **TANK** to the falloff standoff
-(forward; it is the towers' single nearest focus), every other living member **ONE tile behind**
-(`DRAIN_HEALER_SETBACK=1`, keeping the range-1 12×/part heal rate the drain-sustain math assumes);
-`assign_heals_drain` force-pins in-range healers onto the **TANK first** (idle spill to the generic triage).
-Scoped to an active `SquadMovement::Drain` directive (the non-drain heal/positioning path is byte-unchanged).
-RED→GREEN: the bed is renamed `multi_member_drain_soak_kills_with_tank_forward_coordination`, assertion flipped
-`!Killed`→`Killed` — an 8-member comp soaks the 4-tower falloff, healers heal the tank from behind, the finite
-towers bleed dry, the squad breaches → genuine `Killed{form 300, engage 217}`. No WFV bump.
-> **Safety is POSITIONAL, not falloff** (verify note): at the falloff floor (range ≥20) standoff-vs-standoff+1
-> eat the same per-tower damage; the healers are safe because the tower AI **focuses the creep CLOSEST to the
-> core** (= the forward tank). Correct vs a focus-closest defender (the sim model + the common live tower
-> script); a hypothetical focus-LOWEST-HITS AI could draw healer fire. Acceptable.
+**Multi-member tank-forward heal coordination.** Sizing a drain comp correctly is not enough: a multi-member
+comp that all bunches at the standoff loses its healers to tower fire. The coordination is pure tactics:
+`drain_tank_index` (max `hits_max`, stable lowest-index tie-break) picks the tank; `drain_member_goals` (via
+`project_from_nest`, pure integer geometry) puts the **TANK** at the falloff standoff — forward, because it is
+then the towers' single nearest focus — and every other living member **ONE tile behind**
+(`DRAIN_HEALER_SETBACK = 1`, which preserves the range-1 12-per-part heal rate the drain-sustain math assumes);
+`assign_heals_drain` force-pins in-range healers onto the **TANK first**, with idle spill to the generic triage.
+All of it is scoped to an active `SquadMovement::Drain` directive, so the non-drain heal/positioning path is
+untouched. The acceptance bed is a multi-member soak: an 8-member comp soaks a 4-tower falloff, healers heal
+the tank from behind, the finite towers bleed dry, and the squad breaches.
+> **Safety here is POSITIONAL, not falloff.** At the falloff floor (range ≥ 20) standoff and standoff+1 eat the
+> same per-tower damage; the healers are safe because the tower AI **focuses the creep CLOSEST to the core**
+> (= the forward tank). That holds against a focus-closest defender (the sim model and the common live tower
+> script); a hypothetical focus-lowest-hits AI could draw healer fire instead. Accepted.
 
-**FOLLOW-UP 1b — LIVE drain wiring — DONE 2026-06-29** (super `<live-drain>`). The per-member `member_goals`
-were honored in-sim but inert on the live bot: a drain comp on a `Dismantle` (formation) objective holds a
-formation ANCHOR during assault, so the job took the slot-based `execute_formation_movement` (ignoring
-`member_goals`); only the ANCHORLESS `execute_decide_movement` reads them. FIX: a pure predicate
-`should_drop_anchor_for_drain(&decision) = matches!(decision.movement, SquadMovement::Drain { .. })` gates an
-anchor-drop (`ctx.squad_path = None`) in `reconcile` right after `apply_squad_decision` (squad_manager.rs) →
-the job routes anchorless → each member moves to its `member_goal` (tank forward at the standoff, healers one
-tile behind) — byte-for-byte the sim adapter's mechanism. Reuses the existing rally/solo-travel/skirmish
-runtime anchor-drop pattern. **Scoped to drain**: the predicate is exactly `matches!(Drain)`; non-drain
-formations (breach / normal siege / `Dismantle`-not-in-drain) keep their anchor + slots byte-unchanged
-(control test). **Drain exit re-forms**: towers dry → the decision crate emits `Advance` → the drop stops →
-the formation branch re-creates the anchor → re-form + breach. +2 bot tests
-(`drain_anchor_drop_predicate_fires_only_for_drain`, `drain_reconcile_drops_anchor_and_routes_member_goals_live`).
-No WFV bump (`squad_path` None at runtime; `tick_orders.squad_movement` is `#[serde(skip)]`); decision-crate
-drain coordination untouched. The drain tactic is now wired END-TO-END — oracle decides + sizes, bot threads
-`assault_mode`, the multi-member comp coordinates (tank-forward soak + heal-the-tank) BOTH in-sim and live;
-remaining = a LIVE confirmation soak + the LOW/not-live-reachable FOLLOW-UP 2 (mixed-tower hardening).
+**The live path must drop the formation anchor while draining.** A drain comp on a `Dismantle` (formation)
+objective otherwise holds a formation ANCHOR during assault, so the job takes the slot-based
+`execute_formation_movement` and ignores `member_goals` — only the ANCHORLESS `execute_decide_movement` reads
+them. A pure predicate `should_drop_anchor_for_drain(&decision) = matches!(decision.movement,
+SquadMovement::Drain { .. })` gates an anchor-drop (`ctx.squad_path = None`) in `reconcile` immediately after
+`apply_squad_decision`, so the job routes anchorless and each member moves to its `member_goal` — byte-for-byte
+the sim adapter's mechanism, reusing the existing rally / solo-travel / skirmish anchor-drop pattern. It is
+**scoped to drain**: non-drain formations (breach, normal siege, `Dismantle`-not-draining) keep their anchor and
+slots unchanged. **Drain exit re-forms**: towers dry → the decision crate emits `Advance` → the drop stops → the
+formation branch re-creates the anchor → re-form and breach. No WFV bump (`squad_path` is `None` at runtime and
+`tick_orders.squad_movement` is `#[serde(skip)]`).
 
-**FOLLOW-UP 2 — mixed finite+infinite-tower hardening — DONE 2026-06-29** (decision `<mixed>`; defense-in-depth,
-behavior-neutral live). A MIXED finite+infinite-tower base would have under-sized the soak (counting only finite
-towers) while `assess_engage` exempted the ENTIRE tower dps when draining → a committed-but-unsustainable drain.
-BOTH guards landed: **(A)** `assess()` refuses Drain if any energized tower has energy ≥
-`DRAIN_INFINITE_TOWER_ENERGY` (`has_energized_infinite_tower`, force_sizing.rs) → a mixed-infinite base falls to
-the heavy-assault/unwinnable path (you can't bleed an infinite tower + its standoff fire isn't sized for); **(B)**
-`assess_engage`'s drain exemption drops ONLY the FINITE towers' contribution (`exempt_finite_tower_dps`;
-`counted_tower_dps = tower_dps − exempt`) so the never-draining infinite tower's standoff fire STILL counts in the
-unwinnable veto — consistent with the finite-only soak. **Pure-finite is byte-unchanged** (all-finite → exempt ==
-tower_dps → counted == 0, identical to the old all-or-nothing). +2 tests (mixed-base refused + infinite counted;
-pure-finite control still Drains). NOT live-reachable (real towers cap at 1000 < the 50k sentinel). No WFV bump.
-
-> **Drain is now CLOSED OUT end-to-end:** oracle decides `AssaultMode::Drain` + sizes a sustainable TOUGH+HEAL
-> comp → bot threads `assault_mode` (1b) → multi-member tank-forward soak + heal-the-tank coordination (in-sim
-> AND live, 1) → mixed finite+infinite-tower hardened (2). Remaining = an opportunistic LIVE confirmation soak
-> (a towered finite-energy winnable target appearing in range).
+**Mixed finite + infinite towers are hardened at both ends.** A base with both would otherwise under-size the
+soak (counting only the finite towers) while `assess_engage` exempted the ENTIRE tower dps when draining — a
+committed but unsustainable drain. Two guards: **(A)** `assess()` refuses Drain if any energized tower has
+energy ≥ `DRAIN_INFINITE_TOWER_ENERGY` (`has_energized_infinite_tower`), so a mixed-infinite base falls through
+to the heavy-assault/unwinnable path — you cannot bleed an infinite tower and its standoff fire is not sized
+for; **(B)** `assess_engage`'s drain exemption drops ONLY the FINITE towers' contribution
+(`exempt_finite_tower_dps`; `counted_tower_dps = tower_dps − exempt`), so a never-draining infinite tower's
+standoff fire still counts in the unwinnable veto, consistent with the finite-only soak. The pure-finite case is
+unchanged by construction (all-finite ⇒ exempt == tower_dps ⇒ counted == 0, identical to the old
+all-or-nothing). Real towers cap at 1000 energy, well under the 50k sentinel, so (A) is defense-in-depth for
+modded or synthetic worlds.
 
 ---
 
@@ -189,11 +175,11 @@ pure-finite control still Drains). NOT live-reachable (real towers cap at 1000 <
 
 ## 4. Proof
 
-- **Acceptance test:** `oracle_sized_force_forms_and_kills_a_defended_core` (`screeps-combat-eval/src/harness/lifecycle.rs:495`) — the force is sized via `emit_requirement → assemble_force` against a defended bed (rampart + tower + guard), formed under economy contention, then moved in to kill. Un-ignored 2026-06-27 after P0a + P1b.
+- **Acceptance test:** `oracle_sized_force_forms_and_kills_a_defended_core` (`screeps-combat-eval/src/harness/lifecycle.rs:495`) — the force is sized via `emit_requirement → assemble_force` against a defended bed (rampart + tower + guard), formed under economy contention, then moved in to kill.
 - **Regime sweep:** `assembler_kills_across_defended_regimes` (`harness/lifecycle.rs:521`), each graded case paired with a determinism assertion.
 - **Calibration gates** (live + discriminating every phase): `OracleCalibration` (FP ≤ 0.010 / FN ≤ 0.200, `harness/validate.rs:94`), `SizingWins` (`harness/validate.rs:638`), `CreepClearWins` (`harness/validate.rs:749`).
 - **Determinism fences:** `emit_requirement_golden_output_is_stable_over_realistic_bases` (`harness/validate.rs:909`, the bed-level parity fence — identical verdict + RequiredForce + composition run-twice), `sim_maintains_one_creep_per_tile` (`harness/validate.rs:923`), `sim_is_deterministic_over_rounds`.
-- **Tournament lens (P6, D13/D16) — Tier-1 swept, results in ADR 0031b:** the optimizer changes WHICH forces are fielded, so the `CompositionParams` knobs ARE the sweep. The Tier-1 count × margin sweep (`harness::param_sweep::tests::sweep_composition_params`, env-driven, per regime `all`/`structure`/`creep`/`defended`) ran 2026-06-27; it **confirmed the seeds are Pareto-optimal across regimes and KEPT** (no `default()` change) — `member_energy` is the dominant axis (the defended-Kill floor pins it at 3000), `over_power_margin = 1.5` is the cheapest co-best in `all`, `hold_margin` is flat in v1, the FP gate ≤ 0.010 is the over-commit ceiling, the FN gate is never binding. Full per-regime emergent strategy map + the recommended-default rationale: `docs/design/0031b-force-composition-tuning-results.md`. The ADR-0019 position-utility weights + the exploitability tuning re-sweep (P6) and the Tier-2/3 archetype/drain sweeps remain (0031b §4).
+- **Tournament lens (D13/D16) — Tier-1 results in ADR 0031b:** the optimizer changes WHICH forces are fielded, so the `CompositionParams` knobs ARE the sweep. The Tier-1 count × margin sweep (`harness::param_sweep::tests::sweep_composition_params`, env-driven, per regime `all`/`structure`/`creep`/`defended`) found the seeds Pareto-optimal across regimes — `member_energy` is the dominant axis (the defended-Kill floor pins it at 3000), `over_power_margin = 1.5` is the cheapest co-best in `all`, `hold_margin` is flat at this tier, the FP gate ≤ 0.010 is the over-commit ceiling, and the FN gate is never binding. Full per-regime emergent strategy map + the default rationale: `docs/design/0031b-force-composition-tuning-results.md`.
 
 ---
 
@@ -202,10 +188,10 @@ pure-finite control still Drains). NOT live-reachable (real towers cap at 1000 <
 **Positive.** One sizing pipeline; templates, catalogs, and `is_sized` deleted (`prefer deletion over abstraction`). New roles, in-between counts, and dual weapons are all structurally reachable. Bot and eval are provably at parity. A defer is honest (`None`), never a silent static. `RequiredForce` is not `Serialize`, so the model costs no `WORLD_FORMAT_VERSION` bump; only the catalog deletion does (18→19, one loud reset, operator-accepted).
 
 **Deferred.**
-- **Budget-free `emit_requirement`** — the last presumed-shape residual. `optimizer_ceiling_budget` (the renamed 3+5) survives ONLY as `emit_requirement`'s winnability-assess budget; the per-candidate EV/commit is already budget-free. Make the structure/clear arms size from the per-candidate parts directly and `optimizer_ceiling_budget` retires entirely (§2c RESIDUAL).
+- **Budget-free `emit_requirement`** — the last presumed-shape residual. `optimizer_ceiling_budget` (the renamed 3+5) survives ONLY as `emit_requirement`'s winnability-assess budget; the per-candidate EV/commit is already budget-free. Make the structure/clear arms size from the per-candidate parts directly and `optimizer_ceiling_budget` retires entirely (§2c, `optimizer_ceiling_budget`).
 - **Tier-2/3 archetype + drain + EHP-grading** — promote weapon `archetype` into the EV search (D17; the biggest remaining gap = the original WORK-siege-vs-guard failure); add a tower-present acceptance bed that *requires* `tough > 0` so the EHP ladder is graded; add the drain/kite cost-side branch + `engage_range` for the unboosted-vs-multi-tower path. Plan + ranges: 0031a §4; results so far: 0031b §4.
 - **Formation-enum footprint cleanup** — `FormationShape::Box2x2`/`Line` and `military/formation.rs`'s hardcoded 2×2 overlay (`is_valid_quad_position`, `apply_quad_cost_overlay`) are silently wrong for 5–8 members; generalize to footprint-driven formation from member count.
-- **P6 position-weights re-sweep** — re-run the ADR-0019 position-utility / exploitability tuning + re-sweep weights now that the optimizer changes which forces are fielded (the `CompositionParams` Tier-1 sweep itself is DONE — 0031b).
+- **P6 position-weights re-sweep** — re-run the ADR-0019 position-utility / exploitability tuning + re-sweep weights now that the optimizer changes which forces are fielded.
 - **Higher-power multi-squad strategies (escalate-vs-abandon on `assemble_force`=`None`, #38)** — the response to a `None` defer (scale the blob / coordinate multiple squads / boost) is a separate strategy-layer ADR; the composition layer's job ends at "best single squad, or None." Tracked as #38.
 
 ---
@@ -232,6 +218,8 @@ pure-finite control still Drains). NOT live-reachable (real towers cap at 1000 <
 
 ---
 
-> **Evolution.** Built across P0–P4b (committed: P0a Layer-A brain fix `5db5e08`; P2 `emit_requirement` `778e93d`/`ac61b0b`/`6bd8e1b`; P3 `assemble_force` `5079bf8`/`38fd534`/`da79345`; P4a pure-classifier unification `4691c00`/`54da38c`/`0fb1370`). **P4b landed alongside this consolidation:** the ≈13 `SquadComposition` constructors + `sized_for` + the static `BodyType` shapes (now `Sized`-only) deleted, the orphaned catalog `bodies::*_body` removed, all call sites migrated, and `WORLD_FORMAT_VERSION` 18→19. **The EV optimizer landed (D14/D16/D17):** `force_ceiling`'s presumed budget is deleted as a producer — `optimize_composition` is the per-candidate EV decision (over-power × TOUGH ladders, `assemble_force` builds each candidate), and `force_ceiling`'s 3+5 math survives only as the renamed `optimizer_ceiling_budget` for `emit_requirement`'s winnability-assess. **The Tier-1 `CompositionParams` tournament sweep landed + the seeds are confirmed-optimal-across-regimes and KEPT** (no `default()` change; ADR 0031b, grounded in 0031a's four-bot survey). **Remaining:** the budget-free `emit_requirement` (retires `optimizer_ceiling_budget`), the Tier-2/3 archetype/drain/EHP-grading sweep (D17 / 0031a §4 / 0031b §4), the formation-enum footprint cleanup, and the P6 position-weights re-sweep. See `docs/design/0031a-force-composition-tunable-params.md` (params) + `docs/design/0031b-force-composition-tuning-results.md` (results).
->
-> **Current state as of 2026-07-01.** Code-complete in decision+bot: the `RequiredForce` capability vector, `emit_requirement`, `assemble_force` (monotonic over `1..=MAX_SIZED_MEMBERS`), `optimize_composition` (tuned per 0031b), `ForceDoctrine` (the seven activators), and the single-`EnemyForce` unification (§2(f), `97d9944`). Landed alongside sibling combat ADRs 0027/0032/0034/0035/0036/0037 (rally/engage/structure/tower-defense done + deployed to MMO). OPEN follow-ups only: Tier-2 weapon-archetype into the EV search (§2(e)/D17); Tier-3 param axes (0031a §4); escalate-vs-abandon on `assemble_force`=`None` (#38, the Deferred multi-squad bullet).
+## Landed
+- `5db5e08` Layer-A brain fix: dismantle counts as strength (2026-06-27)
+- `6bd8e1b` `emit_requirement` — the one capability-vector emitter (2026-06-27)
+- `da79345` `assemble_force` — role-distribution builder, templates retired (2026-06-27)
+- `97d9944` single `EnemyForce` channel for enemy creep power (2026-06-28)

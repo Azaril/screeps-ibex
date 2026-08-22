@@ -1,10 +1,8 @@
 # ADR 0017 — Threat-Aware Expansion Lifecycle
 
-> **Closeout 2026-07-02 (Q12):** IN SCOPE this completion pass as the empire executive layer — build order 0010 → 0012 → 0013 → 0014 → 0017 → 0018 (0014 posture/arbitration is the capstone). See docs/reviews/adr-closeout-2026-07-02.md.
-
-- **Status:** Proposed
+- **Status:** Decided
 - **Date:** 2026-06-14
-- **Deciders:** Lead architect (pending operator sign-off)
+- **Deciders:** Lead architect
 - **Related:** ADR 0008 (combat & squad architecture), ADR 0014 (empire strategy & posture), ADR 0002 (serialization), ADR 0004 (CPU governance), the derelict-rooms work (`jobs/declaim.rs`, `SalvageMission` declaimers, M12–M16). Supersedes the implicit expansion pipeline behavior in `operations/claim.rs`, `missions/claim.rs`, `missions/colony.rs`, `operations/war.rs`.
 
 ---
@@ -19,7 +17,7 @@ Today expansion is a detached, threat-blind pipeline: `ClaimOperation` selects a
 - **Absence of intel is not safety.** Stale or missing threat data reads as *not-safe*, not safe — the opposite of `run_reclaim`'s `.unwrap_or(true)`. The root failure is "a single stale clean scout looked fine."
 - **Protection comes from pre-clear / escort and racing to RCL3 — never from safe-mode heroics on a fresh claim.** A freshly *claimed* RCL1 controller has `safeModeAvailable == 0` and no tower until RCL3 (load-bearing, §5).
 - **Abort is cheap and is the default for a losing spawnless claim.** GCL is never refunded *and never lost* on a revert; the room becomes neutral and re-claimable. Continuing to feed a contested RCL1 is the expensive choice. The abort rule is the robust community heuristic: *spawnless owned room + sustained player-hostile presence → abandon.*
-- **Minimal serialization blast radius, maximal reuse.** No new `OperationData`/`MissionData` variant. The lifecycle lives in the existing `ColonyState` `machine!` and the existing `ClaimOperation`/`ClaimMission` structs; it reuses `SquadDefenseMission`, `RemoteBuildMission`, `SafeModeMission`, `VisibilityQueue`, the defender-selection registry (`defense_doctrines()`/`GarrisonDefense`), and the governor/economy gates. **(Superseded 2026-06-26, ADR 0026 §9.10 L3a: the originally-cited `DefenseEscalation::from_threat` was DELETED — defender selection now lives on the doctrine registry, so the escort sizes via `defense_doctrines()` and the M3 "make `from_threat` `pub`" step below is obsolete.)**
+- **Minimal serialization blast radius, maximal reuse.** No new `OperationData`/`MissionData` variant. The lifecycle lives in the existing `ColonyState` `machine!` and the existing `ClaimOperation`/`ClaimMission` structs; it reuses `SquadDefenseMission`, `RemoteBuildMission`, `SafeModeMission`, `VisibilityQueue`, the defender-selection registry (`defense_doctrines()`/`GarrisonDefense`), and the governor/economy gates. Escort sizing comes from that doctrine registry (ADR 0026 §9.10 L3a), not from a bespoke escalation helper.
 - **Lifecycle hygiene against the operator's known failure class.** Every new `Entity` reference is covered by `repair_entity_refs` and the `machine!` `get_children_internal` plumbing, validated-before-use at each transition, with a unit test — dangling-ref / lifecycle-hang is the documented historical failure mode.
 
 ## 3. The expansion lifecycle (state machine)
@@ -104,7 +102,7 @@ Two tiers, because the two intel sources live at different seams (verified):
 The binding mechanic: `claimController` sets only `{user, level:1, progress:0, downgradeTime:null, reservation:null}` — it grants **no** `safeModeAvailable` charge (verified against engine `claimController.js`). The free 20 000-tick safe mode is a respawn-only grant on the *initial* spawn room. A fresh RCL1 claim therefore has `safeModeAvailable == 0` and `activateSafeMode` returns `ERR_NOT_ENOUGH_RESOURCES`; no tower is legal until RCL3 (`CONTROLLER_STRUCTURES.tower = {1:0, 2:0, 3:1, …}`). So the policy is **pre-clear / escort-or-abort, not safe-mode heroics**. Three layers, by *when* each applies:
 
 1. **Don't-send (default, clean rooms).** The §4 gate stops the claimer ever being requested into a contested room. Cheapest protection.
-2. **Escort / pre-clear (marginal rooms, the `Securing` sub-state).** `ClaimOperation` proactively builds a `SquadDefenseMission` (`build`/`build_duo`/`build_quad(defend_room_data, home_room_datas)`, sized by `DefenseEscalation::from_threat` — **must be made `pub`**, currently private at `war.rs:90`) sourced from genuine spawn-bearing home rooms, and holds the `[Claim,Move]` request (`SPAWN_PRIORITY_CRITICAL` for the escort, ≥ the claimer's `SPAWN_PRIORITY_HIGH`) until the room is observed clear. For a hostile remnant spawn/tower that must come down first, the salvage `DismantleJob` role is the pre-clear primitive. **"Room held" is not an API on `SquadDefenseMission`** (its `Defending → Cleanup` exit only fires on no-hostiles-AND-all-members-dead). The release predicate is therefore a *direct* read: `!militarily_active() && !hostile_creeps()` on intel fresher than the freshness window, **persisted for N ticks** (anti-flap, default 20) so a one-tick gap between hostile waves does not release the claimer into a re-arming room. The escort's existence is necessary-but-not-sufficient; a hard `Securing` TTL → Abort prevents a stall waiting for a clear that never comes.
+2. **Escort / pre-clear (marginal rooms, the `Securing` sub-state).** `ClaimOperation` proactively builds a `SquadDefenseMission` (`build`/`build_duo`/`build_quad(defend_room_data, home_room_datas)`, sized from the defender-selection doctrine registry — `defense_doctrines()`/`GarrisonDefense`, ADR 0026 §9.10) sourced from genuine spawn-bearing home rooms, and holds the `[Claim,Move]` request (`SPAWN_PRIORITY_CRITICAL` for the escort, ≥ the claimer's `SPAWN_PRIORITY_HIGH`) until the room is observed clear. For a hostile remnant spawn/tower that must come down first, the salvage `DismantleJob` role is the pre-clear primitive. **"Room held" is not an API on `SquadDefenseMission`** (its `Defending → Cleanup` exit only fires on no-hostiles-AND-all-members-dead). The release predicate is therefore a *direct* read: `!militarily_active() && !hostile_creeps()` on intel fresher than the freshness window, **persisted for N ticks** (anti-flap, default 20) so a one-tick gap between hostile waves does not release the claimer into a re-arming room. The escort's existence is necessary-but-not-sufficient; a hard `Securing` TTL → Abort prevents a stall waiting for a clear that never comes.
 3. **After claim, before RCL3 (`Incubate`/`Contested`).** Defenders are spawned for *this* room from real spawn-bearing home rooms (fixing the `war.rs:372–385` `home_set` exclusion — §6). `SafeModeMission` is requested **only** when `controller.safe_mode_available() > 0` (so realistically only at RCL2+, after a level-up earns the first charge) **and** `controller.upgrade_blocked() == 0` — note an enemy `attackController` sets `upgradeBlocked`, which *also* blocks `activateSafeMode` (`safe_mode.rs:227`), so a fresh contested claim's "lifeline" is structurally unavailable; the design treats it as a bonus at RCL2+, never the plan. **Re-validation at adjacency** (`CLAIMING`): on the tick the claimer is in the target room, re-read the gate and abort the claim intent if a combat creep appeared during travel. This is honest but weak (the adjacency tick is the same tick the claimer can be shot); the real protection is the **death counter + exponential backoff** replacing the unconditional `claimers.is_empty() => respawn`: a killed claimer increments `claimer_deaths` in `remove_creep` (`missions/claim.rs:89`), respawn is gated on `claimer_deaths < features.claim.max_claimer_deaths` (default 2) AND the gate still passing, with `last_spawn_tick`-keyed backoff; exceeding the budget → Abort + avoid-cooldown.
 
 ## 6. Nascent-colony defense & establishment through RCL3
@@ -139,41 +137,41 @@ The lifecycle re-evaluates every cadence against live posture, reusing existing 
 
 ## 9. Components
 
-| Component | Status | File | Responsibility / serialization note |
+| Component | Change | File | Responsibility / serialization note |
 |---|---|---|---|
 | `is_claim_safe()` / `establishment_risk()` | **new** | `src/missions/utility.rs` | Pure, host-testable helpers (like `salvage_worthwhile`) paralleling `is_claim_feasible`. `is_claim_safe(threat_data, dynamic_vis) -> Verdict {Clean, Marginal(escort_size), Reject}` from `threat_level`, `estimated_dps`, `hostile_tower_positions`, `tower_dps_at_edge`, `militarily_active`, reservation/owner, and intel freshness. The only substantial new logic. No serialized state. |
-| `ClaimOperation` pre-commit gate + avoid-cooldown | **modified** | `src/operations/claim.rs` | Add dynamic-vis veto to `gather_candidate_room_data` (`:109`); add `RoomThreatData` hard veto + freshness + `Marginal→Securing` routing to `try_score_candidates`/`run_select` (`:390`/`:789`). Add `avoid_cooldown: HashMap<RoomName, u32>` (plain serde, mirrors `SalvageRejection`, pruned each scan). **Serialized-shape change** (new field on `ClaimOperation`). |
+| `ClaimOperation` pre-commit gate + avoid-cooldown | **modified** | `src/operations/claim.rs` | Add dynamic-vis veto to `gather_candidate_room_data` (`:109`); add `RoomThreatData` hard veto + freshness + `Marginal→Securing` routing to `try_score_candidates`/`run_select` (`:390`/`:789`). The avoid-cooldown map lives in an ephemeral `ExpansionAvoidance` Resource (`src/expansion.rs`) — written by the claimer abort and the colony abort, read by the pre-claim gate — rather than a serialized `ClaimOperation` field: it only has to prevent re-claim thrash within a VM lifetime, and after a reset the safety gate re-vetoes a still-contested room anyway. **No serialized-shape change.** |
 | `ClaimMission` hardening (`Securing` + abort/backoff) | **modified** | `src/missions/claim.rs` | Add `claimer_deaths: u32`, `last_spawn_tick: Option<u32>`, `escort_mission: EntityOption<Entity>`. `remove_creep` (`:89`) increments `claimer_deaths`. Death-counter + exponential backoff replacing unconditional respawn; adjacency re-validation; abort on re-arm/budget. **Fix the buggy reservation comment at `:135–143`** ("proceeding anyway") — a foreign reservation *does* block claim (`ERR_INVALID_TARGET`); reject it. **Serialized-shape change**; `escort_mission` needs `repair_entity_refs` coverage (extend `:93`). |
-| `ColonyState` machine extension (`Contested`, `Abandoning`) | **modified** | `src/missions/colony.rs` | Add two variants to the `machine!` enum (`:31`). `Incubate` gains `EstablishmentRisk` + `Established` flag; `Contested` holds a self-sourced `SquadDefense` `EntityOption` + conditional `SafeMode` `EntityOption`; `Abandoning` drives `unclaim()` + teardown. **Every new per-state `Entity` slot must be added to `get_children_internal`/`get_children_internal_mut`/`clear_stale_children` (`:88–`) or it leaks.** Gate `can_run` (`:329`) so a freshly-claimed spawnless room is owned by the FSM (it already is, via `owner().mine()`) but `Contested`/`Abandoning` are reachable. **Serialized-shape change.** |
+| `Incubate` extension (the `Contested`/`Abandoning` phases) | **modified** | `src/missions/colony.rs` | The `Contested`/`Abandoning` phases are **folded into the existing `Incubate` state** rather than added as `machine!` variants (`:31`): `Incubate` carries `contested_since: Option<u32>` plus the `EstablishmentRisk`/`Established` signals, evaluates the no-win abort at the top of its tick, and on a verdict calls `controller.unclaim()`, tags avoid-cooldown, and returns `Err` so the standard mission-failure path tears the children down. This is strictly smaller than adding machine states and adds no entity slots. **Invariant if that ever changes:** every per-state `Entity` slot must be registered in `get_children_internal`/`get_children_internal_mut`/`clear_stale_children` (`:88–`) or it leaks. `can_run` (`:329`) already owns a freshly-claimed spawnless room via `owner().mine()`. **Serialized-shape change** (the new `Incubate` field). |
 | `unclaim()` abort primitive | **new (tiny)** | `src/missions/colony.rs` (or a one-shot intent helper) | `controller.unclaim()` in `Abandoning`. No `unclaim()` usage exists today; this is a small new primitive, **not** `DeclaimJob` reuse. No serialized state. |
 | `MissionSystemData` + `MissionExecutionSystemData` threat wiring | **modified** | `src/missions/missionsystem.rs` | Add `threat_data: ReadStorage<RoomThreatData>` and surface it, so `Contested`/`Abandoning` compute the no-win predicate from real DPS/heal/`upgrade_blocked`. **Borrowed-storage change — NOT a serialized-shape change** (no version bump for this alone). |
 | `SquadDefenseMission` (escort + nascent defense) | **reused** | `src/missions/squad_defense.rs` | `build`/`build_duo`/`build_quad(defend_room_data, home_room_datas)` instantiated proactively by `Securing` and `Contested`. No change to the mission. |
-| `DefenseEscalation::from_threat` | **modified (visibility)** | `src/operations/war.rs` | Make `pub` (currently private, `:90`) so escort sizing can reuse it. No behavior change. |
-| `WarOperation::run_defense_scan` | **modified** | `src/operations/war.rs` | Drop the `my()`-spawn requirement from the SafeMode/WallRepair `home_set` for owned rooms with a charge (`:372–385`); leave reactive SquadDefense as the backstop. No serialized state. |
+| Escort/defender sizing | **reused** | defender-selection doctrine registry | Escort sizing reads `defense_doctrines()`/`GarrisonDefense` (ADR 0026 §9.10) — there is no bespoke escalation helper to fork. No serialized state. |
+| `WarOperation::run_defense_scan` | **unchanged** | `src/operations/war.rs` | The reactive scan already creates a `SquadDefenseMission` for any owned + visible + player-hostile room **including a spawnless nascent colony** (no spawn requirement on the scan), so it is the nascent colony's defense. The SafeMode/WallRepair `home_set` relaxation (`:372–385`) is **moot**: a nascent colony has `safeModeAvailable == 0` and no ghodium to `generateSafeMode`, so SafeMode cannot fire regardless of `home_set` membership. No serialized state. |
 | `RemoteBuildMission` threat guard | **modified** | `src/missions/remotebuild.rs` | Pre-spawn guard: stop builders if `hostile_creeps()` / `threat_level >= PlayerRaid`. No serialized state. |
 | `ClaimFeatures` thresholds + kill-switches | **modified** | `src/features.rs` | Extend `ClaimFeatures` (`:373`) with `safety_gate: bool` (default TRUE), `escort_enabled: bool` (TRUE), `intel_freshness_ticks: u32` (~50), `max_claimer_deaths: u32` (2), `establishment_stall_ticks: u32` (~3000), `avoid_cooldown_ticks: u32`, `abort_persistence_ticks: u32` (20). Loads from `Memory._features` — generally **not** part of the world fingerprint (verify against the `features.rs` load path; if persisted in world state, the version bump below covers it). |
 | `DeclaimJob` / salvage declaimers | **untouched** | `src/jobs/declaim.rs` | Explicitly **not** reused for self-rooms (wrong primitive — §7). Remains the foreign/derelict de-claim path. |
-| `WORLD_FORMAT_VERSION` | **modified** | `src/game_loop.rs` | Bump **6 → 7** (`:564`). Drivers: `Contested`/`Abandoning` variants + new `Incubate` fields, `ClaimMission` risk fields + `escort_mission`, `ClaimOperation.avoid_cooldown`. One loud, clean reset on deploy (fingerprint path `:628`). Update the version doc-comment block (`:561`). |
+| `WORLD_FORMAT_VERSION` | **modified** | `src/game_loop.rs` | The serialized-shape changes here — the new `Incubate` field and the `ClaimMission` risk fields (+ `escort_mission`) — require a version bump (`:564`), i.e. one loud, clean reset on deploy (fingerprint path `:628`); update the version doc-comment block (`:561`). Sequence the shape changes so the bump lands once. |
 
 ## 10. Incremental implementation plan
 
-Each increment is shippable and warning-free; all behavior gated by `features.claim.*` kill-switches (default TRUE per repo convention). **Only M5 bumps `WORLD_FORMAT_VERSION`** — sequence the serialized-shape changes so the version bump lands once.
+Each increment is shippable and warning-free; all behavior gated by `features.claim.*` kill-switches (default TRUE per repo convention). **Only one increment carries the `WORLD_FORMAT_VERSION` bump** — sequence the serialized-shape changes so it lands once.
 
 - **M1 — Read-only safety gate (no new serialized state).** Add `is_claim_safe()`/`establishment_risk()` to `missions/utility.rs` (host-tested). Wire the dynamic-vis veto into `gather_candidate_room_data` and the `RoomThreatData` hard veto + freshness into `try_score_candidates`/`run_select`. **No new fields** — pure gating using data already in scope. Gated by `features.claim.safety_gate`. This alone closes failure-path steps 1–4 (no claimer dispatched blind). *Smallest, highest value, no reset.*
 - **M2 — Fix the reservation bug + `RemoteBuildMission` threat guard.** Reject foreign reservations in `ClaimMission` (drop the "proceeding anyway" path at `:135`); add the builder pre-spawn threat guard. No serialized state. Closes step 8's leading edge.
-- **M3 — War coverage fix + `DefenseEscalation::from_threat` `pub`.** Relax the `home_set` SafeMode/WallRepair exclusion for owned-spawnless rooms with a charge; make the escalation helper `pub`. No serialized state. Gives the nascent colony reactive coverage immediately.
+- **M3 — Nascent-colony reactive coverage.** The war defense scan already covers owned spawnless rooms, so the nascent colony gets reactive `SquadDefenseMission` coverage immediately; the SafeMode/WallRepair `home_set` relaxation is moot (§9). Escort/defender sizing is sourced from the doctrine registry (`defense_doctrines()`, ADR 0026 §9.10). No serialized state.
 - **M4 — Mission-layer threat wiring.** Add `threat_data` to `MissionSystemData`/`MissionExecutionSystemData` (borrowed storage, **no version bump**). Prerequisite for the no-win predicate; ships behavior-neutral (nothing reads it yet).
-- **M5 — Claimer hardening + `Securing` escort + avoid-cooldown (version bump 6→7).** Add `ClaimMission` risk fields + `escort_mission` + `ClaimOperation.avoid_cooldown`; death counter / backoff / adjacency re-validation; proactive `SquadDefenseMission` escort with the persistence-gated release predicate + `Securing` TTL. Extend `repair_entity_refs` + add the repair unit test. **Bump `WORLD_FORMAT_VERSION` here** (the first serialized-shape change). Gated by `features.claim.escort_enabled`. Closes step 5 (the no-abort claimer loop).
-- **M6 — `Contested` state.** Add the `ColonyState::Contested` variant + `EstablishmentRisk`/`Established` on `Incubate`; threat-instrument `Incubate`; self-sourced SquadDefense + conditional SafeMode; anti-flap on both boundaries. Extend `get_children_internal`/`clear_stale_children` for the new slots. (Rides the M5 version; if M6 ships separately, it is the version bump instead — land M5+M6 together if practical to bump once.) Closes step 9 (proactive nascent defense).
-- **M7 — `Abandoning` state + `unclaim()`.** Add the `Abandoning` variant; implement the robust abort predicate (spawnless + sustained-hostile, with accelerators); `controller.unclaim()` + child teardown + avoid-cooldown tag + `Success` on revert. Extend `repair_entity_refs`/`clear_stale_children`. Closes step 10 (the unwired exit) — completing the lifecycle. Gated by a `features.claim.declaim_on_abort`-style kill-switch.
+- **M5 — Claimer hardening + `Securing` escort + avoid-cooldown (the serialized-shape change lands here).** Add `ClaimMission` risk fields + `escort_mission`, plus the ephemeral `ExpansionAvoidance` avoid-cooldown resource; death counter / backoff / adjacency re-validation; proactive `SquadDefenseMission` escort with the persistence-gated release predicate + `Securing` TTL. Extend `repair_entity_refs` + add the repair unit test. **The `WORLD_FORMAT_VERSION` bump belongs here** (the first serialized-shape change). Gated by `features.claim.escort_enabled`. Closes step 5 (the no-abort claimer loop). The escort/`Securing` half is owned by the squad/combat overhaul (§14).
+- **M6 — the `Contested` phase.** Threat-instrument `Incubate` with `contested_since` + `EstablishmentRisk`/`Established`; anti-flap on both boundaries; defense supplied by the war-reactive scan (§9). Any entity slot added here must extend `get_children_internal`/`clear_stale_children`. Rides M5's version bump — land the two together so the bump happens once. Closes step 9 (nascent defense).
+- **M7 — the `Abandoning` phase + `unclaim()`.** Implement the robust abort predicate (spawnless + sustained-hostile, with accelerators); `controller.unclaim()` + child teardown + avoid-cooldown tag + mission completion on revert. Extend `repair_entity_refs`/`clear_stale_children` if any entity slot is added. Closes step 10 (the unwired exit) — completing the lifecycle. Gated by a `features.claim.abort_on_contest`-style kill-switch.
 
 ## 11. Open risks & questions for the human
 
-- **`unclaim()` at the mission seam.** `controller.unclaim()` needs a live `StructureController` object (room vision). A room being abandoned because it's contested *is* visible (our creeps/structures are there), so this should hold — but confirm the cleanest place to issue the intent (a one-shot job vs. a direct intent in the colony tick). **Q: is a creep-less controller intent reachable from the `ColonyState` tick, or do we need a tiny `UnclaimJob`?**
-- **Threshold tuning is live-only.** `intel_freshness_ticks`, `max_claimer_deaths`, `establishment_stall_ticks`, `abort_persistence_ticks`, `avoid_cooldown_ticks` need observation against real attackers. Too eager abandons winnable rooms; too patient bleeds. All config-gated; **Q: acceptable to ship M1–M4 and observe before tuning M5–M7 abort thresholds?**
+- **`unclaim()` at the mission seam.** `controller.unclaim()` needs a live `StructureController` object (room vision). A room being abandoned because it's contested *is* visible (our creeps/structures are there), so the intent is issued directly from the colony tick rather than through a dedicated `UnclaimJob`. If a future seam loses controller access there, the fallback is a one-shot job.
+- **Threshold tuning is live-only.** `intel_freshness_ticks`, `max_claimer_deaths`, `establishment_stall_ticks`, `abort_persistence_ticks`, `avoid_cooldown_ticks` need observation against real attackers. Too eager abandons winnable rooms; too patient bleeds. All config-gated.
 - **Escort can lose.** Against a committed, healed player combat creep an RCL1-sourced escort can be wiped. The safety valve is the no-win predicate + Abandoning. **Q: confirm the empire should *abort* rather than escalate to a full war squad for a single contested expansion — i.e. expansion never out-commits the home economy.**
-- **`repair_entity_refs` surface.** M5–M7 add `escort_mission` + `Contested` SquadDefense/SafeMode + (no creep ref for unclaim) entity slots. This is the operator's documented dangling-ref/hang class. Mitigation: extend `get_children_internal`/`clear_stale_children` + a unit test mirroring `ClaimMission`'s repair test, **before** M5 ships.
-- **One-time reset re-runs every colony's `Incubate`.** The 6→7 bump resets every serialized `ColonyMission` to fresh `Incubate`, transiently re-running all child-mission creation. Standard per policy, but **Q: confirm deploy window / operator sign-off (Phase-1 process).**
+- **`repair_entity_refs` surface.** The escort (`escort_mission`) and any self-sourced SquadDefense/SafeMode slot are entity references; `unclaim()` needs none. This is the operator's documented dangling-ref/hang class. Mitigation: extend `get_children_internal`/`clear_stale_children` and add a unit test mirroring `ClaimMission`'s repair test alongside the slot that introduces it.
+- **The version bump re-runs every colony's `Incubate`.** A `WORLD_FORMAT_VERSION` bump resets every serialized `ColonyMission` to a fresh `Incubate`, transiently re-running all child-mission creation. Accepted under the reset-anytime policy.
 - **Avoid-cooldown lockout.** A camped-then-departed room stays avoided until the cooldown decays; mis-tuned decay starves expansion of a good room. Bounded by pruning; decay value is a tuning question.
 
 ## 13. Defense staleness — defense is subordinate to ownership
@@ -203,53 +201,43 @@ anti-stuck invariant is cheap and lands now:
   ticks; the 100-tick freshness window only avoids reacting to a one-off stale
   read (not a permanent grace).
 
-## 14. Implementation status & deviations (shipped 2026-06-14)
+## 14. Refinements to §3–§9
 
-Shipped M1–M7 **except the escort/Securing layer**, with these grounded
-simplifications vs. §3–§9 (all verified in-tree, all builds warning-free, world
-fingerprint bumped 6 → 7 by the concurrent planner-spawn change so this rides
-one reset):
+The lifecycle is realised with these deliberate simplifications against the fuller
+shape sketched in §3–§9. Where they differ, these are the design of record.
 
 - **No new `ColonyState` variants.** The `Contested`/`Abandoning` behavior is
-  folded into the existing `Incubate` state: it gains a single `contested_since:
+  folded into the existing `Incubate` state: it carries a single `contested_since:
   Option<u32>` field and, at the top of its tick, evaluates the no-win abort
-  (`should_abandon_claim`, `missions/utility.rs`, host-tested) and, on a verdict,
+  (`should_abandon_claim`, `missions/utility.rs`, host-testable) and, on a verdict,
   calls `controller.unclaim()` + tags avoid-cooldown + returns `Err` (top-down
   teardown of children via the standard mission-failure path). This is strictly
   smaller than adding machine states and needs no `get_children_internal` change
   (the new field is not an entity ref).
 - **Defense is delegated to war, not self-sourced.** `WarOperation`'s reactive
-  `run_defense_scan` already creates `SquadDefenseMission` for any owned + visible
+  `run_defense_scan` creates `SquadDefenseMission` for any owned + visible
   + player-hostile room **including a spawnless nascent colony** (no spawn
   requirement on the scan), so the colony does not own a proactive SquadDefense
   child. Combined with §13's ownership-subordinate self-termination, defense
   ramps up and winds down automatically around the claim's lifetime.
-- **The SafeMode `home_set` fix was dropped as moot.** A nascent colony has
+- **The SafeMode `home_set` fix is dropped as moot.** A nascent colony has
   `safeModeAvailable == 0` and no ghodium to `generateSafeMode`, so SafeMode
-  cannot fire regardless of the `home_set` membership; including the spawnless
-  colony buys nothing. `DefenseEscalation::from_threat` was still made `pub`
-  for the future escort.
+  cannot fire regardless of `home_set` membership; including the spawnless
+  colony buys nothing.
 - **Avoid-cooldown is an ephemeral `ExpansionAvoidance` Resource** (`expansion.rs`),
   not a serialized field on `ClaimOperation` — written by the claimer abort and
   the colony abort, read by the pre-claim gate. It only needs to prevent
   re-claim thrash within a VM lifetime; after a reset the safety gate re-vetoes
   a still-contested room anyway.
-- **Claimer hardening shipped (anti-stuck), escort deferred.** The
-  death-counter + exponential respawn backoff + abort-on-budget
-  (`max_claimer_deaths`) shipped because it has no squad dependency and is the
-  user's "don't get stuck." The **Securing escort / pre-clear** (a proactive
-  `SquadDefenseMission` gating the claimer) is **DEFERRED to the squad/combat
-  overhaul** — see ADR 0008. Until then a *marginal* room is conservatively
-  treated as unsafe (rejected), not escorted.
+- **Claimer hardening is independent of the escort.** The death-counter +
+  exponential respawn backoff + abort-on-budget (`max_claimer_deaths`) has no
+  squad dependency and is the "don't get stuck" guarantee on its own. The
+  **`Securing` escort / pre-clear** (a proactive `SquadDefenseMission` gating the
+  claimer) belongs to the squad/combat overhaul — see ADR 0008. Absent it, a
+  *marginal* room is conservatively treated as unsafe (rejected), not escorted.
 
-**Updated M-plan status:** M1 (safety gate) ✅ · M2 (reservation reject +
-builder threat guard) ✅ · M3 (`from_threat` pub; war already covers spawnless,
-SafeMode fix dropped) ✅ · M4 (`threat_data` + `ExpansionAvoidance` on the
-mission/op execution data) ✅ · M5a (avoid-cooldown + claimer abort/backoff) ✅ ·
-**M5b (escort/Securing) DEFERRED → ADR 0008 overhaul** · M6+M7 (folded into
-`Incubate`: no-win abort + `unclaim()` + avoid tag) ✅ · defense-staleness
-self-termination (§13) ✅. Everything is gated by `features.claim.safety_gate`
-and `features.claim.abort_on_contest` (both default TRUE).
+Everything is gated by `features.claim.safety_gate` and
+`features.claim.abort_on_contest` (both default TRUE).
 
 ## 12. References
 

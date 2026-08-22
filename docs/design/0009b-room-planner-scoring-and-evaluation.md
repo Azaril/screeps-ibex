@@ -1,23 +1,10 @@
 # 0009b — Room-Planner Scoring, Evaluation & RCL Assignment Revamp
 
-**Status:** Partially-implemented; §4 tower placement DONE (2026-06-14), scoring/RCL/refill/bench half UNBUILT — 2026-07-02
+- **Status:** Decided
 **Relates to:** [0009](0009-room-planning-and-multiroom-layout.md) (room planning), [0009a](0009a-room-planner-performance.md) (planner performance), [0007](0007-hauling-logistics.md) (hauling)
 **Driver:** Operator — "tower coverage is poor; build extensions nearest the nearest source first; minimize storage→refill hauling; evaluate other bots and revamp scoring/evaluation."
 
 > All file references are `screeps-foreman/src/...` unless noted, verified against source at time of writing.
-
-## Closeout decision log (2026-07-02)
-
-Source of truth: [adr-closeout-2026-07-02.md](../reviews/adr-closeout-2026-07-02.md) §2 (Q8, Q9) + §4. Operator decision wins over any stale prose; code was verified over the header.
-
-- **§4 tower placement DONE (verified).** The `TowerReservationLayer` → coverability-weighted min-cut → `TowerPlacementLayer` architecture is built (`screeps-foreman/src/layers/mod.rs`, `layers/tower.rs`, `layers/tower_placement.rs`; `tower_reposition.rs` deleted). This is §8 step **2b/2c** landed. **UNBUILT:** the §7 ground-truth bench (step 1), the §3 scoring re-weight (step 3), source-aware RCL (§5, step 4), the storage→refill metric (§6, step 5), the WFV bump + claim recalibration (step 6), the calibration sweep (step 7), and the optional §4.4 compactness (2d) / §3.2 Tier-2 aggregator (step 8).
-- **Q8 — ADD the adaptive beam-widen/cap-lift provability fallback.** Same decision as [0009a](0009a-room-planner-performance.md) Q8: hang the cap-lift on the live `ESCALATION_BEAMS = [16, 64, usize::MAX]` ladder (`screeps-foreman/src/planner.rs:160`) so no-plan-loss stays *provable* as these scoring/placement changes shift which layouts win. (0009c §D2/EP-6.8 is the escalation-only relaxation contract.)
-- **Q9 — sequence claim.rs recalibration vs 0038; bump from LIVE WFV 26.** (a) **Verified claim.rs is still the sole *live* consumer of `plan.score.total`:** `screeps-ibex/src/operations/claim.rs:213` (`Some(plan.score.total)`, `plan_score_weight`/`max_score_delta` at `:590,761`); the only other `plan.score.total` reads are host-only tools (`screeps-foreman-bench/src/main.rs:289`, `screeps-prospector/src/score.rs:638`), not the live bot, and ADR 0038's economic claim value did not add a new one. (b) After the §3–§6 re-weight shifts the `.total` scale, **re-tune `plan_score_weight`/`max_score_delta`** (§9/§10.3 — decision (a): re-tune the two constants now; the separate cross-room composite (b) is a clean follow-up). (c) The §8-step-6 / §9 "**WORLD_FORMAT_VERSION 7→8**" figure is **STALE — the live value is 26** (`screeps-ibex/src/game_loop.rs:730`); bump from **26→27**, not 7→8.
-- **The full §8 sequence (8 steps), only step 2b/2c done:** **1** bench ground-truth evaluator + corpus stats + `--baseline` CSV (UNBUILT); **2b/2c** coverability-weighted min-cut + staged soft-min metric + `tower_coverage`→3.0 (**DONE** for placement; the staged soft-min §4.6 metric + the §3 weight are NOT); **2d** *(optional)* footprint compactness (UNBUILT); **3** zero the dead weights (UNBUILT); **4** source-aware phase-gated extension RCL (UNBUILT); **5** `storage` landmark + `RefillScoreLayer` (UNBUILT); **6** the one bump — add `refill_distance`/`early_extension_source` fields, delete `traffic_congestion`, **WFV 26→27**, recalibrate `claim.rs` (UNBUILT); **7** calibration sweep, operator-run (UNBUILT); **8** *(optional, flag-gated)* Tier-2 power-mean aggregator (UNBUILT).
-
-### Resume-point
-
-§7 ground-truth bench first (§8 step 1 — the independent evaluator is the measurement substrate everything else is gated on), then §4.3/§4.6 (finish the coverability-weighted cut terms + the staged soft-min metric) → §3/§5/§6 (scoring re-weight → source-aware RCL → storage→refill metric) → §8-step-6 WFV **26→27** bump + `claim.rs` `plan_score_weight`/`max_score_delta` recalibration (Q9) → §8-step-7 calibration sweep.
 
 ---
 
@@ -75,7 +62,7 @@ Consensus: a good layout is **compact and near-circular**, near sources+controll
 
 Retired terms are kept as `ScoreEntry`s at **weight 0.0** (not deleted) so the search's deterministic push order and learned `total_score_weight` stay stable — zeroing is provably prune-safe; removing pushes is churn with no benefit.
 
-| Sub-score | Layer | New wt | Old wt | Status |
+| Sub-score | Layer | New wt | Old wt | Role |
 |---|---|---:|---:|---|
 | `tower_coverage` | TowerCoverageScore | **3.0** | 1.0 | reshaped + up-weighted (goal #1) |
 | `refill_distance` | **new** RefillScore | **2.0** | — | **new** (goal #3) |
@@ -106,10 +93,9 @@ The four design proposals split on the aggregator; every judge flagged that geom
 
 ## 4. Tower-coverage fix (goal #1)
 
-> **IMPLEMENTED 2026-06-14 (placement; coverage term).** The placement architecture below is built and benched. Final shape: `TowerReservationLayer` (pre-extension, reserves a compact central zone via the `excluded` set — **space only, no tower structures in the cut**) → **coverability-weighted min-cut** (`defense.rs`, coverage term `cost = BASE + ALPHA·(1−P(t)/600)`) → `TowerPlacementLayer` (the **single** post-defense placement against the real passable-rampart perimeter; the old proxy `TowerLayer` and the place-then-swap `TowerRepositionLayer` are gone). Results on shard3 `compare --limit 500`: **mean tower coverage 0.294 → 0.409 (+39%)**, rooms below 0.30 78% → 28%, **6/6 towers in every room**, 496/500 planned (4 infeasible — ≈ the pre-existing ~1.3% rate, no regression). Isolated contributions (limit 120): single placement vs real perimeter 0.294→0.357; weighted cut adds 0.357→0.406. NOT yet implemented: the threat-direction & wall-adjacency cost terms (§4.3, the next two increments), the staged soft-min metric (§4.6 — coverage is still measured on the old min/3600 metric, so these numbers are directly comparable to the 0.302 baseline), and the §3 scoring re-weight. Files: `defense.rs`, `tower.rs` (now `TowerReservationLayer` + shared optimizer), new `tower_placement.rs`, `layers/mod.rs`; `tower_reposition.rs` deleted.
+> **The tower pipeline, end to end.** `TowerReservationLayer` (pre-extension; reserves a compact central zone via the `excluded` set — **space only, no tower structures in the cut**) → **coverability-weighted min-cut** (`defense.rs`, coverage term `cost = BASE + ALPHA·(1−P(t)/600)`) → `TowerPlacementLayer` (the **single** post-defense placement against the real passable-rampart perimeter). There is deliberately no proxy-ring `TowerLayer` and no place-then-swap reposition pass in this design — the sections below give the reasoning for each stage. Evidence on the shard3 corpus (`compare --limit 500`, measured on the old min/3600 metric so it is directly comparable to the 0.302 baseline): **mean tower coverage 0.294 → 0.409 (+39%)**, rooms below 0.30 78% → 28%, **6/6 towers in every room**, 496/500 rooms planned (4 infeasible — ≈ the pre-existing ~1.3% rate, so no plan loss). Isolated contributions (limit 120): single placement against the real perimeter 0.294→0.357; the weighted cut adds 0.357→0.406.
 
-
-> **Revision (2026-06-14):** §4.1 (post-defense tower repositioning) has been **prototyped** (`layers/tower_reposition.rs`, uncommitted) and lifts mean coverage **0.30 → 0.355** on shard3 `--limit 40`. But its own measurements expose a hard ceiling: a residual set of "floor rooms" stays pinned at the minimum (all 6 towers ≥ range 20 from the worst rampart → 6×150 = 900 damage), and widening the tower radius 10→14 only nudges 0.355→0.362 while costing refuel distance. **Repositioning cannot fix an uncoverable perimeter.** §4.2–§4.4 below are the new core of the fix: make the *min-cut itself* produce a coverable perimeter. §4.5 keeps repositioning as the final polish; §4.6 is the metric.
+> **Why repositioning alone is not the answer.** A post-defense *reposition* pass over the proxy-placed towers lifts mean coverage only **0.30 → 0.355** (shard3, `--limit 40`), and its own measurements expose a hard ceiling: a residual set of "floor rooms" stays pinned at the minimum (all 6 towers ≥ range 20 from the worst rampart → 6×150 = 900 damage), and widening the tower radius 10→14 only nudges 0.355→0.362 while costing refuel distance. **Repositioning cannot fix an uncoverable perimeter.** §4.2–§4.4 are therefore the core of the fix: make the *min-cut itself* produce a coverable perimeter. §4.5 is the placement that consumes it; §4.6 is the metric.
 
 ### 4.1 The bidirectional dependency (the real problem)
 
@@ -177,11 +163,11 @@ The weighted cut shapes the perimeter *within* the footprint it must enclose. Wh
 - **Let the cut drop far, low-value structures from the protected core.** `build_protected_region` already separates required-core from best-effort mining (ADR 0009a). Extend that policy so a handful of far extensions (or remote mining infra) may sit *outside* the wall when protecting them would force an uncoverable perimeter — they are cheap and rebuildable, and this keeps the defended ring compact and coverable.
 - **A `footprint_compactness` / perimeter-coverability score term** (∈ [0,1]) so the search prefers anchors/layouts whose protected mass is tight around the hub. This dovetails with the `refill_distance` term (§6) — compactness lowers hauling *and* lifts tower coverage simultaneously.
 
-### 4.5 Tower repositioning — final polish (implemented)
+### 4.5 Tower placement — one pass, against the real perimeter
 
-`TowerRepositionLayer` (now at index 17, after `DefenseLayer`, before `RoadNetworkLayer::all_buildings`) stays, but its role shrinks from *rescuing* a bad perimeter to *optimally placing into a coverable one*. With §4.3 in place the floor-room set should largely vanish, so the greedy+swap is fine-placement, not damage control. It already: filters the `ramparts` landmark to the real perimeter, constrains candidates to the strictly-interior flood (`compute_interior`, so a tower never lands outside the wall), requires a walkable neighbour (so `ReachabilityLayer` won't reject), and reuses the shared `optimize_towers` engine. Refinements to fold in: filter the perimeter to **passable ramparts** (the landmark holds walls too — `defense.rs:104,114`), and consider widening `REPOSITION_RADIUS` once §4.3 reduces the refuel-distance pressure that currently caps it at 10.
+Towers are placed **once**, after `DefenseLayer` and before `RoadNetworkLayer::all_buildings`, by `TowerPlacementLayer` — never placed early against a proxy ring and then swapped. Its job is *optimal placement into a coverable perimeter*, not rescue of a bad one: with §4.3 in place the floor-room set largely vanishes, so the greedy+swap optimizer is fine-placement rather than damage control. The placement: filters the `ramparts` landmark down to the real perimeter and specifically to **passable ramparts** (the landmark holds walls too — `defense.rs:104,114`), constrains candidates to the strictly-interior flood (`compute_interior`, so a tower never lands outside the wall) and to the zone `TowerReservationLayer` held open, requires a walkable neighbour (so `ReachabilityLayer` won't reject it), and reuses the shared `optimize_towers` engine. The placement radius trades coverage against refuel distance; §4.3 relieves the refuel-distance pressure that otherwise caps it near 10.
 
-This is the residual "place-then-swap." It is acceptable *because* it now depends on a perimeter that was itself made coverable — the bidirectional dependency is resolved by the shared field (§4.2), not by the swap.
+Single-pass placement is only sound *because* the perimeter was itself made coverable upstream — the bidirectional dependency is resolved by the shared field (§4.2), not by a swap.
 
 ### 4.6 The coverage metric — staged threshold soft-min
 
@@ -223,7 +209,7 @@ tower_coverage = clamp01( Σ_k ω_k · softmin_k )              // Σω_k = 1
 
 Both changes mutate only existing fields (`required_rcl` values, `BuildStep` order) ⇒ **no version bump**. `analysis.source_distances` is already in scope in `RclAssignmentLayer`.
 
-- **Exclude towers** from the RCL loop (they're RCL-tagged by `TowerRefineLayer` now).
+- **Exclude towers** from the RCL loop (they're RCL-tagged by the tower placement stage, `TowerRefineLayer`).
 - **Extensions — phase-blended key** (smooth, not a cliff):
   ```
   N_early = max_structures_at_rcl(Extension, 4) = 20         // derive from the RCL4 cap
@@ -269,26 +255,27 @@ Each step is independently benchable via §7's ground-truth diff.
 | # | Step | Effort | Risk | Serialization |
 |---|---|---|---|---|
 | 1 | Bench ground-truth evaluator + corpus stats + `--baseline` CSV; establish baseline | M | Low | none |
-| 2a | *(done, uncommitted)* `TowerRepositionLayer` (post-defense reposition vs real ramparts) — coverage 0.30→0.355 | — | — | none |
+| 2a | `TowerReservationLayer` + single post-defense `TowerPlacementLayer` against the real ramparts (§4.5), replacing proxy-ring placement | M | Low | none |
 | 2b | **Coverability-weighted min-cut**: shared tower-influence field `P(t)` (§4.2) + composite `cost(t)` in `compute_min_cut` (coverage×threat − wall-adjacency, §4.3) + scaled `INF_CAP` + injectable cost field. The headline floor-room fix. Land coverage-only first, then add threat + wall terms. | L | Med | none (layer names unchanged) |
-| 2c | Passable-rampart filter in reposition + staged soft-min metric (§4.6) + `tower_coverage` weight→3.0 | M | Low | none |
+| 2c | Passable-rampart filter in placement + staged soft-min metric (§4.6) + `tower_coverage` weight→3.0 | M | Low | none |
 | 2d | *(optional)* footprint compactness: drop far low-value structures from the protected core + `footprint_compactness` score (§4.4) | M | Med | none |
 | 3 | Zero dead weights (anchor terms, `hub_quality`, `extension_efficiency`) | S | Low | none |
 | 4 | Source-aware phase-gated extension RCL + exclude towers + `early_extension_source` push | M | Low | none |
 | 5 | `storage` landmark + `RefillScoreLayer`; retire `extension_efficiency` | L | Med | none yet |
-| 6 | **The one bump:** add `refill_distance` + `early_extension_source` fields, delete `traffic_congestion`, `to_plan_score` arms, **WORLD_FORMAT_VERSION 7→8**, **recalibrate `operations/claim.rs` `plan_score_weight`/`max_score_delta`** for the new `.total` scale | M | Med | **WFV 7→8** |
+| 6 | **The one bump:** add `refill_distance` + `early_extension_source` fields, delete `traffic_congestion`, `to_plan_score` arms, bump `WORLD_FORMAT_VERSION`, **recalibrate `operations/claim.rs` `plan_score_weight`/`max_score_delta`** for the new `.total` scale | M | Med | **one WFV bump** |
 | 7 | Calibration sweep (operator-run): **λ=ALPHA/BASE, THREAT_MIN, OMEGA (cut weighting — track coverage *and* rampart count)**, `R_place`, `DESIRED_DPS_k`, ω, β, `N_early`, `D_REFILL_MAX`, claim weights | M | Low | none |
 | 8 | *(optional, flag-gated)* Tier-2 power-mean aggregator + re-derived prune bound | M | Med-High | none |
 
-Bench first (measurement). The tower fix is the biggest lever: repositioning (2a) is done; **the coverability-weighted min-cut (2b) is the new headline** — it removes the floor rooms repositioning can't, by shaping the perimeter to be coverable. 2b/2c are independent of the scoring/RCL/refill steps. The single bump batches all field changes + the claim recalibration. The risky aggregator swap is last and reversible by flag.
+Bench first (measurement). The tower fix is the biggest lever, and within it **the coverability-weighted min-cut (2b) is the headline** — it removes the floor rooms that placement alone cannot, by shaping the perimeter to be coverable. 2a–2c are independent of the scoring/RCL/refill steps. The single bump batches all field changes + the claim recalibration. The risky aggregator swap is last and reversible by flag.
 
 ---
 
 ## 9. Cross-cutting consequences & invariants
 
-- **`operations/claim.rs:213` is the only live consumer of `plan.score.total`** (expansion candidate scoring: `plan_score_weight=2.0`, absolute `max_score_delta=0.15`). Re-weighting (steps 3–5) shifts the `.total` scale, so claim's constants **must** be recalibrated (step 6). Open question: also expose a separate cross-room composite for expansion so it keeps the source/controller terms it implicitly relied on? (See §10.)
-- **Invariants honored:** every sub-score ∈ [0,1] (prune soundness); `DefenseLayer` min-cut stays last among structure layers; one batched `WORLD_FORMAT_VERSION` 7→8; pure re-ordering/re-RCL needs no bump.
-- **Rejected/deferred:** `traffic_congestion` articulation penalty (overlaps `refill_distance`, adds a full-room pass — deleted, not implemented); branching tower positions in the search (CPU cost; subsumed by `TowerRefineLayer`); seeding extension stamps near sources (geometry risk — revisit only if §5 ordering proves insufficient); offline weight tuning over the corpus (do last, after metrics are sound).
+- **`operations/claim.rs:213` is the only live consumer of `plan.score.total`** (expansion candidate scoring: `plan_score_weight=2.0`, absolute `max_score_delta=0.15`, constants at `:590,761`). The only other readers are host-only tools (`screeps-foreman-bench/src/main.rs:289`, `screeps-prospector/src/score.rs:638`), not the live bot. Re-weighting (steps 3–5) shifts the `.total` scale, so claim's constants **must** be recalibrated in the same step as the field changes (step 6). Open question: also expose a separate cross-room composite for expansion so it keeps the source/controller terms it implicitly relied on? (See §10.)
+- **No-plan-loss stays provable as these changes shift which layouts win.** Every satisficing cap and beam-bounded heuristic is indexed by the escalation ladder `ESCALATION_BEAMS = [16, 64, usize::MAX]` (`screeps-foreman/src/planner.rs:160`) and relaxes only on escalation — the same contract as [0009a](0009a-room-planner-performance.md) D6 and [0009c](0009c-room-planner-road-connectivity.md) §D2/EP-6.8.
+- **Invariants honored:** every sub-score ∈ [0,1] (prune soundness); `DefenseLayer` min-cut stays last among structure layers; exactly one batched `WORLD_FORMAT_VERSION` bump for the whole revamp; pure re-ordering/re-RCL needs no bump.
+- **Rejected/deferred:** `traffic_congestion` articulation penalty (overlaps `refill_distance`, adds a full-room pass — the phantom field is deleted rather than filled in); branching tower positions in the search (CPU cost; subsumed by `TowerRefineLayer`); seeding extension stamps near sources (geometry risk — revisit only if §5 ordering proves insufficient); offline weight tuning over the corpus (do last, after metrics are sound).
 
 ---
 
@@ -296,11 +283,11 @@ Bench first (measurement). The tower fix is the biggest lever: repositioning (2a
 
 1. **Tier-2 aggregator — ship or not?** Tier-1 (arithmetic mean + zeroed weights + worst-component-inside-subscores) is safe and fixes RC5's worst case. Tier-2 adds discrimination among surviving layouts but loosens the prune and adds moving parts. *Recommendation: ship Tier-1, bench it, flip Tier-2 only if the corpus shows a measurable gain.*
 2. **Tower threat model** sets `DESIRED_DPS_k`. Proposed values out-damage a boosted dismantler at each RCL (⇒ mean coverage targets ~0.5–0.7). Confirm the threat model (boosted dismantler vs ranged swarm).
-3. **`claim.rs` recalibration scope:** (a) re-tune the two constants empirically, or (b) give expansion its own cross-room composite (keeps source/controller desirability that zeroing strips from `.total`). *Recommendation: (a) now, (b) as a clean follow-up.*
+3. **`claim.rs` recalibration scope — decided:** (a) re-tune the two constants empirically as part of the field-change step; (b) a separate cross-room composite for expansion (keeping the source/controller desirability that zeroing strips from `.total`) is a clean follow-up, not part of this revamp.
 4. **`N_early` scaling** — fixed at the RCL4 cap (20, assumes a 2-source room); should it scale with source count?
 5. **Tower perimeter** — passable ramparts only (proposed) vs the full walls+ramparts cut line.
 6. **Lab hauling** — model a separate terminal→lab flood (Harabi's other named quantity) or keep the single storage-rooted score with lab freq 0.3?
-7. **Coverability-weighted min-cut (§4.3) — adopt?** This is the headline tower fix beyond repositioning. It trades a little upkeep for a coverable perimeter (λ knob) and shapes the wall toward where towers can stand. *Recommendation: adopt; it is the only lever that removes the floor rooms.* Sub-decision: also allow dropping far low-value structures from the protected core for compactness (§4.4), or keep "protect everything" and rely on the weighting alone?
+7. **Protected-core policy under the coverability-weighted min-cut (§4.3).** The weighted cut itself is adopted — it is the only lever that removes the floor rooms, trading a little upkeep for a coverable perimeter via the λ knob. Still open: whether to also allow dropping far, low-value structures from the protected core for compactness (§4.4), or keep "protect everything" and rely on the weighting alone.
 
 ---
 
@@ -308,6 +295,6 @@ Bench first (measurement). The tower fix is the biggest lever: repositioning (2a
 
 Diagnosis and design were produced via two adversarial multi-agent workflows (deep code map + external research → synthesized brief; then a 4-philosophy judge-panel design → integrated spec), with all load-bearing claims independently verified against source. The shard3 corpus measurement (5,123 rooms) is the empirical baseline these changes will be measured against.
 
-**Revision 2026-06-14 (§4 rework):** after the `TowerRepositionLayer` prototype (coverage 0.30→0.355) exposed an uncoverable-perimeter ceiling, §4 was reworked around a **coverability-weighted min-cut** that shares a tower-influence field `P(t)` with the tower layer — resolving the tower↔rampart bidirectional dependency via a static shared field while keeping the layers conceptually separate. Repositioning is retained as the final polish; footprint compactness is added as a complementary upstream lever.
+**§4 rework:** after a `TowerRepositionLayer` prototype (coverage 0.30→0.355) exposed an uncoverable-perimeter ceiling, §4 was reworked around a **coverability-weighted min-cut** that shares a tower-influence field `P(t)` with the tower layer — resolving the tower↔rampart bidirectional dependency via a static shared field while keeping the layers conceptually separate. Tower placement collapsed to a single post-defense pass against the real perimeter; footprint compactness is added as a complementary upstream lever.
 
-**Revision 2026-06-14 (§4.3 composite cost):** the cut cost was generalized from coverage-only to a composite of three calibratable terms — `BASE` (upkeep/count) + coverage×**threat-direction** (via `exit_distances`, concentrating finite tower DPS on the attack-facing perimeter) − **natural-wall/chokepoint** leverage (`OMEGA`, preserving terrain advantage so coverage-weighting can't abandon cheap chokepoints) — with upkeep, wall/rampart split, protected-region membership, and economy/RCL deliberately kept out so the cut stays one clean bounded field. Terms land incrementally on the ground-truth bench, each gated on a corpus gain.
+**§4.3 composite cost:** the cut cost was generalized from coverage-only to a composite of three calibratable terms — `BASE` (upkeep/count) + coverage×**threat-direction** (via `exit_distances`, concentrating finite tower DPS on the attack-facing perimeter) − **natural-wall/chokepoint** leverage (`OMEGA`, preserving terrain advantage so coverage-weighting can't abandon cheap chokepoints) — with upkeep, wall/rampart split, protected-region membership, and economy/RCL deliberately kept out so the cut stays one clean bounded field. Terms land incrementally on the ground-truth bench, each gated on a corpus gain.

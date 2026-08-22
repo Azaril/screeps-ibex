@@ -1,9 +1,9 @@
 # ADR 0030 — Squad composition & size tuning (the lifetime/wave axis)
 
-- **Status:** Proposed
+- **Status:** Decided
 - **Date:** 2026-06-27
 - **Extends:** [0029](0029-generalized-force-composition.md) (the one-oracle force composition), [0026 §9](0026-*.md) (the doctrine registry), [0020 §12](0020-ev-adaptive-blob-combat.md) (the force-sizing oracle + the deferred part-auction), [0028](0028-lifecycle-harness.md) (the lifecycle/rally harness that proves it)
-- **Supersedes:** ADR 0029 D9 (the OFFENSE-only / "defenders deploy immediately" rally short-circuit, FIX A) — replaced by the lifetime-aware **quorum** gate (§5)
+- **Supersedes:** ADR 0029 D9 (the OFFENSE-only / "defenders deploy immediately" rally short-circuit, FIX A) — replaced by the lifetime-aware, winnability-validated deploy gate (§6)
 
 ## 1. The question (operator, 2026-06-27)
 
@@ -24,7 +24,7 @@ The model is deliberately the **smallest thing that captures the axis**: a 2-val
 
 - **`EngagementTempo` is a shared POD policy in `screeps-combat-decision`** (JS-free, so the bot and the eval read the identical sizing — the ADR 0026/0029 parity, extended to the lifetime axis). It is **set by the objective producers** (`war.rs` / `sourcekeeperfarm.rs`) per `ObjectiveKind`, and **consumed by two interfaces**: the **doctrine/oracle sizing** (`assess`/`clear_force`/`sized_for`) and the **spawn pacing/priority/quorum** (`squad_manager.rs`).
 - **`SingleLifetime` objectives size to GUARANTEE the kill-in-time** (today's `assess` behavior, now NAMED + fed a real deadline). **`MultiLifetimeWave` objectives size for SUSTAINABLE PROGRESS** + a fight-capable quorum, and they stop over-deferring winnable-across-waves targets to G4-HEAVY.
-- **The rally gate becomes lifetime-aware (the point-4 fix):** `SingleLifetime` keeps the strict full-roster bloc (offense must arrive whole); `MultiLifetimeWave` deploys a **quorum** — a fight-capable minimum that is `< requested`, so the N-1 deadlock is impossible **and** a lone creep is never sent. The grouping is retained; the rally stage is **not** disconnected.
+- **The rally gate becomes lifetime-aware (the point-4 fix):** `SingleLifetime` keeps the strict full-roster bloc (offense must arrive whole); `MultiLifetimeWave` deploys the smallest **winnable present force** (§6) — a fight-capable minimum that may be `< requested`, so the N-1 deadlock is impossible **and** a lone creep is never sent. The grouping is retained; the rally stage is **not** disconnected.
 - **This composes cleanly with the deferred body/blob auction (point 3):** `EngagementTempo` is an **INPUT** to the auction's EV currency, not a competitor. The oracle is the blob special-case of the auction (ADR 0029 §8); the tempo is the demand-side weight both the oracle's importance margin and the future auction's bid valuation already want. No EV-currency change — tempo selects all-or-nothing (single-lifetime) vs marginal/divisible (multi-lifetime) bidding.
 
 ## 3. The axis already exists — latent, always-on, and scattered
@@ -36,8 +36,6 @@ The single-lifetime assumption and the multi-lifetime intuition are both already
 3. **SK hand-rolls a single-lifetime kill window inside a multi-lifetime campaign.** `SkSuppression` uses `SK_KEEPER_KILL_TICKS = 34` (`doctrine.rs:333`) to size `ranged_parts` to kill the keeper *this wave* — but the SK farm as a whole is the canonical perpetual campaign (suppress forever, re-field each lifetime). The two tempos coexist in one objective and nothing names that.
 4. **The rally gate is binary on/off.** `rally.rs:17 squad_ready_to_depart` requires `present >= requested_slots` (full roster). ADR 0029 FIX A (`squad_manager.rs:926-927`) short-circuits it for `is_defend` (`ready = is_defend || squad_ready_to_depart(...)`). So *"wait for ALL"* (offense) and *"wait for NONE"* (defense) are the only two settings — exactly what the operator rejects. (`STRICT_QUORUM_RATIO = 0.75` exists but only governs the **boundary** cross-hold `should_hold_at_boundary`, not the **depart-from-home** gate.)
 5. **Spawn pacing distinguishes the two tempos crudely + per-kind.** `MAX_FORMING_SQUADS = 2` (`squad_manager.rs:66`) paces offense roster formation; FIX C (`squad_manager.rs:459-464`) EXEMPTS `ObjectiveKind::Defend` from the forming count. The code already treats "defense = deploy + reinforce, don't pace as a forming bloc" as a special case — bolted onto the kind, not derived from a tempo.
-
-**Phase 1 has landed (the interim point-4 fix).** `rally.rs:40 squad_ready_to_depart_at_quorum` (with `MIN_VIABLE_GROUP = 2`, ratio-floored at `STRICT_QUORUM_RATIO`, capped at `requested`) is the quorum kernel point (4) needs, and it is now **wired live**: `squad_manager.rs` gates `ready_to_depart = if is_defend { squad_ready_to_depart_at_quorum(..) } else { squad_ready_to_depart(..) }`, **deleting FIX A's bare `is_defend ||` short-circuit** (commit `ca9184c`, deployed). Defense now deploys at a grouped quorum — never a lone creep, never the unspawnable full roster. The remaining phases (§9) generalize this `is_defend` key onto the `EngagementTempo` policy.
 
 ## 4. The lifetime/wave taxonomy
 
@@ -91,29 +89,27 @@ Thread `tempo` into the oracle's two entry points:
 
 ### Consumption interface B — spawn pacing / priority / quorum (`squad_manager.rs`)
 
-- **Rally quorum** (the §6 point-4 fix) — gate on `tempo`.
-- **Spawn pacing** — replace the `is_defend`-exempt FIX C (`squad_manager.rs:459-464`) with `matches!(tempo, EngagementTempo::MultiLifetimeWave)`-exempt. Waves don't count against `MAX_FORMING_SQUADS` (they deploy on quorum + reinforce continuously, so they aren't forming blocs competing for the offense form budget). Same behavior for defense today, but generalized + keyed on the tempo, not the kind.
+- **Rally / deploy gate** (the §6 point-4 fix) — gate on `tempo`.
+- **Spawn pacing** — replace the `is_defend`-exempt FIX C (`squad_manager.rs:459-464`) with `matches!(tempo, EngagementTempo::MultiLifetimeWave)`-exempt. Waves don't count against `MAX_FORMING_SQUADS` (they deploy on the winnable-present-force gate + reinforce continuously, so they aren't forming blocs competing for the offense form budget). Same behavior for defense today, but generalized + keyed on the tempo, not the kind.
 - **Spawn priority** — `spawn_priority_for` may take `tempo` so a `MultiLifetimeWave` maps one notch lower (a steady drip that never bursts/starves economy) while `SingleLifetime` keeps HIGH (complete the roster fast). v1 may leave `spawn_priority_for` unchanged (it is already priority-keyed) and revisit if a wave is observed bursting.
 
 ## 6. The winnability-validated deploy gate (fixes BOTH the FIX-A over-correction AND the quorum's Lanchester gap)
 
-> **⚠ NOT YET IMPLEMENTED (verified against code 2026-07-01, reconciliation review).** Nothing in this
-> section exists in code: `present_force_is_winnable`, `EngagementTempo`,
-> `WAVE_DPS_MARGIN`/`WAVE_MIN_WIN_PROB`, and the §6.5 `squad_ready_to_engage(...)` gate function are
-> design-only — no such symbols anywhere in the workspace (the `squad_ready_to_engage` *field* on
-> `squad_fsm::SquadFsmSnapshot` is an unrelated boolean input). What exists instead:
-> (a) the **interim full-roster revert** of §6.5 — the unsound 0.75-count quorum was reverted in
-> `9705b6a`, so defense gates on `squad_ready_to_depart` (full roster) like offense; the quorum kernel
-> `squad_ready_to_depart_at_quorum` remains in `rally.rs` awaiting this gate; and
-> (b) the separate ADR 0028 `present_force_wins_or_stalls` proceed-gate (`lib.rs`), OR'd into the
-> rally/gather gates — a Lanchester win-or-stall check on the PRESENT force that is related in spirit but
-> is NOT this section's tempo-thresholded `present_force_is_winnable` (no tempo thresholds, no
-> `MIN_VIABLE_GROUP` pre-filter, no kill-in-time term at the gate). This section remains the design for
-> the principled subset-deploy restore. The first (a fixed-ratio quorum) was WRONG — the operator caught it: *"Does the quorum still validate Lanchester probability of winning? How do we know quorum is sufficient to be useful?"* It does not.
+> **Relationship to the ADR 0028 proceed-gate.** ADR 0028's `present_force_wins_or_stalls` is a
+> Lanchester win-or-stall check on the PRESENT force, OR'd into the rally/gather gates. It is related in
+> spirit but is NOT this section's tempo-thresholded `present_force_is_winnable`: it carries no tempo
+> thresholds, no `MIN_VIABLE_GROUP` pre-filter, and no kill-in-time term at the gate. (Note also that the
+> `squad_ready_to_engage` *field* on `squad_fsm::SquadFsmSnapshot` is an unrelated boolean input, not this
+> section's gate function.)
+>
+> A **fixed-ratio count quorum** is the wrong instrument here, as the operator identified: *"Does the
+> quorum still validate Lanchester probability of winning? How do we know quorum is sufficient to be
+> useful?"* It does not — see §6.1. Absent this gate, the correct conservative fallback is the full
+> roster (winnable by construction), never a count fraction.
 
 ### 6.1 Why the fixed-ratio quorum failed (the operator is mathematically exact)
 
-`squad_ready_to_depart_at_quorum` deployed at `STRICT_QUORUM_RATIO = 0.75` of the requested roster — a COUNT fraction, not a win check. The oracle sizes the roster Lanchester-favorable on two linear axes: **survival** (`required_heal = incoming × HOLD_MARGIN`, `HOLD_MARGIN = 1.3`, force_sizing.rs:245) and **kill** (`required_dps = enemy_dps × COORDINATED_DPS_MARGIN`, `1.5`, :253). A count-subset scales BOTH our heal and our DPS by ≈`f`, so the break-even fraction is `1/min(margin) = 1/1.3 ≈ 0.77` (the survival axis binds, being the tighter margin). **`0.75 < 0.77`** → the quorum deploys a force that CANNOT out-heal the incoming (`win_probability ≈ 0.47`, a coin-flip loss) — and a count is composition-blind (it can drop the healer entirely). A winnable SUBSET exists only in the margin-bound regime (down to `f ≈ 0.77`, measured on real heal/DPS, NOT count), and NOT when `kill_in_time` binds (a minimum-sized grind → winnable === full roster). A fixed ratio distinguishes neither — it is the wrong instrument.
+A `squad_ready_to_depart_at_quorum` that releases the squad at `STRICT_QUORUM_RATIO = 0.75` of the requested roster gates on a COUNT fraction, not a win check. The oracle sizes the roster Lanchester-favorable on two linear axes: **survival** (`required_heal = incoming × HOLD_MARGIN`, `HOLD_MARGIN = 1.3`, force_sizing.rs:245) and **kill** (`required_dps = enemy_dps × COORDINATED_DPS_MARGIN`, `1.5`, :253). A count-subset scales BOTH our heal and our DPS by ≈`f`, so the break-even fraction is `1/min(margin) = 1/1.3 ≈ 0.77` (the survival axis binds, being the tighter margin). **`0.75 < 0.77`** → the quorum deploys a force that CANNOT out-heal the incoming (`win_probability ≈ 0.47`, a coin-flip loss) — and a count is composition-blind (it can drop the healer entirely). A winnable SUBSET exists only in the margin-bound regime (down to `f ≈ 0.77`, measured on real heal/DPS, NOT count), and NOT when `kill_in_time` binds (a minimum-sized grind → winnable === full roster). A fixed ratio distinguishes neither — it is the wrong instrument.
 
 ### 6.2 The gate: validate the PRESENT force, reuse the oracle's model
 
@@ -154,10 +150,10 @@ Tempo thresholds (named consts, harness-tuned seeds): **SingleLifetime** → dec
 
 If no positioned subset is winnable, the gate HOLDS at the full roster — correct: there is no winnable subset to deploy. The resulting "last member never spawns" deadlock is a **spawn-completion problem**, fixed at the source: ADR 0029 FIX B (the small duo floor makes `quorum == requested` for most defense — no N-1 gap at all), FIX C (forming exemption), renew, CRITICAL priority. For a genuinely-minimum-sized grind that still can't complete, that is `UnwinnableTarget` back-off / re-size territory — the gate holding is the SIGNAL that drives it, never license to field a loser.
 
-### 6.5 Status + the FIX-A revision plan
+### 6.5 The gate's contract (and what it replaces)
 
-- **INTERIM LANDED (commit `9705b6a`, deployed):** the unsound ratio-quorum is reverted to the FULL ROSTER (`squad_ready_to_depart` for defense too) — winnable by construction, never ships a loser; FIX B keeps most defense rosters small enough to complete. The now-unused `is_defend` param + the quorum re-export were removed; the `squad_ready_to_depart_at_quorum` kernel stays in `rally.rs` for the winnability gate to reuse, then is deleted.
-- **The winnability gate then RESTORES principled subset-deploy:** `squad_ready_to_engage(positions, present, threat, tower_dps, onsite, requested, tempo, safe_mode)` = a cheap count pre-filter (SingleLifetime full roster / MultiLifetimeWave `MIN_VIABLE_GROUP`) AND `present_force_is_winnable`. Replaces the squad_manager.rs:927 gate; build `PresentForce` from `member_views`; derive `tempo`/`threat` at :419-440; generalize FIX C's exemption to `matches!(tempo, MultiLifetimeWave)`. Delete the dead quorum kernel. `STRICT_QUORUM_RATIO` is retained ONLY for `should_hold_at_boundary` cohesion (also made tempo-aware: a deployed `MultiLifetimeWave` wave does not re-hold at the boundary for a still-spawning reinforcement).
+- **The winnability gate RESTORES principled subset-deploy:** `squad_ready_to_engage(positions, present, threat, tower_dps, onsite, requested, tempo, safe_mode)` = a cheap count pre-filter (SingleLifetime full roster / MultiLifetimeWave `MIN_VIABLE_GROUP`) AND `present_force_is_winnable`. It replaces the `squad_manager.rs:927` depart gate; `PresentForce` is built from `member_views`; `tempo`/`threat` are derived at `:419-440`; FIX C's exemption generalizes to `matches!(tempo, MultiLifetimeWave)`. The ratio-quorum kernel `squad_ready_to_depart_at_quorum` is retired by this gate. `STRICT_QUORUM_RATIO` survives ONLY for `should_hold_at_boundary` cohesion (also made tempo-aware: a deployed `MultiLifetimeWave` wave does not re-hold at the boundary for a still-spawning reinforcement).
+- **The fallback while the gate is absent** is the FULL ROSTER (`squad_ready_to_depart` for defense as well as offense) — winnable by construction, never ships a loser; FIX B keeps most defense rosters small enough to complete. A count-ratio quorum is never the fallback.
 - **Harness proof (the operator's "how do we know it's sufficient"):** drive `present_force_is_winnable` over the SAME `(threat, budget)` the oracle sized for (assert it opens at the sized force / favorable-subset boundary, HOLDS for the 0.75 heal-short subset — the operator's case reproduced-then-fixed); then run the deployed force to completion in the engine-backed sim and assert it **CLEARS without a wipe** — measuring the outcome (win/wipe), not "enough bodies departed."
 
 ## 7. Composition with the body/blob auction
@@ -178,7 +174,7 @@ The auction (task #28 / ADR 0029 §8 / ADR 0020 R7-R8 — *"value a part MIX in 
 - **D4.** The tempo is set by the **producers** and rides on BOTH `EngagementContext` (doctrine reads) and `CombatObjective` (live manager reads). Serialized field is `#[serde(default)]` → no `WORLD_FORMAT_VERSION` bump (verify against `game_loop.rs`).
 - **D5.** The oracle (`assess`/`clear_force`) consumes `tempo`: `SingleLifetime` keeps the deadline gate (`<= deadline.min(onsite)`); `MultiLifetimeWave` drops it (sustain + net-progress only). Remove the per-doctrine magic `hits` literal — derive it from the tempo (`SingleLifetime → real hits`, `MultiLifetimeWave → 0`). Fixes the `PlayerRaid` `hits=0` mis-classification.
 - **D6.** No new doctrine variants — tempo is orthogonal to the classifier. No change to `sized_for`; tempo changes the *requested* force, not the distribution.
-- **D7.** **Supersede ADR 0029 D9 (FIX A).** The deploy gate is WINNABILITY-VALIDATED (§6), not a count quorum — the operator caught that a 0.75 count ratio does not validate Lanchester winning (it is below the `1/HOLD_MARGIN ≈ 0.77` survival break-even and is composition-blind). `squad_ready_to_engage` = a cheap count pre-filter AND `present_force_is_winnable` (reuses `win_probability`/`clear_force`, no second model): `SingleLifetime` deploys the decisive sized force; `MultiLifetimeWave` deploys the smallest FAVORABLE present force (`WAVE_DPS_MARGIN`/`WAVE_MIN_WIN_PROB`) and reinforces. It never deploys a force that loses; the residual no-winnable-subset HOLD is a spawn-completion concern (§6.4), not license to field under-strength. **Interim landed** (`9705b6a`): reverted to the full roster (winnable by construction) until the gate lands. `STRICT_QUORUM_RATIO`/`squad_ready_to_depart_at_quorum` are retired from the depart gate (the ratio kept only for `should_hold_at_boundary`).
+- **D7.** **Supersede ADR 0029 D9 (FIX A).** The deploy gate is WINNABILITY-VALIDATED (§6), not a count quorum — the operator caught that a 0.75 count ratio does not validate Lanchester winning (it is below the `1/HOLD_MARGIN ≈ 0.77` survival break-even and is composition-blind). `squad_ready_to_engage` = a cheap count pre-filter AND `present_force_is_winnable` (reuses `win_probability`/`clear_force`, no second model): `SingleLifetime` deploys the decisive sized force; `MultiLifetimeWave` deploys the smallest FAVORABLE present force (`WAVE_DPS_MARGIN`/`WAVE_MIN_WIN_PROB`) and reinforces. It never deploys a force that loses; the residual no-winnable-subset HOLD is a spawn-completion concern (§6.4), not license to field under-strength. `STRICT_QUORUM_RATIO`/`squad_ready_to_depart_at_quorum` are retired from the depart gate (the ratio kept only for `should_hold_at_boundary`).
 - **D8.** Generalize FIX C: the `MAX_FORMING_SQUADS` exemption is keyed on `MultiLifetimeWave`, not `ObjectiveKind::Defend`.
 - **D9.** `should_hold_at_boundary` is tempo-aware: `MultiLifetimeWave` skips the boundary re-hold (committed waves reinforce across the boundary on arrival); `SingleLifetime` keeps the 0.75 cohesion hold.
 - **D10.** The body/blob auction (deferred) reads `tempo` as a **bid-valuation mode** — `SingleLifetime` = all-or-nothing, `MultiLifetimeWave` = marginal/divisible — without a new EV currency. The oracle remains the auction's blob special-case. No auction code in v1; the tempo field is the seam.
@@ -195,15 +191,15 @@ The auction (task #28 / ADR 0029 §8 / ADR 0020 R7-R8 — *"value a part MIX in 
 - **D18.** Replace the hand-rolled `SK_DUO_BODY_COST`/`SK_DUO_MAX_BODY_COST` (operations/sourcekeeper.rs) with the real `SkSuppression`-sized duo's `estimated_cost` so the SK ROI gate and the fielded force agree.
 - **D19 (test lock-in).** Add a `no_dynamic_doctrine_silently_fields_static` invariant + a `{doctrine × tempo × affordability}` matrix (`affordable ⇒ Sized slot present & caps ≥ required`; `must-defer ⇒ None`). Make `SizingWins` count an oracle-winnable-but-`sized_for`-None scenario as a FAILURE (today it silently EXCLUDES it — validate.rs:646 — which is why the bug hid); un-ignore `CreepClearWins`; make validators doctrine-parametric; add a `sized_force_strictly_beats_static_template` tournament match.
 
-## 9. Remaining work / phased implementation
+## 9. Phased implementation
 
 Each step is independently testable in the decision crate (pure kernels) before any live wiring — the offline-harness-first discipline the war-lifecycle work uses.
 
-1. **Interim quorum wiring (highest leverage — the point-4 fix, no new type).** Wire the already-landed `squad_ready_to_depart_at_quorum` into the live gate: add `squad_ready_to_engage` keyed initially on `is_defend` (defense → quorum, offense → full roster), delete FIX A's bare short-circuit, generalize FIX C. This fixes the operator's rejection **before** the policy struct lands, using the kernel that already exists. Tests: quorum deploys at 3/4 (regression for the N-1/4 stall); full-bloc still needs 4/4; `MIN_VIABLE_GROUP` floor holds a lone defender.
-2. **The policy struct.** Add `EngagementTempo` to `force_sizing.rs` (+ `Default`). Thread it through `assess`/`clear_force` (the two regimes) + tests (a wave drops the kill-in-time gate but keeps the sustain gate; single-lifetime is byte-identical to today).
-3. **Doctrine wiring.** Add `tempo` to `EngagementContext`; remove the magic `hits` literals in `doctrine.rs` (derive from tempo). Re-key `squad_ready_to_engage` from `is_defend` to `tempo` (subsumes step 1's interim).
+1. **The policy struct.** Add `EngagementTempo` to `force_sizing.rs` (+ `Default`). Thread it through `assess`/`clear_force` (the two regimes) + tests (a wave drops the kill-in-time gate but keeps the sustain gate; single-lifetime is byte-identical to the pre-tempo behavior).
+2. **Doctrine wiring.** Add `tempo` to `EngagementContext`; remove the magic `hits` literals in `doctrine.rs` (derive from tempo).
+3. **The winnability deploy gate.** Add `squad_ready_to_engage` (§6.5) keyed on `tempo`, replacing the depart gate; generalize FIX C's forming exemption. Tests: the gate opens at the favorable subset, HOLDS for a heal-short subset, and the `MIN_VIABLE_GROUP` floor never releases a lone defender.
 4. **Objective + producer wiring.** Add `tempo` to `CombatObjective`/`ObjectiveRequest` (`#[serde(default)]`). Set it in `war.rs`/`sourcekeeperfarm.rs` per §4; fold the `war.rs` core-decay skip into the oracle deadline. Thread `should_hold_at_boundary` tempo (D9).
-5. **Harness proof.** Extend the lifecycle/forming harness (ADR 0028) so a `MultiLifetimeWave` quorum deploys at quorum, holds, and reinforces across waves vs a defended target — proving D7/D9 reproduce-then-fix the N-1 stall + the lone-defender pick-off offline (the operator's tune-offline-not-live preference).
+5. **Harness proof.** Extend the lifecycle/forming harness (ADR 0028) so a `MultiLifetimeWave` deploys at the winnable subset, holds, and reinforces across waves vs a defended target — proving D7/D9 reproduce-then-fix the N-1 stall + the lone-defender pick-off offline (the operator's tune-offline-not-live preference).
 6. **(Deferred) auction bid-valuation reads `tempo`** (D10) — only when a measured objective demonstrably loses value to blob-only sizing (ADR 0029 D8). The tempo field is already the hook; no work until then.
 
 ## 10. Cleanup & consolidation — one sizing pattern, no murky middle

@@ -1,6 +1,13 @@
 # 0022 — Combat → MMO v1 roadmap (end-state, foundation-first)
 
-Status: **Accepted 2026-06-23, revised same day.** Operator-driven re-plan; supersedes the P1–P5 / R-ladder *sequencing* in ADR 0020 §10–§12 (its sizing *design* still stands). Revised after the operator reviewed v1 of this ADR as **under-committed**, plus a 7-agent revision+gap workflow and two interview rounds.
+- **Status:** Superseded by 0027
+
+> **Retained as history.** This roadmap's *sequencing* was overtaken by ADRs 0026, 0027, 0031, 0032
+> and 0034–0037, which delivered the capability by a different route; 0027 is the principal
+> successor. Its governing rule — *"we will not deploy to MMO until all roadmap objectives are
+> complete"* — is **VOID**, and must not be read as a standing block on future deploys.
+
+Operator-driven re-plan; supersedes the P1–P5 / R-ladder *sequencing* in ADR 0020 §10–§12 (its sizing *design* still stands). Revised after the operator reviewed v1 of this ADR as **under-committed**, plus a 7-agent revision+gap workflow and two interview rounds.
 
 ## Why this exists
 
@@ -16,26 +23,6 @@ Verified in code; these matter more than anything in the original plan:
 1. **`repair_per_tick` is hardcoded `0`** (`military/threatmap.rs:364` → `war.rs:801`). The `DefenseProfile.repair_per_tick` field exists and `assess()`'s "repair out-paces our DPS → don't commit" veto consumes it — but the producer always emits 0, so that veto is **dead code**. The oracle declares repair-locked stalemates winnable → the engage-stall-die failure on anything that repairs.
 2. **`squad_entity` is a bare `u32` resolved without a generation check** (`squad_combat.rs:18` + ~8 hot paths via `entities.entity(id)`). specs returns whatever *live* entity now occupies that index, so a recycled slot silently resolves to a **different squad's** `SquadState`/orders — a live aliasing bug and a likely hidden cause of "creeps do weird things."
 3. **No combat energy-ROI gate.** `war.rs` offense never consults `economy.can_rooms_afford_military`; cumulative-siege spans creep *generations* with effectively unbounded re-spawn → a correctly-sized squad the colony can't sustain = the economy death-spiral.
-
-> **Foundation progress — current state (2026-06-24).**
->
-> *Tier-1 DONE:*
-> - **P-ENGINE** — N-room combat engine: room graph + exits + engine-faithful cross-room edge-exit relocation + per-room terrain + **objective beds with active repair** + multi-room `ScenarioBuilder` + win condition. Offline scenario gate green (cross-room travel / flee-across-border / attacker-vs-objective). Design + status: **ADR 0023**.
-> - **P-MOVE / P-MOVE+** — anchor delegated to rover; rover `LocalPathfinder::search` rewritten as a **true multi-room A\*** + real `find_route` Dijkstra. The sim squads (`SimSquad` + `ManagedSimSquad`) now route through rover's live `MovementSystem` + resolver — **one traffic-managed mover, sim ≡ live**. Two root-caused fixes landed: rover resolver made **deterministic** (`Handle` tie-break in `resolve_conflicts` — std-HashMap per-process seed was choosing the contested-tile winner; rover `85a1d30`); combat creeps take **`High` movement priority** so the shooter wins the forward kite tile (was parking the healer forward + the shooter out of range). Previously seed-flaky kite test now **24/24** across fresh processes. (super `48fddbd`, agent `1834340`.)
-> - **P-ID** — squad-id validate-on-access (`47b2b0a`, WFV 16→17). **Blocker #1** — `repair_per_tick` producer wired (`d07afc7`, `threatmap.rs:371` emits `estimated_repair`, un-deading the `assess()` veto).
->
-> **P-FORCE — IN PROGRESS (2026-06-24).** Landed (host-tested + clippy-wasm clean, no WFV bump):
-> - **D3 member-COUNT scaling** (`f0eab4d`) — `composition.sized_for` now GROWS a role's member count (`ceil(parts / per-member-cap)`, never below the template count) and re-distributes evenly instead of deferring when one member can't carry its share; defers only when a role can't field even one member or the squad exceeds `MAX_SIZED_MEMBERS` (8 = G4-HEAVY/P5). This is the direct fix for the SK-trickle / engage-retreat under-sizing bug (the SK duo sizes directly via `sized_for`, so it grows healers to hold a multi-keeper room at RCL4+).
-> - **Offline holding validation** (agent `d4d6e36` / super `66a9508`) — `force_sized_squad_holds_and_breaches_where_underhealed_is_wiped` in the objective bed: a multi-healer (force-sized) squad holds under tower fire + active repair and breaches; the same dismantler with one healer is worn down first. Plus `force_sized_squad_keeps_holding_while_damaged` (decision crate) stays green.
-> - **D13 INVULNERABILITY skip** (`17f7d0f`) — the offense scan reads `core.ticks_to_deploy()`; a deploying (invulnerable) core is skipped + re-scouted, never fielded against (it would chip 0). Live-only signal → no WFV bump.
-> - **Blocker #3 energy-ROI gate** (`35aab51`) — offense defers a sized squad whose spawn cost exceeds `economy.can_afford_military` (reserve-protected). Member-count scaling can make squads large, so this guards the death-spiral. (v1 = one-generation spend; cumulative-across-generations bound lands with G4-HEAVY.)
-> - **Repair-locked-defer test** — proves the `assess()` repair veto (live since blocker #1's `d07afc7` producer) actually fires.
->
-> *P-FORCE REMAINING:* **(a) growable budget + R-attack `ranged_parts`** — `best_force_budget` gates winnability on the *fixed template's* capabilities, so the offense path can't yet exploit member-count scaling for cores: a 100k core is deferred as "kill too slow" when a bigger ranged squad would win (the soak-confirmed "R-attack required" finding, `ddd51ba`). Needs the budget to reflect the max-growable force + `RequiredForce.ranged_parts` + RangedDPS sizing in `sized_for`. **(b) D5 stronghold FIGHT model** — `DefenseProfile` gains defender DPS/heal/count + `rampart_repair_per_tick` + `tower_heal_of_defenders_per_tick` (from existing `hostile_creeps`/`tower_energy`/live level → likely NO WFV bump) + the burst-kill term in `assess` (focused DPS > tower-heal on one defender). **(c) D4 shared-core defense cutover** — add `own_incoming_mitigation` to `DefenseProfile`, build a defense-framed profile/budget, prove it ≥ static `DefenseEscalation` in a defense sim bed, then cut `war.rs` defense over (static stays bootstrap until proven).
->
-> *Other Tier-1 REMAINING (dependency order → first soak):* **P0** (freeze contract stubs + CPU contract + the **per-squad observability dump** — the hard soak-gate, *not yet built*), **P-OBJ** (objective lifecycle: `SuccessPredicate`/retask-with-oracle/`Recall`/recycle/partial-wipe/re-scout/`Escort` — only a partial `SuccessPredicate` in `objective_queue.rs`), **P-SPAWN** (synchronized spawn + rally gate — *not built*), then **PROVE-1** (offline integration gate + FIRST live combat soak).
->
-> **▶ Recommended next build: P-FORCE (a) growable budget + R-attack `ranged_parts`** — it completes "size to win" for the primary offense target (invader cores) and is the soak-confirmed gap; then P-FORCE (b)/(c), then P0's observability dump before PROVE-1.
 
 ## Decisions
 

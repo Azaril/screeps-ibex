@@ -1,9 +1,10 @@
 # ADR 0026a — Candidate strategy modes (ideation catalog)
 
-- **Status:** **EVALUATED (2026-06-26)** — the tournament validation this header once awaited RAN on the bit-deterministic sim; measured verdicts in §Validation results below. Net: the **spacing lever SHIPPED** (`open_combat` spacing 1→2 — live in `screeps-combat-decision/src/strategy.rs`, `open_combat()` `spacing_coef: 2`); **`ranged_duel_kite` REJECTED** by the tournament (lost its own target bed, −329); **`anti_aoe_spread` SUPERSEDED** by the spacing-2 base; the remaining six modes (`focus_ball`, `anti_kite_chase`, `defensive_hold`, `drain_spread`, `drain_breach_handoff`, `safe_mode_countdown`) **DEFERRED** pending new signals/beds. Companion to [ADR 0026](0026-combat-strategy-selection.md). These are ideation outputs (6-lens proposal → dedup → exploitability/testability vet). *(The original "Proposed / unvalidated" header went stale once the 2026-06-26 tournament ran — corrected 2026-07-01.)*
-- **Prereq:** the edge-exit two-creeps-on-a-tile engine fix must land first (it changes cross-room/base-attack dynamics); then re-tune the general profiles; then validate each situational mode on its target bed under the `exploitability` ship-gate.
+- **Status:** Catalog
+- **What this is:** an ideation catalog of candidate situational strategy modes (6-lens proposal → dedup → exploitability/testability vet), companion to [ADR 0026](0026-combat-strategy-selection.md), together with the tournament verdicts measured against it (§Validation results). Net of those verdicts: the **spacing lever is the one adopted change** (`open_combat` spacing 1→2, `screeps-combat-decision/src/strategy.rs`, `open_combat()` `spacing_coef: 2`); **`ranged_duel_kite` is rejected** (it lost its own target bed, −329); **`anti_aoe_spread` is superseded** by the spacing-2 base; the remaining six modes (`focus_ball`, `anti_kite_chase`, `defensive_hold`, `drain_spread`, `drain_breach_handoff`, `safe_mode_countdown`) are **deferred** pending new signals/beds.
+- **Prereq for any re-validation:** the edge-exit two-creeps-on-a-tile engine fix changes cross-room/base-attack dynamics, so it precedes a re-tune of the general profiles, and each situational mode is then validated on its target bed under the `exploitability` ship-gate.
 
-`KernelParams = {approach, incumbency, discohesion, cohesion_k, spacing}`. Shipped profiles as of authoring: `default {2,3,10,3,1}`, `open_combat {1,6,20,2,1}`, `breach {1,4,10,3,1}`, `breach_drain {1,6,10,3,1}`. *(Post-validation, `open_combat` is now `{1,6,20,2,2}` — the spacing 1→2 ship; the others are unchanged at HEAD, `strategy.rs`.)*
+`KernelParams = {approach, incumbency, discohesion, cohesion_k, spacing}`. Profiles as authored: `default {2,3,10,3,1}`, `open_combat {1,6,20,2,1}`, `breach {1,4,10,3,1}`, `breach_drain {1,6,10,3,1}`. *(`open_combat` carries the validated spacing-2 value: `{1,6,20,2,2}`; the others are as authored — `strategy.rs`.)*
 
 ## Catalog (ranked by the vetting agent)
 
@@ -18,7 +19,7 @@
 | 7 | `drain_breach_handoff` | `{3,4,10,3,1}` | Breach + `Drain` + `towers_drained` (cumulative soak exhausted tower energy) | `breach_drain` on the transition tick — it stays in SOAK posture after towers empty; `approach 3` rushes the now-undefended ring before refill (hot approach is safe *only* here — the towers that punished it are empty) | LOW-MED (signal-timing risk: early flip → dash into live towers) |
 | 8 | `safe_mode_countdown` | `{1,8,14,2,1}` | Breach + `enemy_safe_mode` + `safe_mode_ticks_remaining ≤ 50` | `SafeModeHold` (which over-retreats to the kite standoff) — pre-stage a tight blob at the gap mouth so dismantle resumes at range 1 the instant safe mode lapses | LOW (base invulnerable while staging; survival-veto guards the post-lapse tile) |
 
-## New signals the bot must compute (not yet wired)
+## New signals the bot must compute
 `enemy_has_ranged`, `aoe_pressure`, `single_target_threat` + `outnumber_ratio`, `enemy_kiting`, `in_our_territory`, `multi_tower_crossfire`, `towers_drained` (force_sizing already estimates this), `safe_mode_ticks_remaining`. Most are cheap body-part / tower / ownership reads; `enemy_kiting` reuses `threat_step_ticks`.
 
 ## New beds/scenarios the validation phase needs
@@ -26,7 +27,7 @@
 - `outnumber_ratio ≥ 1.3` melee-led, no-AoE comp (mode 3).
 - speed-asymmetric receding-kiter opponent (mode 4).
 - defender-owns-the-room scenario with a feinting attacker (mode 5).
-- tower-energy-bounded Drain base with ≥2 towers + a `towers_drained` flip (modes 6-7) — the ADR already flags this bed as not-yet-landed.
+- tower-energy-bounded Drain base with ≥2 towers + a `towers_drained` flip (modes 6-7).
 - safe-mode base with a scripted mid-scenario expiry (mode 8).
 
 ## Validation gates (per mode, before wire-in)
@@ -42,11 +43,11 @@ The catalog was tested by **per-situation discovery**: build a situational comp 
 
 | Mode | Verdict | Evidence |
 |------|---------|----------|
-| (all `spacing` variants) | **SHIPPED** as `open_combat` spacing 1→2 | `a1-i6-sp2` is the best open profile over the full real-opponent field (+169 mean vs the archetypes; beats the old `a1-i6-sp1` +135; exploit 85≈84). The old "exploit 0" was a grid blind spot — once spacing is in the field, spacing-1 is exploitable (176). Spacing 2 is the generic sweet spot; **spacing 4 only wins a pure-ranged mirror** (+787 there) → a still-valid situational `anti_aoe`/ranged mode if an `enemy-has-ranged`/`aoe-pressure` signal is wired. |
+| (all `spacing` variants) | **ADOPTED** as `open_combat` spacing 1→2 | `a1-i6-sp2` is the best open profile over the full real-opponent field (+169 mean vs the archetypes; beats the old `a1-i6-sp1` +135; exploit 85≈84). The old "exploit 0" was a grid blind spot — once spacing is in the field, spacing-1 is exploitable (176). Spacing 2 is the generic sweet spot; **spacing 4 only wins a pure-ranged mirror** (+787 there) → a still-valid situational `anti_aoe`/ranged mode if an `enemy-has-ranged`/`aoe-pressure` signal is wired. |
 | `ranged_duel_kite` | **REJECTED** | Its lower-incumbency intuition LOST the ranged mirror (−329, rank 17/61). The data wants the opposite: keep incumbency high, raise spacing. |
 | `anti_aoe_spread` (spacing 5) | **superseded** by spacing-2 base | Validated direction (+174 in RMA) but spacing 5 over-spreads; spacing 2 captures the generic benefit and spacing 4 the pure-ranged extreme. |
 | `focus_ball`, `anti_kite_chase` | **deferred** (comp-sensitive / asymmetric) | The melee "close hard" signal is sustain-dependent: high approach wins melee WITH heal (+1051) but loses WITHOUT (−56) — too conditional for a clean activator. anti_kite needs a speed-asymmetric kiter bed. |
 | `defensive_hold` | **deferred** (no sim model) | Ranked well as a generic "hold + slight spread" (#2 ranged), but its intended value (refuse the bait in OUR territory) needs room-ownership + a feinting opponent the combat sim doesn't model. |
-| `drain_spread`, `drain_breach_handoff`, `safe_mode_countdown` | **deferred** (no bed) | Need a tower-energy-bounded drain base + scripted safe-mode-expiry beds (ADR-flagged as not-yet-landed). Base-attack is non-discriminating today, so breach-side modes can't be measured. |
+| `drain_spread`, `drain_breach_handoff`, `safe_mode_countdown` | **deferred** (no bed) | Need a tower-energy-bounded drain base + scripted safe-mode-expiry beds. Base-attack is non-discriminating in the current bed set, so breach-side modes can't be measured. |
 
 **Meta-result:** for this kernel, **the highest-value missing knob was one the original 48-config sweep's grid excluded by construction** (it fixed `spacing=1`). The hand-designed modes mostly under-performed a data sweep; the durable deliverable is the spacing-2 base change + the per-situation discovery harness for future modes. The deferred situational modes are real but need (a) new info-signals and (b) asymmetric/scripted beds — a clean follow-on increment, not blocked work.

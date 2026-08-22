@@ -1,8 +1,8 @@
 # 0046 — Scout assignment post-pass, multi-room tours, and EV-driven fleet sizing
 
-Status: **Accepted + implemented** (operator-directed 2026-08-11; adversarial 4-reviewer design
-review 2026-08-12 — its resolutions are BINDING and recorded in §6; implemented as one batch
-P1+P2+P3, WFV 27→28).
+- **Status:** Decided
+Date: 2026-08-11 (operator-directed); amended 2026-08-12 by an adversarial 4-reviewer design review
+whose resolutions are BINDING and recorded in §6.
 Origin: the expansion-stall diagnosis ([expansion-stall-2026-08-11.md](../reviews/expansion-stall-2026-08-11.md))
 identified the scout fulfillment layer as the root of the MMO claim lockdown (finding cluster M1),
 and the operator directed a redesign: *"Using a similar pre-pass and scout queue TTL + persistence
@@ -22,7 +22,7 @@ are absorbed here). The producer/consumer contract (`VisibilityRequest` upsert, 
 The broker (`VisibilityQueue`) is already the right shape: TTL'd (100 ticks), persistent
 (serialized component), idempotent upserts, priority-coalesced. Everything downstream of it is
 greedy and per-creep, and that is where the live failures come from
-(file references = master at diagnosis time, pre-implementation — F1-F5's code is now deleted):
+(file references point at the pre-redesign fulfillment code the design replaces):
 
 | # | Defect | Where |
 |---|---|---|
@@ -61,8 +61,8 @@ demand wins — while `priority` stays MAX-merged and `expires_at` stays MAX-mer
 `upsert_min_merges_want_fresh_within_and_max_merges_priority` next to the queue tests.
 
 Serialization: adding a field to `VisibilityEntry` is a positional bincode change inside
-`VisibilityQueueData` ⇒ **WFV 27→28** (operator has sanctioned resets; batch per
-[0002](0002-serialization.md) conventions with the other shape changes in D4).
+`VisibilityQueueData` ⇒ one `WORLD_FORMAT_VERSION` bump, batched per
+[0002](0002-serialization.md) conventions with the other shape changes in D3/D4 (§4d).
 
 ### D2 — `ScoutAssignmentSystem`: one post-process pass owns ALL fulfillment
 
@@ -108,9 +108,9 @@ squad manager (dispatch slot: after `RunSquadUpdateSystem`, before `SpawnRefillP
    `MovementFailure::PathNotFound` is NOT evidence — it is overloaded with CPU/budget exhaustion
    and false-positives exactly under load. `find_route reachable:false` is only a bonus signal
    for map-disconnected rooms (the bounded head-leg check above). Fresh-sighting clearing stays
-   (now owned by the assignment pass). **No poison-list migration code**: the WFV 28 reset wipes
-   the persisted `unreachable` list outright; the empty-list thundering herd is bounded by tour
-   budgeting (lifetime-capped tours ration how much frontier the fleet can chase at once).
+   (owned by the assignment pass). **No poison-list migration code**: the WFV reset that carries
+   D1/D4 wipes the persisted `unreachable` list outright; the empty-list thundering herd is bounded
+   by tour budgeting (lifetime-capped tours ration how much frontier the fleet can chase at once).
 
 Shed class (review resolution #8): the pass is `StageClass::SkipUnderCritical` — observer
 assignment keeps parity with its pre-ADR shed class — while scout jobs/movement remain in the
@@ -131,8 +131,8 @@ frontiers as values drift), or, when the demand set is truly empty, the nearest 
 frontier room (absorbing today's `pick_adjacent_explore_target` BFS into the assigner as a
 LOW-priority **opportunistic** demand producer instead of job-side special-casing — opportunistic
 so it never counts toward spawn EV). The `Idle` state, `idle_since`, and the job-side
-opportunistic-request path are deleted (their serialized shapes fold into WFV 28 — the whole
-`ScoutState` machine collapses to a plain tour-walking struct).
+opportunistic-request path are deleted (their serialized shapes fold into the same WFV bump — the
+whole `ScoutState` machine collapses to a plain tour-walking struct).
 
 Assignment stability (review resolution #4): the staleness value-multiplier is **quantized into
 0.25 buckets** (`quantized_staleness_multiplier`: `age / want_fresh_within` clamped to [1, 3],
@@ -144,7 +144,7 @@ smoothly rising multiplier would re-order the greedy every tick and thrash tours
 With assignment centralized, a mission whose identity is one room is meaningless (it was the
 source of F5). `ScoutOperation` becomes the **fleet owner**: it holds the scout roster and
 retires the operation's mission bookkeeping. `MissionData::Scout` is removed — a serialized-enum
-shape change ⇒ folds into the same **WFV 28** bump as D1. Spawn callbacks attach the `ScoutJob`
+shape change ⇒ folds into the same WFV bump as D1. Spawn callbacks attach the `ScoutJob`
 and the roster entry directly on the operation.
 
 Operation seams (review resolution #9): the `Operation` trait gains `remove_creep`/`get_creeps`
@@ -163,8 +163,8 @@ Replace `MAX_SCOUT_MISSIONS = 3` with a marginal-value computation every assignm
 Review resolution #6 (BINDING): the EV is computed and bid **from the `ScoutAssignmentSystem`
 itself** — same tick: it runs after all producers and `SpawnQueueSystem` consumes later that
 tick — NOT from the operation's earlier dispatch slot (which would price against last tick's
-demand). **The closed form is THE spec** (the hypothetical-extra-scout re-run is explicitly NOT
-implemented):
+demand). **The closed form is THE spec** — a hypothetical-extra-scout re-run of the assignment pass
+is explicitly NOT part of the design:
 
 - **Entry value convention**: `value_e = rate × want_fresh_within` (floored at one default TTL so
   an imperative `want_fresh_within = 0` flag does not price at zero), where `rate` is the
@@ -215,7 +215,7 @@ priorities is deferred (§4c).
 ## 3. What this fixes, mapped to the stall diagnosis
 
 - M1 (scout starvation + pinning + false unreachable + 3-slot cap): F1–F5 all addressed
-  structurally; the poison list is re-validated on deploy.
+  structurally; the poison list is re-derived from room-centric evidence rather than inherited.
 - M2 (coverage/freshness squeeze): candidates now get serviced *because* they declare
   `want_fresh_within = 250`, so `scouting_coverage_complete` and the commit-time re-check become
   satisfiable. (The claim-side ordering/plan fixes remain separate work — stall report §4 items
@@ -223,43 +223,42 @@ priorities is deferred (§4c).
 - F6/0021-followup: observers rotate and skip fresh rooms; OBSERVE-only entries keep never
   spawning scouts.
 
-## 4. Open questions (RESOLVED by the 2026-08-12 design review)
+## 4. Questions the design opened, and how they were settled
 
 a. **Entry value seeds** — RATIFIED: CRITICAL 5.0 e/t, HIGH 2.0, MEDIUM 0.75, LOW 0.1, scaled by
    staleness ratio (`age / want_fresh_within`, capped ×3) — with the multiplier QUANTIZED into
-   0.25 buckets (resolution #4). Tune in soak.
+   0.25 buckets (resolution #4). The numbers are tuning surface.
 b. **Tour horizon** — RATIFIED: lifetime-only; the memoized insertion (resolution #1) bounds the
    pass at initial `entries × scouts` deltas + one scout-column per insertion.
-c. **Numeric-bid visibility priorities** — DEFERRED to a follow-up ADR (unchanged).
-d. **WFV batching** — RESOLVED: ONE WFV 27→28 bump batching ALL shape changes
+c. **Numeric-bid visibility priorities** — out of scope here; a follow-up ADR owns it.
+d. **WFV batching** — RESOLVED: ONE `WORLD_FORMAT_VERSION` bump batching ALL shape changes
    (`VisibilityEntry.want_fresh_within`, `MissionData::Scout` deletion, the `ScoutState` machine
    collapse incl. `Idle`/`idle_since`), mirrored in `operations/claim.rs`
-   `EXPECTED_WORLD_FORMAT_VERSION`. No other flags/config — always-on automatic behavior
+   `EXPECTED_WORLD_FORMAT_VERSION`. No flags/config — always-on automatic behavior
    (operator directive).
 
-## 5. Rollout
+## 5. Shape of the change and its observable end state
 
-Implemented as ONE batch (P1+P2+P3 below collapsed — the operator sanctioned the reset, and
-staged interim heuristics would have been dead code within the same deploy):
+The design is **one indivisible change**, not a staged sequence: the serialization change, the
+assignment pass, and the EV bidding depend on each other, and staged interim heuristics would be
+dead code inside the same reset. There is no poison-list migration — the reset wipes the
+`unreachable` list (see D2.4).
 
-- ~~P1 (no serialization change)~~ / ~~P2 (WFV 28)~~ / ~~P3 (EV bidding)~~ — all landed together
-  at WFV 28. There is no poison-list migration: the reset wipes the `unreachable` list (see D2.4).
-- Verify on private soak first (offense-soak recipe), then MMO on explicit go-ahead.
-- **Success criteria — scoped to what THIS change controls** (review resolution #11; the
-  claim-side M2/M3 fixes — rolling commit, coverage simplification, plan prefetch — already
-  landed in Wave 1, commit `09c36db`, and their criteria belong there):
-  - the `unreachable` list SHRINKS from empty-after-reset steady state (no 1-hop-from-colony
-    entries reappear; the old list peaked at 103 rooms);
-  - coverage/freshness passes in the claim Select logs: candidates pass the commit-time
-    freshness re-check (`intel_freshness_ticks`) because scouts keep them fresh — the
-    "stale-intel skip" reason disappears from Select captures;
-  - scouts visibly tour (multi-room routes in the summary HUD) instead of idling, and the fleet
-    size tracks frontier demand (spawns while EV > 0) rather than pinning at 3.
+**Observable end state — scoped to what THIS design controls** (review resolution #11; the
+claim-side M2/M3 concerns — rolling commit, coverage simplification, plan prefetch — belong to the
+claim-side work):
 
-## 6. Design review resolutions (2026-08-12) — BINDING
+- the `unreachable` list stays SMALL from its empty post-reset state (no 1-hop-from-colony
+  entries reappear; under the old room-blind evidence it peaked at 103 rooms);
+- candidates pass the commit-time freshness re-check (`intel_freshness_ticks`) because scouts
+  keep them fresh — the "stale-intel skip" reason does not appear in claim Select captures;
+- scouts tour (multi-room routes in the summary HUD) instead of idling, and the fleet size tracks
+  frontier demand (spawns while EV > 0) rather than pinning at a constant.
 
-An adversarial 4-reviewer design review (28 findings) amended this ADR before implementation.
-Numbered resolutions and where each landed:
+## 6. Design review resolutions — BINDING
+
+An adversarial 4-reviewer design review (28 findings) amended this design. Numbered resolutions and
+the section/seam each governs:
 
 1. **Insertion metric (BLOCKING)**: cheapest-insertion prices ALL deltas with Chebyshev × 50,
    never `route_distance_via`; route cache only for the ≤fleet-size tour HEAD legs per tick;
@@ -288,13 +287,13 @@ Numbered resolutions and where each landed:
 9. **Operation seams**: `Operation::remove_creep`/`get_creeps` defaults; cleanup + serialize-time
    scrub notify operations; `spawn_queue` on the operation SystemData; `operation_type!` macro
    for the typed roster attach → §2 D4.
-10. **Serialization**: ONE WFV 27→28 bump batching all shape changes + the
+10. **Serialization**: ONE WFV bump batching all shape changes + the
     `EXPECTED_WORLD_FORMAT_VERSION` mirror in operations/claim.rs; no new flags/config → §4d;
-    game_loop.rs WFV history entry 28.
-11. **Success criteria scoped** to this change (unreachable shrinkage + coverage/freshness in
-    Select logs; claim-side M2/M3 already landed in Wave 1) → §5.
+    game_loop.rs WFV history entry.
+11. **Observable criteria scoped** to this design (unreachable list stays small + coverage/freshness
+    in Select logs; the claim-side M2/M3 concerns belong to the claim-side work) → §5.
 
-Implementation notes recorded for reviewers: the D5 closed form discounts scouts still in the
+Design notes recorded for reviewers: the D5 closed form discounts scouts still in the
 spawn tube and caps the marginal scout's serviceable value at its lifetime horizon
 (`SCOUT_EV_PROJECTION_ENTRIES` — this is the ADR's own "entries the extra scout would service
 within its 1500-tick life" bound, and it keeps a fat frontier from bidding unboundedly over the

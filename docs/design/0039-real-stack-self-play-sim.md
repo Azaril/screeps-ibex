@@ -1,8 +1,10 @@
 # ADR 0039 — Full real-stack self-play combat sim (the single trustworthy proof/debug tool)
 
-- **Status:** Proposed (2026-07-01). Operator directive: make the offline combat sim drive the **real
-  decision + rover + formation stack**, AI vs AI, multi-room, with varied terrain + compositions, as the
-  single trustworthy proof/debug tool — "even if that means more self-play with continuous improvement."
+- **Status:** Decided
+- **Date:** 2026-07-01
+- **Directive:** make the offline combat sim drive the **real decision + rover + formation stack**, AI vs
+  AI, multi-room, with varied terrain + compositions, as the single trustworthy proof/debug tool — "even if
+  that means more self-play with continuous improvement."
 - **One line:** The tactical sim is already real (engine + decision + rover + terrain, both sides); the
   gaps are (1) the render driver underuses the real terrain/composition inputs, (2) the self-play path is
   *anchorless* so it never exercises the real **formation cohesion**, and (3) the **strategic lead-up**

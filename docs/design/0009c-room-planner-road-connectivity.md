@@ -1,20 +1,14 @@
 # 0009c — Room Planner: Guaranteed Road Connectivity
 
-**Status:** Accepted + Implemented 2026-06-22 (operator sign-off; landed on master, build + clippy + 30 tests green)
+- **Status:** Decided
 **Addendum to:** [0009](0009-room-planning-and-multiroom-layout.md), [0009a](0009a-room-planner-performance.md), [0009b](0009b-room-planner-scoring-and-evaluation.md)
 **Relates to:** road-connectivity review (this session); future low-MOVE base-ops bodies (out of scope here)
 **Driver:** William Archbell
 **Date:** 2026-06-22
 
-> **Design posture (operator, 2026-06-22):** target the *correct end-state* even where it breaks serialization. The `Plan` struct gains fields (explicit approach tiles, real road score fields); migration is a **loud full reset** (`WORLD_FORMAT_VERSION` 13 → 14), superseding the earlier "let it ride." Acceptable pre-MMO under the reset-anytime policy (EP-5.1).
+> **Design posture:** target the *correct end-state* even where it breaks serialization. The `Plan` struct gains fields (explicit approach tiles, real road score fields); migration is a **loud full reset** via a `WORLD_FORMAT_VERSION` bump, superseding the earlier "let it ride." Acceptable pre-MMO under the reset-anytime policy (EP-5.1).
 
-> **As-built (2026-06-22).** Implemented as specified, with two simplifications found during implementation and one consolidation:
-> - **D5 (extension stamp connector → road-BFS) was not needed** and was skipped. D3's endpoint resolution routes the all-buildings pass to *every* must-connect structure (including extensions) and traces islanded fragments back onto the trunk over plains/swamp, so extensions are reconnected by construction regardless of the stamp connector. The extension layer is unchanged.
-> - **D7 (prune hardening) was not needed** and was skipped. `RoadPruneLayer`'s redundant-removal already uses road-BFS and protects every structure that has a baseline adjacent road (which, post-D3, is all must-connect structures); dead-end pruning never touches multi-tile connector interiors; and the D6 gate runs after prune as the backstop. Verified, no change required.
-> - **`road_upkeep` was consolidated into the existing `upkeep_cost`** rather than a separate `PlanScore` field: `UpkeepScoreLayer` now counts all roads (plain ×1, swamp ×3). `PlanScore` thus gains `road_transport` + `road_connectivity` (and drops `traffic_congestion`); `RoadScoreLayer` pushes `road_transport`.
-> - **D6 score weights (as-built):** `road_connectivity` is pushed with weight **0** at the tight tiers (reporting only — the hard reject enforces connectivity) and weight **2000** (dominant; `> must_connect_count × Σ other weights`) at the unbounded tier so it is lexicographically primary there. In fully-connectable rooms the assumed-1.0 connectivity term cancels between the optimistic search bound and the connected best, so admissible pruning is unaffected.
-> - **D9 (no road/wall overlap / tunnel avoidance)** was added during this work after an engine check confirmed road+wall = 150× upkeep tunnel — see the D9 decision below.
-> - **Files:** `plan.rs`, `layer.rs`, `pipeline/{finalize,analysis}.rs`, `planner.rs` (boxed `PlanResult::Complete`), `layers/{road_network,road_connectivity,road_score,upkeep_score,utility,spawn,defense,mod}.rs`, `screeps-ibex/src/game_loop.rs` (WFV 13→14), `screeps-prospector/src/score.rs` (deref boxed Complete). Tests: 4 gate tests + 1 end-to-end reconnection test + 1 road/wall-overlap regression test.
+> **Where it lives:** `plan.rs`, `layer.rs`, `pipeline/{finalize,analysis}.rs`, `planner.rs` (boxed `PlanResult::Complete`), `layers/{road_network,road_connectivity,road_score,upkeep_score,utility,spawn,defense,mod}.rs`, with `screeps-prospector/src/score.rs` dereferencing the boxed `Complete`.
 
 ---
 
@@ -50,7 +44,7 @@ A 2:1 hauler beats a 1:1 only when its route's off-road fraction `f < ~1/3`; any
 
 ## Decision
 
-Eight parts, all inside `screeps-foreman`. D6 (the gate) is load-bearing; D2 (data model) is the structural cleanup that makes everything else exact; D3–D5 make the gate satisfiable; D7 keeps it satisfied through pruning; D8 is the scoring that shapes *which* connected network wins.
+Nine parts, all inside `screeps-foreman`. D6 (the gate) is load-bearing; D2 (data model) is the structural cleanup that makes everything else exact; D3 and D4 make the gate satisfiable; D5 and D7 record two guards the design deliberately does *not* need, and why; D8 is the scoring that shapes *which* connected network wins; D9 keeps the network out of the engine's 150× tunnel tax.
 
 ### D1 — Invariant and structure tiers
 
@@ -86,9 +80,11 @@ Closes the towers/utility gap. **Inert on its own** (prior art) — meaningful o
 
 `UtilityLayer` (observer/factory/power-spawn/nuker) and `SpawnLayer` (extra spawns) must, when choosing a tile, require ≥1 road-eligible 8-neighbour reachable in the structure-aware sense (mirror `controller_infra`'s `approach` reservation, [controller_infra.rs:166-174](../../screeps-foreman/src/layers/controller_infra.rs#L166)) and prefer tiles adjacent to the trunk. This is the root cause of ~89% of historical reachability rejections ([0009a:163](0009a-room-planner-performance.md)); fixing it is what makes the gate cheap.
 
-### D5 — Extension per-stamp connector: road-BFS aware
+### D5 — Extension per-stamp connector: unnecessary, and why
 
-Switch the per-stamp connectivity test and `has_adjacent_reachable_road` fillability test from `walkable_bfs` to **road-BFS** ([extension.rs:359-380](../../screeps-foreman/src/layers/extension.rs#L359), [:448](../../screeps-foreman/src/layers/extension.rs#L448)), so a stamp that is walk-reachable over plains but not *road*-connected gets a connector laid via the existing `pathfind_road_connection` ([extension.rs:524](../../screeps-foreman/src/layers/extension.rs#L524)). Store each kept extension's approach tile (D2).
+The obvious companion change is to switch the per-stamp connectivity test and the `has_adjacent_reachable_road` fillability test from `walkable_bfs` to **road-BFS** ([extension.rs:359-380](../../screeps-foreman/src/layers/extension.rs#L359), [:448](../../screeps-foreman/src/layers/extension.rs#L448)), so a stamp that is walk-reachable over plains but not *road*-connected gets a connector laid via `pathfind_road_connection` ([extension.rs:524](../../screeps-foreman/src/layers/extension.rs#L524)).
+
+**The design does not include it.** D3's endpoint resolution already routes the all-buildings pass to *every* must-connect structure, extensions included, and traces islanded fragments back onto the trunk over plains/swamp — so extensions are reconnected by construction whatever the stamp connector does. The extension layer therefore stays unchanged, and each kept extension's approach tile is stored by D3 (D2), not by a second connector mechanism. Adding the road-BFS connector on top would be a redundant second path to the same invariant.
 
 ### D6 — The gate: a dedicated `RoadConnectivityLayer` *(C1 — own layer, single responsibility)*
 
@@ -98,24 +94,26 @@ It BFS-floods from the hub over `Road`/`Container`/`Rampart` tiles (deterministi
 
 - **Critical tier (always):** any critical structure (source/controller container) not road-connected → `Some(Err(()))`. Near-free; should never fire.
 - **`require_connectivity == true` (beams 16, 64):** `connected_fraction < 1.0` → `Some(Err(()))` (hard reject → search backtracks → driver escalates the beam).
-- **`require_connectivity == false` (final `usize::MAX` beam):** never reject; `push_score("road_connectivity", connected_fraction, W_CONN)` with a **dominant** weight (≫ Σ other weights ≈ 13, default 25). Most-connected achievable plan wins; a plan is never lost.
+- **`require_connectivity == false` (final `usize::MAX` beam):** never reject; `push_score("road_connectivity", connected_fraction, W_CONN)` with a **dominant** weight so the term is lexicographically primary — `W_CONN` must exceed `must_connect_count × Σ other weights` (2000 on the current weight scale, where the other weights sum to ≈13). Most-connected achievable plan wins; a plan is never lost.
 
-Wire the flag in `default_layers_with_beam(anchor_beam)` ([mod.rs:92](../../screeps-foreman/src/layers/mod.rs#L92)): `require_connectivity = anchor_beam != usize::MAX`. Same name across beams → fingerprint stable across the escalation ladder. This gives a **true hard guarantee whenever the room is road-connectable at beam ≤ 64** (essentially always, given D3–D5) and graceful best-effort only in pathological rooms reaching the unbounded tier — satisfying "hard-reject and escalation" while preserving no-plan-loss (EP-6.8).
+At the tight tiers the same term is pushed with weight **0** (reporting only — the hard reject is what enforces connectivity there). Admissible pruning is unaffected in fully-connectable rooms: the assumed-1.0 connectivity term cancels between the search's optimistic upper bound and the connected best.
 
-### D7 — Pruning safety
+Wire the flag in `default_layers_with_beam(anchor_beam)` ([mod.rs:92](../../screeps-foreman/src/layers/mod.rs#L92)): `require_connectivity = anchor_beam != usize::MAX`. Same name across beams → fingerprint stable across the escalation ladder. This gives a **true hard guarantee whenever the room is road-connectable at beam ≤ 64** (essentially always, given D3 and D4) and graceful best-effort only in pathological rooms reaching the unbounded tier — satisfying "hard-reject and escalation" while preserving no-plan-loss (EP-6.8).
 
-`RoadPruneLayer` runs before the gate, so the gate is a backstop, but prune should preserve connectivity by construction:
+### D7 — Pruning safety: already guaranteed, no hardening needed
 
-- Its redundant-prune already uses road-BFS over all interactable structures ([road_prune.rs:156-238](../../screeps-foreman/src/layers/road_prune.rs#L156)). After D3 every must-connect structure has a baseline adjacent road → protected.
-- **Harden** `best_adjacent_road_dist`: treat "had a road at baseline, lost all road access after removal" as a hard violation (reject the removal) rather than relying on `unwrap_or(u32::MAX) <= baseline` ([road_prune.rs:235-238](../../screeps-foreman/src/layers/road_prune.rs#L235)).
+`RoadPruneLayer` runs before the gate, so the gate is a backstop — but prune preserves connectivity by construction, so no extra hardening is part of this design:
+
+- Its redundant-prune already uses road-BFS over all interactable structures ([road_prune.rs:156-238](../../screeps-foreman/src/layers/road_prune.rs#L156)) and protects every structure that has a baseline adjacent road. After D3 that is *all* must-connect structures.
 - Dead-end prune is safe for connectors (interior tiles have 2 road neighbours; endpoints are structure-adjacent and protected).
+- The candidate hardening — treating "had a road at baseline, lost all road access after removal" as a hard violation in `best_adjacent_road_dist` rather than relying on `unwrap_or(u32::MAX) <= baseline` ([road_prune.rs:235-238](../../screeps-foreman/src/layers/road_prune.rs#L235)) — buys nothing on top of the two properties above plus the D6 backstop.
 
 ### D8 — Scoring with real `PlanScore` fields *(Plan-shape change, C2)*
 
-Add proper named fields to `PlanScore` ([plan.rs:118-132](../../screeps-foreman/src/plan.rs#L118)) and match arms in `to_plan_score` ([layer.rs:228-241](../../screeps-foreman/src/layer.rs#L228)) — visible in plan inspection/HUD/debug instead of folded into `.total` — and **delete the dead `traffic_congestion` field** (declared, never populated):
+`PlanScore` ([plan.rs:118-132](../../screeps-foreman/src/plan.rs#L118)) gains named fields `road_transport` and `road_connectivity`, with match arms in `to_plan_score` ([layer.rs:228-241](../../screeps-foreman/src/layer.rs#L228)) — visible in plan inspection/HUD/debug instead of folded into `.total` — and **drops the dead `traffic_congestion` field** (declared, never populated):
 
-1. **`road_transport`** (new layer after roads, weight ~1.0 — primary-objective tier): reward short **road-path** distances from hub to logistics endpoints (source containers, controller approach, mineral container, extension-field worst/centroid) via structure-aware `hub_pathing_distances` ([layer.rs:197](../../screeps-foreman/src/layer.rs#L197)); normalize `1 - dist/max` as `anchor_score` does. The low-MOVE EV metric (ticks-per-trip). Optionally mirror into `composite_anchor_score` ([anchor_score.rs:36-164](../../screeps-foreman/src/layers/anchor_score.rs#L36)) so it influences anchor pre-ranking too (the file warns the two must stay in sync).
-2. **`road_upkeep`** (extend `UpkeepScoreLayer`, weight 0.5): today counts only **swamp** roads ([upkeep_score.rs:60-66](../../screeps-foreman/src/layers/upkeep_score.rs#L60)); count **all** roads (plain ×1, swamp ×3). `road_transport` (wants short) and `road_upkeep` (wants few) balance to compact spanning networks.
+1. **`road_transport`** (pushed by `RoadScoreLayer`, a layer after roads, weight ~1.0 — primary-objective tier): reward short **road-path** distances from hub to logistics endpoints (source containers, controller approach, mineral container, extension-field worst/centroid) via structure-aware `hub_pathing_distances` ([layer.rs:197](../../screeps-foreman/src/layer.rs#L197)); normalize `1 - dist/max` as `anchor_score` does. The low-MOVE EV metric (ticks-per-trip). Optionally mirror into `composite_anchor_score` ([anchor_score.rs:36-164](../../screeps-foreman/src/layers/anchor_score.rs#L36)) so it influences anchor pre-ranking too (the file warns the two must stay in sync).
+2. **Road upkeep — folded into the existing `upkeep_cost`, not a new `PlanScore` field.** `UpkeepScoreLayer` (weight 0.5) counted only **swamp** roads ([upkeep_score.rs:60-66](../../screeps-foreman/src/layers/upkeep_score.rs#L60)); it counts **all** roads (plain ×1, swamp ×3). One upkeep term is enough — road decay is upkeep like any other, and a separate field would split one concept across two scores. `road_transport` (wants short) and `upkeep_cost` (wants few) balance to compact spanning networks.
 3. **`road_connectivity`** — the field the D6 score populates; now reported, not just summed.
 
 All pushed values clamped to `[0,1]` (the admissible-pruning bound at [search.rs:266-290](../../screeps-foreman/src/search.rs#L266) requires it).
@@ -126,13 +124,13 @@ A road that shares a tile with a wall is a **tunnel**: the engine taxes it at `C
 
 Audit result: roads are never placed on natural wall terrain (every road placer skips `terrain.is_wall`). The one unguarded overlap was `DefenseLayer.classify_wall_rampart` ([defense.rs](../../screeps-foreman/src/layers/defense.rs)) assigning walls by checkerboard parity without checking for a road already on the tile — an infrastructure road (placed at layer 14, before defense at 17) on a min-cut tile could get a `Wall` on top, severing the crossing and creating a tunnel.
 
-**Decision:** a cut tile carrying a road is always a **rampart**, never a wall (ramparts seal against enemies but stay passable and decay at ×1). Implemented in `classify_wall_rampart` (takes the road-tile set, forces those cut tiles to ramparts) with a regression test. Zero defensive downside — the safety pass already guarantees walls have adjacent ramparts.
+**Decision:** a cut tile carrying a road is always a **rampart**, never a wall (ramparts seal against enemies but stay passable and decay at ×1). The rule belongs in `classify_wall_rampart`, which takes the road-tile set and forces those cut tiles to ramparts, guarded by a regression test. Zero defensive downside — the safety pass already guarantees walls have adjacent ramparts.
 
 ### Out of scope (explicitly deferred)
 
 - **Extension RCL / source-distance placement** ([0009b](0009b-room-planner-scoring-and-evaluation.md) §5/§6) — separate work.
 - **Low-MOVE / road-optimized bodies + terrain-aware hauler sizing** (consumer side) — the follow-up this ADR unblocks; will consume D2's approach tiles.
-- **Inter-room / remote roads** ([0009 D3](0009-room-planning-and-multiroom-layout.md), still Proposed) — `RoomGraph` etc.
+- **Inter-room / remote roads** ([0009 D3](0009-room-planning-and-multiroom-layout.md)) — `RoomGraph` etc.
 
 ---
 
@@ -155,10 +153,10 @@ Audit result: roads are never placed on natural wall terrain (every road placer 
 - A single hub-connected road network becomes a planner invariant — the prerequisite for low-MOVE base-ops EV — and eliminates the road-island bug class for all creeps.
 - Approach tiles are first-class Plan output: exact validation, deterministic consumer pathing, low-MOVE-ready.
 - Towers/utility get real refuel roads (R1/R2); islanded stamps get connectors (R12/R13); the validation gap (R6/R11/R14) is closed by a hard gate with a regression-proof relaxation.
-- `road_transport` + `road_upkeep` steer the search to compact minimal networks (lower upkeep, shorter low-MOVE trips); dead `traffic_congestion` removed; road scores reportable.
+- `road_transport` + road upkeep steer the search to compact minimal networks (lower upkeep, shorter low-MOVE trips); dead `traffic_congestion` removed; road scores reportable.
 
 **Negative / risks**
-- More road tiles in some rooms → more construction energy + 1 energy/tick decay + repair CPU. Mitigated by `road_upkeep` and trunk reuse (cost-0 merge).
+- More road tiles in some rooms → more construction energy + 1 energy/tick decay + repair CPU. Mitigated by the road-inclusive `upkeep_cost` and trunk reuse (cost-0 merge).
 - Stricter gate → more rejections at beams 16/64 → more escalation (CPU). Mitigated: the BFS is ~O(tiles); D4 removes the dominant rejection cause; validate against constrained/swampy rooms (EP-6.11).
 - **Full reset on deploy** (migration). Accepted pre-MMO.
 
@@ -174,16 +172,15 @@ Audit result: roads are never placed on natural wall terrain (every road placer 
 
 **Breaking-change label: Memory-format (EP-5.2).** `Plan` gains `approach_tiles` and `PlanScore` gains `road_*` fields / drops `traffic_congestion` → the bincode shape changes (positional; trailing `#[serde(default)]` does **not** make old payloads decode). Therefore:
 
-- **Bump `WORLD_FORMAT_VERSION` 13 → 14** ([game_loop.rs:600](../../screeps-ibex/src/game_loop.rs#L600)) → one loud full reset on deploy (chosen migration; supersedes the earlier "let it ride," which only existed to avoid this shape change). Acceptable pre-MMO (EP-5.1 reset-anytime); revisit with a self-versioned plan store before live MMO.
+- **Bump `WORLD_FORMAT_VERSION`** ([game_loop.rs:600](../../screeps-ibex/src/game_loop.rs#L600)) → one loud full reset on deploy (chosen migration; supersedes the earlier "let it ride," which only existed to avoid this shape change). Acceptable pre-MMO (EP-5.1 reset-anytime); revisit with a self-versioned plan store before live MMO.
 - Layer changes (new `RoadConnectivityLayer`, D3 routing) also shift the seg-60 fingerprint → in-flight `PlanningState` rebuilds; moot after a full reset.
 
-**Recommended sequence (each independently shippable, behind the existing kill-switch posture where applicable):**
+**Sequence (each part independently shippable, behind the existing kill-switch posture where applicable):**
 
 1. D2 `Plan` data model + D8 `PlanScore` fields (the schema changes; ship together with the WFV bump so the reset happens once).
 2. D4 placement fix + the connectivity **test** (cheap regression guard; no behaviour gate yet).
-3. D3 approach-tile routing/storage + D5 road-BFS stamp connector (connectivity becomes *achievable* and approach tiles get populated).
+3. D3 approach-tile routing/storage (connectivity becomes *achievable* and approach tiles get populated).
 4. D6 `RoadConnectivityLayer` (hard at tight beams, graceful at unbounded) — the guarantee turns on.
-5. D7 prune hardening.
-6. D8 scoring values (`road_transport`, `road_upkeep`).
+5. D8 scoring values (`road_transport`, road upkeep folded into `upkeep_cost`) and D9's road/wall-overlap rule.
 
-**EP rules respected:** EP-6.8 (plan-loss accounting — satisfied by the graceful tier), EP-7.1 (engine-cited road/terrain mechanics), EP-6.11 (validate constrained/worst-case rooms), EP-5.2/5.3 (Memory-format label + WFV bump for the positional-bincode shape change), EP-4.1/4.5 (shared CPU budget + bounded backoff already in the driver), EP-10.7 (stays Proposed until operator accepts).
+**EP rules respected:** EP-6.8 (plan-loss accounting — satisfied by the graceful tier), EP-7.1 (engine-cited road/terrain mechanics), EP-6.11 (validate constrained/worst-case rooms), EP-5.2/5.3 (Memory-format label + WFV bump for the positional-bincode shape change), EP-4.1/4.5 (shared CPU budget + bounded backoff already in the driver).

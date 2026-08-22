@@ -1,42 +1,21 @@
 # ADR 0028 — Engine-backed Offline Lifecycle Harness (P-OBJ)
 
-Status: **HARNESS COMPLETE; K3/K4 BOT WIRING OPEN** (status corrected 2026-07-01 — this header
-previously read "IN PROGRESS / the final offline gate", which mislabelled a complete harness).
-**All five kernels K0–K4 + the forming-phase driver + the
-ENGINE-ENGAGE HANDOFF LANDED** (`screeps-combat-eval/src/harness/lifecycle.rs` — the full
-`objective→form→travel→engage→kill` chain is offline + deterministic). The harness then
-diagnosed the live 87.5 backfire (see §Diagnosis) and now tests single/multi-room spawning +
-rally/renew. **Both layers were broken at that mid-stream point: the spawn/form layer (no renew → stuck forms lose
-members; + lane contention) AND combat effectiveness (squads lose defended fights).** *(2026-07-01: renew has
-since landed — `ebf3623`; the combat-effectiveness half is the open verification item in the current-state
-note below.)* Companion to ADR 0008 (squad
-lifecycle), ADR 0027 (objective/squad lifecycle rework), ADR 0023/0023a (the combat sim
-harness), ADR 0026 §9 (doctrine sizing). Task #23 / #25.
+- **Status:** Decided
 
-> **Current state as of 2026-07-01 (reconciliation review).** **The HARNESS itself is COMPLETE** —
-> `run_forming`, `run_lifecycle`, and the defended drivers
-> `run_defended_lifecycle`/`run_defended_lifecycle_with(_params)` all exist and run the full
-> `objective→form→travel→engage→kill` chain offline + deterministically
-> (`screeps-combat-eval/src/harness/lifecycle.rs`). What remains open is BOT WIRING, not harness work:
-> **K0 (rally), K1 (spawn-throughput reproducing the 3/5 stall), K2 (FSM transitions)
-> are LANDED + GREEN** — K0/K1 are live via the bot re-exports, K2 is the canonical unit-tested
-> spec that the harness drives (bot `machine!` adoption still deferred by design). **K3 (fielding —
-> `slots_to_spawn`, `fielding.rs:17`) and K4 (claim pacing — `claims_allowed`, `claim_pacing.rs:15`) have
-> their pure kernels BUILT + tested in `screeps-combat-decision`, but the BOT adapter wiring is
-> still OPEN** (ZERO bot call sites of `slots_to_spawn`/`claims_allowed` — the harness driver is
-> their only consumer; tracked in the standing backlog,
-> [`../reviews/reconciliation-2026-07-01.md`](../reviews/reconciliation-2026-07-01.md) §6). This harness remains
-> **the offline gate for full lifecycle / force-sizing validation.**
-> **Open verification item:** the mid-stream diagnosis below ("the real failure is combat
-> effectiveness: squads lose their defended engagements") has **no recorded resolution measurement**
-> in this doc — defended-engage work landed later (ADR 0031/0031b sizing + the winnability gates), but a
-> `run_defended_lifecycle` pass/fail measurement closing this ADR's own diagnosis was never recorded here.
-> The surrounding combat work has since landed + deployed to MMO: rally/travel
-> convergence (ADR 0034), scout-before-commit/abandon-on-contact (ADR 0035), opportunistic
-> structure targeting (ADR 0036), tower-aware neighbour defense (ADR 0037), plus the
-> capability-driven composition + EV assignment reworks (ADR 0031/0031a/0031b/0032).
+An offline, deterministic harness that drives the whole `objective → form → travel → engage → kill`
+chain against the authoritative `screeps-combat-engine` sim
+(`screeps-combat-eval/src/harness/lifecycle.rs`): `run_forming`, `run_lifecycle`, and the defended
+drivers `run_defended_lifecycle` / `run_defended_lifecycle_with(_params)`. The coordination layer —
+claim pacing, fielding, spawn throughput, rally, and the engage handoff — is driven as **shared pure
+kernels** so the harness exercises the *real* decisions rather than a mirror of them. This harness is
+the offline gate for full lifecycle / force-sizing validation. Companion to ADR 0008 (squad
+lifecycle), ADR 0027 (objective/squad lifecycle rework), ADR 0023/0023a (the combat sim harness),
+ADR 0026 §9 (doctrine sizing). Task #23 / #25.
 
-> **Forward note (2026-06-29):** [ADR 0033](0033-rover-pathing-sim-and-benchmark.md) (Proposed) extracts the engine's movement mechanism into `screeps-sim-core` and renames `CombatWorld`→`SimWorld` / `resolve_tick`→`resolve_combat_tick`; this lifecycle harness becomes a consumer of `sim-core`, and the `CombatWorld` / `resolve_tick` references below read as their `Sim*` / split successors. No design change here. (The `Colony` model stays in `combat-eval`, outside the kernel.)
+> **Substrate note.** [ADR 0033](0033-rover-pathing-sim-and-benchmark.md) extracts the engine's
+> movement mechanism into `screeps-sim-core`; this lifecycle harness is a consumer of `sim-core`, and
+> the `CombatWorld` / `resolve_tick` references below read as their `Sim*` / split successors. No
+> design change here. (The `Colony` model stays in `combat-eval`, outside the kernel.)
 
 ## Problem — live tuning is not converging
 
@@ -88,13 +67,13 @@ spawn economy is in `Colony`.
 ### Tick loop (the live SquadManager order: A reconcile → C claim → B field/spawn → B2 orders)
 
 ```
-reconcile      lifecycle::reconcile(snapshot)              // DONE (ADR 0027, shared kernel)
+reconcile      lifecycle::reconcile(snapshot)              // ADR 0027, shared kernel
 claim-pacing   claim_pacing::plan_claims(...)              // K4 (MAX_FORMING/CONCURRENT)
 field          fielding::slots_to_spawn(objective, colony) // K3 (wraps sized_for + build_body)
-spawn          spawn_queue::spawn_step(home, queue)        // K1 DONE — moved to screeps-econ-engine (ADR 0040 §D8 #3)
+spawn          spawn_queue::spawn_step(home, queue)        // K1 — home crate screeps-econ-engine (ADR 0040)
   + economy_demand_fn(tick) contends for the same lanes
-rally          rally::squad_ready_to_depart / should_hold_at_boundary  // K0 DONE
-engage         squad.step(world); defender(world); resolve_tick(world) // DONE — eval drives it
+rally          rally::squad_ready_to_depart / should_hold_at_boundary  // K0
+engage         squad.step(world); defender(world); resolve_tick(world) // eval drives it
 ```
 
 ### Pure-vs-ECS seam (kernels in `screeps-combat-decision`, adapters in the bot)
@@ -103,11 +82,11 @@ engage         squad.step(world); defender(world); resolve_tick(world) // DONE �
 |---|---|---|
 | Reconcile | `lifecycle::reconcile` (ADR 0027) | snapshot from `objective_queue`/`squad_contexts` |
 | Rally | **`rally::{squad_ready_to_depart, should_hold_at_boundary}` (K0)** | the anchor write |
-| Spawn throughput | **`screeps_econ_engine::spawn_queue::spawn_step` (K1; moved per ADR 0040 §D8 #3)** | `SpawnQueue`/`spawnsystem` |
+| Spawn throughput | **`screeps_econ_engine::spawn_queue::spawn_step` (K1; home crate per ADR 0040)** | `SpawnQueue`/`spawnsystem` |
 | FSM transitions | **`squad_fsm::next_state` (K2)** | per-tick movement/combat/recall |
-| Fielding | `composition::sized_for`/`build_body` (DONE) wrapped by `fielding::slots_to_spawn` (K3) | `queue_slot_spawn` token broadcast |
+| Fielding | `composition::sized_for`/`build_body` wrapped by `fielding::slots_to_spawn` (K3) | `queue_slot_spawn` token broadcast |
 | Claim pacing | `claim_pacing::plan_claims` (K4) | entity mint (`field_new_squad`) |
-| Tactics/travel/kill | `decide_squad` + engine (DONE) | — |
+| Tactics/travel/kill | `decide_squad` + engine | — |
 
 ### Determinism
 
@@ -115,68 +94,65 @@ Builds on `evaluate::run` + seeded `Rng` (the `sim_is_deterministic_over_rounds`
 spread-0). The only new ordering surface is the spawn queue — modeled as a **descending
 `Vec`** exactly as `SpawnQueue` (no `HashMap` iteration, per the determinism-fence memory).
 
-## Kernels — status
+## Kernels
 
-- **K0 — rally (LANDED).** `squad_ready_to_depart` + `should_hold_at_boundary` (+ the
-  `STRICT_QUORUM_RATIO=0.75` const and the private `is_near_room_edge_toward`) moved from the
-  bot's `military::formation` into `screeps_combat_decision::rally`; the bot re-exports them
-  (`formation.rs`, `squad.rs`) so all call sites are unchanged. 4 tests carried over.
-- **K1 — spawn-throughput (LANDED).** `spawn_step` is a deterministic,
-  value-type mirror of the live per-room head-of-line spawn loop (descending priority;
-  skip-over-capacity; **break-on-unaffordable** = reserve; else spawn+debit). A driver test
-  **reproduces the 3/5 stall offline + deterministically**: MEDIUM combat starves below
-  economy, above-economy combat completes. This is where the spawn-priority lever is tuned
-  now — instead of guessing live. Moved to its shared home `screeps_econ_engine::spawn_queue`
-  at ADR 0040 M0 (§D8 #3); `fielding` still emits its `QueuedSpawn` request type.
-- **K2 — FSM next_state (LANDED).** `squad_fsm::next_state` is the pure transition table of
+- **K0 — rally.** `squad_ready_to_depart` + `should_hold_at_boundary` (+ the
+  `STRICT_QUORUM_RATIO=0.75` const and the private `is_near_room_edge_toward`) live in
+  `screeps_combat_decision::rally` rather than the bot's `military::formation`; the bot re-exports
+  them (`formation.rs`, `squad.rs`) so no call site has to know where they live.
+- **K1 — spawn-throughput.** `spawn_step` is a deterministic, value-type mirror of the live per-room
+  head-of-line spawn loop (descending priority; skip-over-capacity; **break-on-unaffordable** =
+  reserve; else spawn+debit). Its driver test **reproduces the 3/5 stall offline + deterministically**:
+  MEDIUM combat starves below economy, above-economy combat completes. This is where the
+  spawn-priority lever is tuned — instead of guessed live. Its shared home is
+  `screeps_econ_engine::spawn_queue` (ADR 0040); `fielding` emits its `QueuedSpawn` request type.
+- **K2 — FSM next_state.** `squad_fsm::next_state` is the pure transition table of
   `jobs/squad_combat.rs` (MoveToRoom/CombatResponse/Engaged/Retreating), in the same priority
-  order, over a `SquadFsmSnapshot`. 4 tests cover every transition incl. the anti-ping-pong
+  order, over a `SquadFsmSnapshot`. Coverage spans every transition incl. the anti-ping-pong
   guard (never re-engage while the squad signals retreat) and the HP bars (40% respond /
   50% engaged / 80%·60% re-engage).
-  - **Decision — bot adoption of `next_state` is DEFERRED.** Each live `*::tick` interleaves
-    its transition checks with movement (the arrival-engage fires AFTER the formation move,
-    not before), and two transitions carry side-effects (`combat_response_start` set/clear).
+  - **Decision — the bot does not call `next_state`.** Each live `*::tick` interleaves its
+    transition checks with movement (the arrival-engage fires AFTER the formation move, not
+    before), and two transitions carry side-effects (`combat_response_start` set/clear).
     Calling `next_state` up-front would move those, a behavior risk on a *working* FSM that is
     not the bug. So the kernel is the canonical, tested spec (a sync note sits above the live
-    `machine!`); the harness drives `next_state`; full bot adoption waits for a tick refactor.
-- **K3 — fielding (KERNEL BUILT; BOT WIRING PENDING).** `fielding::slots_to_spawn(composition,
-  filled, best_capacity, per_member_cap, priority, move_profile)` wraps the shared
+    `machine!`) and the harness drives it; bot adoption is a consequence of a tick refactor,
+    not of this ADR.
+- **K3 — fielding.** `fielding::slots_to_spawn(composition, filled, best_capacity,
+  per_member_cap, priority, move_profile)` wraps the shared
   `sized_for`/`composition::build_body`/`PREFERRED_MEMBER_ENERGY`: one `QueuedSpawn` per UNFILLED
   slot, body built at `min(best_capacity, per_member_cap)`, a slot no in-range home can build is
-  skipped (the `None` stall), `id` = slot index. 3 tests. **Pure kernel is landed + green in
-  `screeps-combat-decision::fielding`; the harness driver consumes it, but no BOT adapter calls it
-  yet** (the live fielding path — `slots_to_spawn`→`build_body` token broadcast — is still to be
-  wired to `queue_slot_spawn`).
-- **K4 — claim pacing (KERNEL BUILT; BOT WIRING PENDING).** `claim_pacing::claims_allowed(active,
-  forming, max_concurrent, max_forming)` = the tighter of the two headrooms — reproduces the
-  forming-cap LOCKUP (a stuck-forming squad blocks all new claims, the `forming-cap=1` zeroing seen
-  live). 3 tests. **Pure kernel is landed + green in `screeps-combat-decision::claim_pacing`; the
-  harness driver consumes it, but the BOT claim-pacing adapter (gating `field_new_squad` on
-  `claims_allowed`) is still PENDING.**
+  skipped (the `None` stall), `id` = slot index. Home: `screeps-combat-decision::fielding`; the bot
+  adapter is the `slots_to_spawn`→`build_body` token broadcast into `queue_slot_spawn`.
+- **K4 — claim pacing.** `claim_pacing::claims_allowed(active, forming, max_concurrent,
+  max_forming)` = the tighter of the two headrooms — it reproduces the forming-cap LOCKUP (a stuck
+  forming squad blocks all new claims, the `forming-cap=1` zeroing seen live). Home:
+  `screeps-combat-decision::claim_pacing`; the bot adapter gates `field_new_squad` on it.
 
-### Forming-phase colony driver (LANDED)
+### Forming-phase colony driver
 
 `screeps-combat-eval/src/harness/lifecycle.rs` — `run_forming(ColonyFormingScenario) ->
 FormingOutcome`. A deterministic tick loop over a `Colony` (homes with capacity/income, a
 per-tick `EconomyPressure` of a HIGH hauler ± CRITICAL miner) that drives the REAL kernel
 chain: K3 fields the unfilled slots → K1 `spawn_step` runs each home's head-of-line lane
 contest (combat vs economy, cross-home de-duped) → spawns occupy a home for `part_count*3`
-ticks → K0 `squad_ready_to_depart` decides departure. Reproduces the live behavior OFFLINE:
+ticks → K0 `squad_ready_to_depart` decides departure. It reproduces the live behavior OFFLINE:
 **MEDIUM combat stalls below economy; above-economy combat completes the roster** — the
-spawn-priority lever, now tunable offline instead of guessed on Docker. 3 tests (stall,
-complete, determinism). The engage handoff (place the formed roster → `ManagedSimSquad` →
-`resolve_tick` to a dead core) is the next phase; multi-squad + K4 claim-pacing reproduces
-the `forming-cap=1` backfire (a single squad does not show it).
+spawn-priority lever, tunable offline instead of guessed on Docker. Covered by a stall case, a
+complete case, and a determinism case.
 
-## Live fixes shipped this session (the harness must reproduce these, and the next layers)
+The engage handoff places the formed roster into `ManagedSimSquad` and steps `resolve_tick`
+against a core. The `forming-cap=1` backfire only reproduces with **multiple** squads under K4
+claim pacing — a single-squad scenario cannot show it.
 
-All bot-only, no `WORLD_FORMAT_VERSION` change:
+## Coordination-layer settings the harness must reproduce
+
 - Rally-until-full gate (K0 logic) — squads group up, no lone lead.
 - `spawn_priority_for` MEDIUM+ → HIGH (forming combat above the economy bulk) + a forming-cap.
 - Per-member energy cap (`PREFERRED_MEMBER_ENERGY=3000`) in BOTH `sized_for` and
   `queue_slot_spawn` — every spawned member (sized OR template-fallback) is bankable.
-- **Reverted:** forming combat at 87.5 + `forming-cap=1` (it zeroed combat spawning). The
-  current deployed state is HIGH + forming-cap=2 + the bankable-body cap.
+- **Rejected setting:** forming combat at 87.5 + `forming-cap=1` — measured to zero combat
+  spawning (see Diagnosis). The settled point is HIGH + forming-cap=2 + the bankable-body cap.
 
 ## Reach bug #2 — the proceed gate is Lanchester P(win)-driven (win-or-stall), not composition-completeness
 
@@ -188,9 +164,9 @@ Only HOLD (wait for more) if the present force would LOSE. **Composition still S
 GATES the proceed.**
 
 This is the structural fix for the 87.5-backfire diagnosis below ("squads form → depart → engage → get
-WIPED"): the pre-fix proceed gate was a roster COUNT (`rally::ready_to_depart_gate` →
-`squad_ready_to_depart` / the quorum), so a squad departed on a count it could not win with, and a
-winnable-but-incomplete squad needlessly HELD. The new gate decides from the **same Lanchester outcome on
+WIPED"): a proceed gate keyed on roster COUNT (`rally::ready_to_depart_gate` →
+`squad_ready_to_depart` / the quorum) lets a squad depart on a count it cannot win with, and makes a
+winnable-but-incomplete squad needlessly HOLD. The gate instead decides from the **same Lanchester outcome on
 the ACTUAL present force that the retreat gate uses** — so the proceed gate and the retreat gate can never
 disagree about what "losing" means.
 
@@ -215,10 +191,10 @@ present_force_wins_or_stalls = our_strength > 0       // a PRESENT fighting forc
 
 The count gates stay as the legacy/uncontested/under-strength path (a force that does NOT yet win-or-stall
 still masses before committing — **no trickle-to-death**). The view + centroid passed are the SAME ones
-`decide_squad` assessed this tick. Bot-only; **no `WORLD_FORMAT_VERSION` bump** (a pure read; no serialized
-shape changes — the win-or-stall predicate is derived fresh each tick, no stored field).
+`decide_squad` assessed this tick. This is a pure read — no serialized shape changes; the win-or-stall
+predicate is derived fresh each tick, with no stored field.
 
-**Offline proof (RED→GREEN, `screeps-combat-decision` lib tests):**
+**Offline gates (`screeps-combat-decision` lib tests):**
 - `proceed_gate_fires_for_a_winning_incomplete_force` — a lone fighter (no healer archetype) that
   out-matches a weak target PROCEEDS, and the same force does not retreat (consistency).
 - `proceed_gate_fires_for_a_stalling_force` — a force tuned to near-parity (our_strength ==
@@ -229,11 +205,11 @@ shape changes — the win-or-stall predicate is derived fresh each tick, no stor
   (healers-only) roster never proceeds into a defended room. The held force is exactly the one the retreat
   gate sends retreating (consistency).
 - Sizing is UNCHANGED: composition (`RequiredForce`/`sized_for`) still sizes the spawn; only the
-  proceed-GATE changed (the `assemble_force_*` sizing tests are untouched and green).
+  proceed-GATE changed (the `assemble_force_*` sizing tests are untouched).
 
-## Diagnosis — the 87.5 backfire (live, captured 2026-06-27, then reverted)
+## Diagnosis — the 87.5 backfire
 
-Re-deployed the backfired config (forming combat at 87.5 + `forming-cap=1`) with two captures:
+Two live captures under the backfired config (forming combat at 87.5 + `forming-cap=1`):
 
 ```
 total:  118  99  85  84 100 107 107    (dipped ~30%, RECOVERED — not a collapse)
@@ -248,58 +224,58 @@ at ~0–2 standing combat creeps, with a *transient* economy drag from the 87.5 
 
 **⇒ The spawn-priority knob is a RED HERRING.** HIGH stalls squads before they fight; 87.5 lets
 them form-then-lose. The real failure is **combat effectiveness: squads lose their defended
-engagements.** The spawn-priority/forming-cap tuning is parked at the safe **HIGH + forming-cap=2**
-(deployed); the offline harness `run_lifecycle` proved the engage WORKS against an *undefended*
-core, so the open question is the *defended* case.
+engagements.** The spawn-priority/forming-cap tuning therefore settles at the safe **HIGH +
+forming-cap=2**; `run_lifecycle` proved the engage WORKS against an *undefended* core, which
+makes the *defended* case the question the harness has to answer.
 
-## Spawn/form layer — single/multi-room + rally/renew (operator-requested, tested 2026-06-27)
+## Spawn/form layer — single/multi-room + rally/renew
 
-`run_forming` now models member TTL (`CREEP_LIFE_TIME`) + death-by-age + optional renew. Findings
-(10 lifecycle tests):
+`run_forming` models member TTL (`CREEP_LIFE_TIME`) + death-by-age + optional renew. Findings:
+
 - **Single-room** spawning forms the roster (serial); **multi-room** forms it FASTER (parallel,
   asserted `multi < single`).
 - **No-renew member-death is REAL.** A stuck/slow form (forming-span > a member's life) loses its
   early members to old age → they drop to unfilled → re-spawn → the roster never has the full set
-  present at once → never departs. **The live bot has exactly this**: `request_renew` has zero
+  present at once → never departs. The live bot exhibited exactly this: `request_renew` had zero
   callers, and live forms were stuck >1500t (> `CREEP_LIFE_TIME`), so the early members aged out.
-- **Renew fixes it**: keeping the rallying roster alive (at a spawn-lane cost) completes the stuck
-  form. ⇒ **Implement renew live** (wire `request_renew` for rallying members with low TTL).
+- **Renew fixes it**, at a spawn-lane cost: keeping the rallying roster alive completes the stuck
+  form.
 
-## Remaining work
+⇒ **Renew is part of the design.** Phase B-renew in `squad_manager` requests `request_renew` for a
+forming squad's present members with TTL < 300, and the rally point is a home SPAWN so members are
+renewable at all. It is gated on the spawn renew pass's free-spawn + room-energy checks, so it never
+starves spawning/economy. Caveat that follows from that gating: under heavy spawn contention there
+are few free spawns to renew with — renew helps a slow form on a colony with idle capacity more than
+a contended one. The rally gate departs on requested-present, which keeps it robust to an oscillating
+requested size.
 
-1. ~~**Implement renew live**~~ **DONE** (`ebf3623`): Phase B-renew in `squad_manager` requests
-   `request_renew` for a forming squad's present members with TTL < 300, and the rally point moved to a
-   home SPAWN so members are renewable. Gated on the spawn renew pass's free-spawn + room-energy checks
-   (never starves spawning/economy). Caveat: under heavy spawn contention there are few free spawns to
-   renew with — renew helps a slow form on a colony with idle capacity more than a contended one.
-2. **Graded-defender engage tests (combat effectiveness).** `assemble_single_room` already takes
-   `towers`, `ForceSpec`, `rampart_hits`, `safe_mode`. Run a force-sized squad through
-   `run_lifecycle` against a DEFENDED core/room and ask "does the sized force WIN?" If a
-   winnability-gated (`force_sizing`) squad gets wiped, the gate is mis-calibrated OR the tactics
-   under-perform — both now offline-testable.
-3. **Multi-squad + K4 in the driver** — extend `run_forming` to several objectives gated by
-   `claim_pacing::claims_allowed` (the claim-throttle interaction; secondary now that the backfire
-   is understood as a fight-loss, not a lockup).
-4. **Stale-intel give-up scenario** — the give-up *decision* is already covered by the reconcile
-   kernel; a multi-tick scenario test is optional polish.
+## Scenario coverage
 
-Still-open spawn/form issues surfaced by live verification (2026-06-27):
-- **SK forming-contention** — W6N4 stuck at `1/3` (only 1 of 3 members ever spawns; the spawn is
-  busy with economy). The deeper contention the priority bump couldn't fully solve.
-- **Requested-size oscillation** — W9N8's objective requested-slot count flaps 1↔2 each tick (the
-  producer re-sizes a player room to 1-2 members — under-sized = the combat-effectiveness layer).
-  The rally gate is now robust to it, but the oscillation/under-sizing itself wants a fix.
+The harness's scenario set, and the failure classes each one exists to pin:
 
-Done: K0–K2 kernels LANDED + GREEN (K0/K1 live via bot re-exports, K2 canonical spec driven by
-the harness); K3/K4 pure kernels BUILT + green (BOT adapter wiring still PENDING — the harness
-driver is their only consumer today); the forming-phase driver (3/5 stall + above-economy-completes);
-the **engine-engage handoff** (`run_lifecycle` — full form→engage→kill offline + deterministic);
-the 87.5 backfire diagnosis (combat-effectiveness, not spawn-priority); **renew** (Phase B-renew
-+ spawn-adjacent rally, `ebf3623`); the **rally-gate fix** (depart on requested-present, robust to
-oscillating size — `bf021dd`, the live W9N8 stuck-at-1/1).
+1. **Forming under lane contention** — the 3/5 stall and the above-economy completion (K1 × K3 × K0).
+2. **Graded-defender engage (combat effectiveness).** `assemble_single_room` takes `towers`,
+   `ForceSpec`, `rampart_hits`, `safe_mode`. A force-sized squad runs through `run_lifecycle`
+   against a DEFENDED core/room, asking "does the sized force WIN?" If a winnability-gated
+   (`force_sizing`) squad gets wiped, either the gate is mis-calibrated OR the tactics
+   under-perform — both offline-testable, which is the whole point of the harness.
+3. **Multi-squad + K4 claim pacing** — several objectives gated by `claim_pacing::claims_allowed`,
+   the only shape that reproduces the `forming-cap=1` claim-throttle lockup.
+4. **Stale-intel give-up** — the give-up *decision* is covered by the reconcile kernel; a
+   multi-tick scenario adds the timing dimension.
+5. **Spawn-contention starvation** — a home whose spawn is monopolized by economy fields only 1 of
+   3 members (the live W6N4 shape): the contention the priority bump alone cannot solve.
+6. **Requested-size oscillation** — an objective's requested-slot count flapping 1↔2 each tick
+   because the producer re-sizes a player room (the live W9N8 shape). The rally gate must be robust
+   to the flap; the oscillation itself indicts the sizing/combat-effectiveness layer.
 
 ## What the harness CANNOT catch (keep a thin live canary)
 
 The model omits real pathing/CPU, true intel-staleness timing, and engine quirks the sim
 doesn't implement. A small live `[Lifecycle]`/`[SpawnQueue]` capture stays the final check
 before trusting any deploy.
+
+## Landed
+
+- `ebf3623` Phase B-renew + spawn-adjacent rally point for forming squads
+- `bf021dd` rally gate departs on requested-present, robust to oscillating requested size

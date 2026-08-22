@@ -8,6 +8,23 @@
 > **Last reconciled against code:** 2026-08-22 (56 ADRs verified by an 11-agent code-grounded pass;
 > 29 carried stale headers). History and method: [`project-reconciliation-2026-08-22.md`](project-reconciliation-2026-08-22.md).
 
+## The document model
+
+Three tiers, each answering exactly one question. Introduced 2026-08-22 — before that, ADR
+`Status:` conflated the design's maturity with the code's progress, which is why 29 of 56 headers
+had drifted.
+
+| Tier | Answers | Lifetime |
+|---|---|---|
+| [`../design/`](../design/) — ADR | *What are we building, and why?* | Permanent. **Contains no status.** |
+| [`../implementation/`](../implementation/) — impl doc | *Where am I, what is the next action?* | Ephemeral — created when work starts, **deleted when it closes**. |
+| **this file** | *What is in flight across the project?* | Permanent index, one line per item. |
+
+**An ADR's `Status:` is now only ever `Decided` / `Draft` / `Superseded by NNNN` / `Withdrawn`** —
+a statement about the *design*, never the code. There is deliberately no "Implemented". Whether
+something is built is answered here, in §5–§6. Conventions and the impl-doc template:
+[`../implementation/README.md`](../implementation/README.md).
+
 ## How to use this document — the trim rules
 
 This doc tracks **status and open work only**. It must stay small enough to read in full.
@@ -30,7 +47,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### WS-1 · Get WFV 28 verified and live
+### WS-1 · Get WFV 28 verified and live → [`../implementation/ws-1-ship-wfv28.md`](../implementation/ws-1-ship-wfv28.md)
 
 **State: BLOCKED on tooling (see §2). Nothing else should start.**
 
@@ -68,7 +85,7 @@ Review the set before the MMO step, not before the private step.
 
 Each is one workstream. Do not begin one while §1 is occupied.
 
-1. **WS-2 · Combat review Tier −1 Wave B.** D2, D3 (safe-mode: hair trigger at
+1. **WS-2 · Combat review Tier −1 Wave B** → [`../implementation/ws-2-combat-wave-b.md`](../implementation/ws-2-combat-wave-b.md). D2, D3 (safe-mode: hair trigger at
    `CRITICAL_STRUCTURE_MIN_HITS = 5000`, and a fires-once-ever latch), D4, D5, D6 (roster churn),
    D9, D10 (live-adapter gaps), D28. No WFV bump — soaks as one wave, no reset. Closes the
    2026-07-09 review as a live document. **R19 does not gate this** (see RULING-6).
@@ -187,11 +204,10 @@ One line per item. Header-drift is **not** listed here — that is CHORE-1.
 - **UNOWNED-7 · Stale `Memory._features` overrides** can both shadow retunes and silently revert
   them — a live-operations hazard for every default-ON flag. Needs a versioned posture or a
   refresh procedure.
-- **CHORE-1 · 29 ADR headers are stale.** A batch documentation pass, not 29 work items. Two classes:
-  (a) headers saying "Proposed" for shipped systems — `0004 0005 0006 0012 0017 0018 0023a 0030 0039`;
-  (b) headers claiming deploy dates that **predate the only real deploy** (`ab692bd`, 2026-07-28) —
-  `0027 0029 0031 0032 0033 0037 0040 0044 0044a`. Remainder are stale line refs or superseded prose:
-  `0002 0007 0008 0008a 0009a 0011 0022 0024 0025 0026`.
+- ~~**CHORE-1 · 29 ADR headers are stale.**~~ **CLOSED 2026-08-22 by the design/implementation
+  split.** All 56 ADRs were rewritten as pure end-state designs; status moved here and to
+  [`../implementation/`](../implementation/). The drift class is now structurally impossible — an
+  ADR header can no longer make a claim about code. Rollback tag: `pre-doc-split`.
 
 ---
 
@@ -254,6 +270,7 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 
 Append one line per closed item. Newest first.
 
+- **2026-08-22** — **Design/implementation split.** All 56 ADRs rewritten as pure end-state designs; status moved here and to `../implementation/`. Status vocabulary reduced to Decided/Draft/Superseded/Withdrawn (+ note types). Closes CHORE-1 structurally. Adversarial verify caught 4 design-loss regressions and 19 lesser ones, all remediated and re-verified. Rollback tag: `pre-doc-split`.
 - **2026-08-22** — Full ADR-corpus reconciliation (56 verified, 29 drifted); this tracker created; rulings 1–7 recorded.
 - **2026-08-22** — Repo tie-off: ADR 0046 merged (WFV 28), working tree emptied, all branches/worktrees removed, master + 49 submodule commits pushed, ADR 0044a renumbered, 0038/0042 headers fixed.
 - **2026-07-28** — Combat Wave A shipped to MMO (`ab692bd`): D1/D11/D24/D25/D26/D27/R22. CPU 87→16.

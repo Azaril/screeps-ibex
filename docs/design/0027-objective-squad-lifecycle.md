@@ -1,80 +1,17 @@
 # ADR 0027 — Combat Objective/Squad Lifecycle Rework (P-OBJ #23)
 
-Status: **Accepted + COMPLETE** (2026-06-27, extended 2026-06-28; status refreshed 2026-06-30, `61a31d3`). v1 end-to-end on master:
-commitment lease, resolve-vs-give-up, whole-squad **Reassign**, **threat-centric defense**,
-**v1.1 auction** (ADR 0032), **Salvage P1–P3**. WFV history **18→20→22**. **All produced combat
-objectives are on v1.** (First landed super `e4bbf0f` WFV 17→18; the reach/engage hardening +
-reassignment + auction + salvage migration are all on master — see the ledger + updates below.)
-Companion to ADR 0008 (squad lifecycle) and ADR 0026 §9 (doctrine selection/sizing).
-Task #23 / #25.
+- **Status:** Decided
 
-> **Current state as of 2026-07-01.** v1 is feature-complete and **deployed to MMO**. Since the
-> 2026-06-28 ledger below, the reach/engage/robustness follow-ups landed as their own ADRs:
-> **ADR 0031** (force sizing / drain — drain closed out end-to-end), **ADR 0032** (the EV auction:
-> v1.1→v1.2 global Hungarian→v2 Merge column — COMPLETE), **ADR 0034** (rally/travel/convergence
-> robustness — renew-in-transit, scatter-robust shared rally, movement-failure escalation),
-> **ADR 0035** (scout-before-commit + abandon-on-unwinnable-contact — the reach↔retreat oscillation
-> fix), **ADR 0036** (opportunistic RAZE structure targeting + salvage defers a live-core room to
-> the offense `Dismantle`), and **ADR 0037** (tower-aware neighbour defense — route towered rooms to
-> the offense oracle, MMO-safe). The lifecycle/movement backlog items #1–#7 below are addressed by
-> ADR 0034/0035; consult those ADRs for their as-built status. This ADR's own scope (objective
-> lifecycle + reassignment + auction wiring + salvage v1 migration) is **done**; nothing in the
-> "CURRENT" / "remaining work" sections below is still open under 0027.
-
-## Status ledger (2026-06-28)
-
-**COMPLETED (committed + deployed, offline-proven):**
-- v1 base (commitment lease / resolve-vs-give-up / zero-orphan recall) — WFV 18.
-- Reach/engage hardening: scout-fix, spawn-priority edge, efficient undefended sizing, quorum
-  rally + forming/travel lease, focus-on-arrival, fighter-first, shared-rally traverse,
-  `[SquadTrace]`, defender hold-station/no-churn (see "Update 2026-06-28").
-- **v1**: whole-squad **Reassign** (in-place rebind) + **threat-centric defense** (`Secure{threat_room}`
-  + asset-priority + leash; `Defend{owned}` demoted) + **live neighbour-chase** — WFV 20.
-- **P0 (sim-infra)**: `observe_neighbours` pure kernel + `run_v1_flow` full production chain +
-  `run_offense_flow` → the production/observation layer is sim-able.
-- **Auction v1.1** (ADR 0032): `value_e` energy-equivalent currency + EV-of-pairing + EV-positive-gated
-  **per-squad** reassign/claim (replaces greedy priority-then-proximity) + enemy-creep-force pricing.
-- **Salvage P1** (breach→`Dismantle` producer; `SiegeBreach`'s first live producer; rover
-  `room_grid_dijkstra_to_edge` primitive) + **Salvage P2** (declaim→`ObjectiveKind::Declaim` +
-  `SquadRole::Declaimer` + CLAIM body + `DeclaimAttack` doctrine + the `declaiming` lease-hold that
-  persists across the 1000-tick `attackController` cadence) — **WFV 20→21**. `SalvageMission` is now a
-  thin v1 producer; only teardown dismantlers + raiders remain mission-owned (raiders = economy by design;
-  teardown migration is P3-adjacent).
-- **Salvage P3 + v1 completion** (2026-06-28, **WFV 21→22**): the vestigial `DefendMission` is deleted +
-  `is_room_safe()` → a pure `is_remote_room_safe(dynamic)` predicate the mining-outpost gate calls. The
-  objective-variant audit KEPT all three inert variants (`Escort` / `Farm{Core}` / `Farm{PowerBank}`) as
-  planned-future (none obsolete — `Farm{Core}` = denied-reservation income, distinct from razing cores via
-  `Dismantle`; each annotated + ADR-cited). SK objectives verified end-to-end (Farm{SourceKeeper}
-  produce/withdraw + the stronghold→`Dismantle`→resume loop, which closes via war.rs's `has_known_core`
-  rescout escalation). **v1 is COMPLETE** — every produced combat objective is on v1.
-
-**CURRENT:** none — **v1 + the auction are COMPLETE.** The ADR 0032 auction is fully landed (v1.1
-per-squad EV → v1.2 global Hungarian matrix → **v2 the Merge→Bk transfer column**); reassign / claim /
-StayPut / Recycle / Merge are chosen in one global EV-optimal solve. The combat objective system is
-feature-complete; only the non-blocking polish below remains.
-
-**FUTURE (non-blocking polish):**
-- ~~**SK rescout-margin hardening**~~ — **DONE 2026-06-28 (super `d301324`, no WFV).** The stale relation
-  was `STRONGHOLD_RESCOUT_INTERVAL=1500 > THREAT_DATA_MAX_AGE=500`: intel expired before the re-probe →
-  a known-stronghold SK room dropped out of `threat_rooms` (stopping BOTH the offense eval AND the
-  in-join `>200t has_known_core` backstop) → the room was abandoned (never farmed, never cleared). FIX:
-  `THREAT_DATA_MAX_AGE` made `pub`; `STRONGHOLD_RESCOUT_INTERVAL` is now DERIVED = `THREAT_DATA_MAX_AGE/2`
-  (=250, 2× margin) with a `const _` compile-time assert that hard-fails the build if the relation ever
-  inverts — one peek/250t, no scout storm. (Unaffordable high-level strongholds left to self-collapse
-  remain a *deliberate* economic gate, not a gap.)
-- ~~**Owned-room intel-floor refinement**~~ — **INVESTIGATED 2026-06-28 → NOT A BUG (closed, no change).**
-  The concern was that `project_intel`'s `danger.max(priority_implied_danger(priority))` floor (squad_manager.rs)
-  makes a "harmless dps=0 scout" in an owned room pull a CRITICAL defender. It does NOT: a *truly* harmless
-  scout (MOVE-only, no Attack/RangedAttack/Work/Claim/Heal) fails `hostile_warrants_defender`
-  (war_decision.rs:221) at the PRODUCER, so war.rs never emits a `Defend`/`Secure` objective for it — it never
-  reaches `project_intel`. The floor is **correct + load-bearing** for the cases that DO reach it: a warranted
-  threat whose `estimated_dps == 0` because it carries no Attack/RangedAttack parts but IS dangerous — a
-  **CLAIM declaimer, a WORK dismantler, a HEAL creep** (`estimated_dps` counts only Attack/RangedAttack,
-  threatmap.rs). Trusting `dps==0` there (the attempted "fix") starves their `Defend` value to 0 → the
-  `value_e(Defend)=asset·defense_risk(0)=0` objective is dropped by the EV claim filter → a **declaimer takes
-  an owned room unopposed** (a HIGH-severity regression the adversarial verify caught; reverted). LESSON:
-  `estimated_dps==0` ≠ harmless — the harmlessness signal is `hostile_warrants_defender` (parts), and the
-  producer already applies it. Cross-refs the dual-DPS/`estimated_dps`-overload review (ADR 0031 candidate).
+- **Date:** 2026-06-27
+- **Scope:** the combat objective/squad lifecycle — commitment lease, resolve-vs-give-up,
+  whole-squad **Reassign**, **threat-centric defense**, and the uniform producer model in which every
+  combat objective is produced by a kernel, queued, and fielded by the `SquadManager`.
+- **Related:** ADR 0008 (squad lifecycle) and ADR 0026 §9 (doctrine selection/sizing) — the companions;
+  ADR 0031 (force sizing / drain), ADR 0032 (the EV auction that chooses reassign / claim / StayPut /
+  Recycle / Merge in one global solve — the Merge column is this ADR's transfer/merge phase),
+  ADR 0034 (rally/travel/convergence robustness), ADR 0035 (scout-before-commit +
+  abandon-on-unwinnable-contact), ADR 0036 (opportunistic RAZE structure targeting), ADR 0037
+  (tower-aware neighbour defense). Task #23 / #25.
 
 ## Problem (Docker soak, 2026-06-27)
 
@@ -126,21 +63,21 @@ A retired squad's surviving members **recall themselves**: in the orphan fallbac
 (squad gone — `get_squad_state == None` — and nothing to fight) a combat creep moves to
 the nearest home spawn and **recycles** instead of idling/scattering.
 
-## As-built vs the 6-step plan
+## Resolutions against the original 6-step plan
 
-| Plan step | Outcome |
-|-----------|---------|
-| 1 expire immunity | **Built** (+2 unit tests) |
-| 2 deadline heartbeat | **Built** (+ resolve/give-up via `engaged_once`) |
-| 3 producer re-assert from last-known | **Subsumed** by (1): a claimed objective can't lapse underneath its squad, so producer silence on stale intel is already harmless. No dead code added. |
-| 4 intel coverage pin | **Built** (OBSERVE/HIGH for live objectives) |
-| 5 manager-side member cleanup + integrity sweep | **Revised**: `EntityCleanupQueue::delete_creep` only deletes the ECS entity (a live creep is re-discovered next tick), so disposing a live member must be an **in-game** action by its own job → moved to (d). `retire_squad`'s raw squad-entity delete stays (generation-safe `SquadRef` → an orphan resolves to `None`, never aliases); the existing `repair_entity_integrity` member-scrub + Phase-A `objective_gone` retire already prevent leaks. |
-| 6 recall terminal state | **Built** as the orphan-fallback recall (d). No new job-FSM variant needed. |
+The design was authored as six steps; three of them resolved differently than first drafted, and those
+resolutions are load-bearing:
 
-WFV **17→18** for the one serialized-shape change (`SquadContext.engaged_once`); the
-reset also usefully clears the churned/orphaned squads. Bot-only — the sim/decision/eval
-crates are untouched, so parity + the determinism fence are unaffected. bot 155 tests
-green; wasm-clippy clean.
+| Plan step | Resolution |
+|-----------|------------|
+| 1 expire immunity | §(a) — the claim/deadline immunity in `expire()`. |
+| 2 deadline heartbeat | §(a)/§(b) — the lease stamp + refresh, with resolve/give-up keyed on `engaged_once`. |
+| 3 producer re-assert from last-known | **Subsumed** by (1): a claimed objective can't lapse underneath its squad, so producer silence on stale intel is already harmless. No re-assert path is built — it would be dead code. |
+| 4 intel coverage pin | §(c) — OBSERVE/HIGH for live objectives. |
+| 5 manager-side member cleanup + integrity sweep | **Rejected in that form**: `EntityCleanupQueue::delete_creep` only deletes the ECS entity (a live creep is re-discovered next tick), so disposing a live member must be an **in-game** action by its own job → §(d). `retire_squad`'s raw squad-entity delete stays (generation-safe `SquadRef` → an orphan resolves to `None`, never aliases); `repair_entity_integrity`'s member-scrub plus the Phase-A `objective_gone` retire prevent leaks without a new sweep. |
+| 6 recall terminal state | §(d) — the orphan-fallback recall. No new job-FSM variant is needed. |
+
+`SquadContext.engaged_once` is the one serialized-shape addition the design makes.
 
 ## Why one fresh look now suffices
 
@@ -151,117 +88,77 @@ the objective survives the 400t form+travel window regardless of intel going sta
 it arrives, clears, and resolves. Candidate *discovery* still rides the existing
 intermittent scouting (a `requested re-scout` on the central visibility queue).
 
-## Deferred follow-ons (from the original 0027 landing)
+## Invariants the lifecycle rests on
 
-- **Reassign** a resolve-clearer's survivors to a sibling core instead of recycling
-  (reuse > recycle-refund > nothing). *(still open — backlog #5 below)*
-- ~~**Forming-progress lease refresh**~~ — **DONE 2026-06-28** (forming-in-flight + travel
-  lease, both bounded; see Update below).
-- ~~**Candidate-discovery coverage**~~ — **DONE 2026-06-28** via the scout-fix (priority-
-  driven reach, no slot-truncation, HIGH offense re-scout; super `d3352f2`).
+Two non-obvious invariants, each established by a live failure or an attempted "fix" that regressed:
 
-## Update 2026-06-28 — reach/engage hardened end-to-end + polish backlog
+- **Rescout cadence must be DERIVED from intel lifetime, never set independently.** With
+  `STRONGHOLD_RESCOUT_INTERVAL` (1500) longer than `THREAT_DATA_MAX_AGE` (500), intel expires before the
+  re-probe, a known-stronghold SK room drops out of `threat_rooms`, and that stops BOTH the offense
+  evaluation AND the in-join `>200t has_known_core` backstop — the room is silently abandoned (never
+  farmed, never cleared). So `STRONGHOLD_RESCOUT_INTERVAL = THREAT_DATA_MAX_AGE / 2` (a 2× margin,
+  = 250 — one peek per 250t, no scout storm), guarded by a `const _` compile-time assert that hard-fails
+  the build if the relation ever inverts. (Leaving an *unaffordable* high-level stronghold to
+  self-collapse remains a deliberate economic gate, not a coverage gap.)
+- **`estimated_dps == 0` does NOT mean harmless — the harmlessness signal is `hostile_warrants_defender`.**
+  `project_intel`'s `danger.max(priority_implied_danger(priority))` floor looks like it would make a
+  harmless scout pull a CRITICAL defender, but a truly harmless scout (MOVE-only, no
+  Attack/RangedAttack/Work/Claim/Heal) is rejected by `hostile_warrants_defender` (war_decision.rs:221)
+  at the PRODUCER, so no `Defend`/`Secure` objective is ever emitted for it and it never reaches
+  `project_intel`. The floor is load-bearing for what *does* reach it: a warranted threat whose
+  `estimated_dps == 0` because it carries no Attack/RangedAttack parts but is dangerous anyway — a CLAIM
+  declaimer, a WORK dismantler, a HEAL creep (`estimated_dps` counts only Attack/RangedAttack,
+  threatmap.rs). Trusting `dps==0` there starves the objective's value to zero
+  (`value_e(Defend) = asset · defense_risk(0) = 0`), the EV claim filter drops it, and a declaimer takes
+  an owned room unopposed. Cross-refs the dual-DPS / `estimated_dps`-overload concern in ADR 0031.
 
-After 0027's commitment-lease landed, a live private-server soak peeled a further stack of
-lifecycle/movement/sizing blockers *between* "objective committed" and "core dead." Each was
-root-caused with the new `[SquadTrace]` introspection + offline-proven via the eval churn
-harness (`run_lifecycle_churn[_spatial]`), then deployed. The offense pipeline now runs
-**end-to-end** (scout → commit → size → multi-home spawn → solo-travel to a shared rally →
-gather → formation assault → arrive → focus → engage → clear); **uncontested lvl0 cores are
-cleared live** (squad 274 confirmed form→travel→arrive→focus→engage; the lvl0 inventory
-collapsed from 5–13 to ~1).
+## Reach, form, and travel — the end-to-end pipeline
 
-### Built this session (layers on 0027 — all committed)
-- **Scout/offense unblock** (`d3352f2`): priority-driven Chebyshev scout reach (was Manhattan-5,
-  excluded BFS≤10 offense targets); no `.take(slots)` truncation before the range filter; HIGH
-  offense re-scout priority; lvl0 cores exempt from the offense concurrency cap; softened the
-  `total_free_spawns==0` blanket early-return.
-- **Spawn-priority edge + efficient sizing** (`7f50a33`/`974184c`): forming combat members spawn at
-  `SPAWN_PRIORITY_COMBAT_FORMING=85` (above economy bulk, below CRITICAL miners); the EV optimizer
-  sizes undefended zero-attrition structures to the **minimal** effective force (binary p_kill — no
-  over-power ladder where P(win)≈1; defended sizing + calibration gates byte-unchanged).
-- **Quorum rally + forming/travel lease** (`c368283`/`8bfbd44`/`e770aa7`): uncontested targets deploy
-  at a min-viable quorum; the lease refreshes through the forming-in-flight banking gap AND the travel
-  phase (both bounded by `MAX_FORMING_BUDGET=3000`/`MAX_TRAVEL_BUDGET=1000`), closing the
-  mid-spawn/mid-travel lapse + the Generation churn.
-- **Focus-on-arrival** (`8bfbd44`): the arrival-tick empty-DTO hole is bridged by reading
-  hostiles/structures directly from `game::rooms()` when `mapping.get_room` is None.
-- **Fighter-first spawn order** (`7f50a33`/`8bfbd44`): a partial roster is combat-capable (bot Phase B
-  order only — assembled force byte-identical; reordering the assembler regressed
-  `assembler_kills_across_defended_regimes`).
-- **Shared-rally traverse** (`69ee23a`/`e2fb30c`/`c399f6f`/`c8b211c`): the movement-stall fix —
-  **multi-home spawn preserved**; members solo-travel to ONE shared rally (`rally::shared_rally_point`,
-  derived fresh each tick → no WFV bump; uncontested→target centre, contested→one room short out of
-  tower range), gather via the **unified `rally::gather_quorum_met` kernel both the bot AND the sim
-  call** (kills the bot/sim cohesion drift that froze the box anchor), then box-formation assault
-  rally→target (in-room formation/`formation.rs` 0-diff).
-- **`[SquadTrace]` introspection** (`1b2413f`): debug-gated (`features.military.debug_log`) per-squad
-  STATE/MEMBER/DEPLOY/TRAVEL/ARRIVED/FOCUS/ENGAGED/GIVEUP trace — the live diagnostic for all of this.
-- **Defender-lifecycle fix** (in flight, `wn1f2fh90`): latch `engaged_once` only on real in-room
-  presence (no en-route latch); latch the assault once gathered (no in_room↔travel oscillation); a
-  Defend squad holds-station on a clear owned room instead of `GaveUp`+re-field churn.
+The lifecycle is only useful if the squad actually gets there. The pipeline it drives is
+scout → commit → size → multi-home spawn → solo-travel to a shared rally → gather → formation assault →
+arrive → focus → engage → clear. Its load-bearing elements:
 
-### Polish / follow-up backlog (priority order)
+- **Scout/offense reach.** Priority-driven **Chebyshev** scout reach (a Manhattan-5 reach excludes
+  BFS≤10 offense targets), no `.take(slots)` truncation ahead of the range filter, HIGH re-scout priority
+  for offense rooms, lvl0 cores exempt from the offense concurrency cap, and no blanket early-return when
+  `total_free_spawns == 0` — candidate *discovery* is what feeds the commitment lease, so starving it
+  starves everything downstream.
+- **Spawn priority + efficient sizing.** Forming combat members spawn at
+  `SPAWN_PRIORITY_COMBAT_FORMING = 85` — above economy bulk, below CRITICAL miners. The EV optimizer
+  sizes **undefended, zero-attrition** structure targets to the *minimal* effective force (binary p_kill:
+  no over-power ladder where P(win) ≈ 1); defended sizing keeps the calibrated ladder. A related tuning
+  edge: floor distance-0 miner priority ≥ 90 so a forming squad can never out-prioritize a marginal
+  top-up miner.
+- **Quorum rally + forming/travel lease.** Uncontested targets deploy at a min-viable quorum, and the
+  commitment lease refreshes through both the forming-in-flight banking gap AND the travel phase, each
+  bounded (`MAX_FORMING_BUDGET = 3000`, `MAX_TRAVEL_BUDGET = 1000`) so a stuck squad still terminates.
+  Without those refreshes the lease lapses mid-spawn or mid-travel and the Generation churn returns.
+- **Focus-on-arrival.** The arrival tick sees an empty room DTO; bridge it by reading hostiles/structures
+  directly from `game::rooms()` when `mapping.get_room` is `None`, so a squad focuses the tick it lands
+  rather than idling one tick in contact.
+- **Fighter-first spawn order.** A partially-spawned roster must already be combat-capable. This is a
+  bot-side spawn-*order* concern only — the assembled force must stay byte-identical (reordering the
+  assembler itself regresses `assembler_kills_across_defended_regimes`).
+- **Shared-rally traverse.** Multi-home spawn is preserved; members solo-travel to ONE shared rally
+  (`rally::shared_rally_point`, derived fresh each tick so it carries no serialized state — uncontested →
+  target centre, contested → one room short, out of tower range), gather via the **unified
+  `rally::gather_quorum_met` kernel called by BOTH the bot and the sim** (a second copy drifts and freezes
+  the box anchor), then assault rally→target in box formation.
+- **`[SquadTrace]` introspection.** A debug-gated (`features.military.debug_log`) per-squad
+  STATE/MEMBER/DEPLOY/TRAVEL/ARRIVED/FOCUS/ENGAGED/GIVEUP trace: the lifecycle is otherwise unobservable
+  live, and every root cause in this ADR was found through it.
+- **Latch discipline.** `engaged_once` latches only on real in-room presence (never en route); an assault
+  latches once gathered (so `in_room` ↔ `travel` cannot oscillate); a Defend squad holds station on a
+  clear owned room instead of `GaveUp`-then-re-field churn.
 
-> **Current state as of 2026-07-01 — this backlog is addressed; nothing here is still open under 0027.**
-> #1 (threat-centric defense) landed as v1's `Secure{threat_room}` + reassignment (see the ledger + the
-> "Squad reassignment" design below). #2/#3/#4 (engaged-en-route, far-target stall, hold-station) and the
-> rally/travel robustness are addressed by **ADR 0034** (renew-in-transit, scatter-robust shared rally,
-> movement-failure escalation, majority-progress lease) and **ADR 0035** (scout-before-commit +
-> abandon-on-unwinnable-contact — the reach↔retreat oscillation). #5 (reassign survivors) + #6 (forming
-> tail / merge) landed via v2's Merge→Bk transfer column (**ADR 0032**). Consult those ADRs for as-built
-> detail; the entries below are retained for historical root-cause context.
+Rally/travel convergence beyond this (renew-in-transit, scatter-robust rally, movement-failure
+escalation, majority-progress lease) is designed in **ADR 0034**; fight-through vs route-around on
+incidental contact and abandon-on-unwinnable-contact are **ADR 0035**; the sizing/composition
+side (defense right-sizing, drain mode, budget-free `emit_requirement`) is **ADR 0031**.
 
-**Lifecycle / movement (this ADR):**
-1. **Defense targeting — intercept the threat, don't garrison empty owned rooms** *(highest value)*.
-   The Defend producer (`war.rs:421-428`) targets the OWNED room, but the enemy roams the NEIGHBOR
-   rooms, so a defender stands uselessly in its empty room (the root of the edge-oscillation + churn
-   the lifecycle fix only *bounds*). Fix: target the threat's actual room (intercept at the border),
-   OR only field a Defend objective when the threat is in/entering the owned room (don't field
-   garrisons for roaming neighbors). This is what makes defense *useful*, not just non-churning.
-2. **Engaged-en-route: fight-through / route-around.** Even with the in-room latch gate, a squad whose
-   path crosses a hostile room should disengage + continue (or route around) rather than stall on
-   incidental contact.
-3. **Far-target stall (d≥7).** Distant targets can exhaust the travel lease before arriving (pathing
-   through hostile rooms slows progress). Revisit `MAX_TRAVEL_BUDGET`/progress tracking for long hauls,
-   or stage the approach in legs.
-4. **Smarter garrison / hold-station.** B2 stops the churn; a garrisoning defender should hold at the
-   room entrance / a defensible tile, and the hold must stay bounded by the objective lifecycle (no
-   immortal idle squad).
-5. **Reassign survivors** to a sibling target instead of recycling (carried from the original deferred
-   list — reuse > recycle-refund > nothing).
-6. **Contested multi-member forming tail.** Large defended-target squads form slowly under spawn
-   contention; if income-sensitive, floor distance-0 miner priority ≥90 so a forming squad never
-   out-prioritizes a marginal top-up miner (the `SPAWN_PRIORITY_COMBAT_FORMING=85` vs lerped-miner
-   edge noted in `7f50a33`).
-7. **eval spatial-repro fidelity.** Lift `gather_quorum_met` out of the `use_shared_rally` guard in
-   `run_lifecycle_churn_spatial` so the buggy arm stays RED for the *freeze*, not the gate (the
-   decision-crate spatial repro is already faithful).
+## Design — Squad reassignment
 
-**Sizing / composition (ADR 0031 §Tier-3 / task #39 — cross-referenced, not owned here):**
-8. Defense right-sizing (a `dps=30` threat fields a 4-member 2-healer roster — calibration-gated).
-9. Drain **P2/P3 DONE 2026-06-29** (decision `79ebd32` / super `8b89f46`): the oracle decides
-   `AssaultMode::Drain` + sizes a sustainable TOUGH+HEAL comp (soak judged at the FALLOFF standoff, so a
-   base a breach can't out-heal is drainable; EV-guarded — never an infinite-energy tower / unsustainable
-   target, never downgrades a winning breach); the bot threads `assault_mode` via the ephemeral
-   `ObjectiveRuntimeEntry` → `StrategyInfo` so the previously-inert `DrainBreach` / `move_to_drain_standoff`
-   / `drain_stance` fire live (no WFV bump). **BOTH FOLLOW-UPS NOW DONE (drain CLOSED OUT end-to-end,
-   ADR 0031 §2(g)):** (a) tank-forward heal-the-tank coordination proven in-sim AND wired live (super
-   `e05d5e8` `should_drop_anchor_for_drain` drops the formation anchor so a drain comp routes anchorless
-   to its member_goals — tank forward at the standoff, healers one tile behind); (b) mixed
-   finite+infinite-tower hardening landed (super `86d5c42`, decision bump). No WFV.
-10. `member_energy>3000` PREFERRED-clamp lift; budget-free `emit_requirement` (retire
-    `optimizer_ceiling_budget`).
-
-## Design — Squad reassignment (backlog #1 + #5) [IMPLEMENTED]
-
-> **Current state as of 2026-07-01.** This design is **IMPLEMENTED**: v1 = whole-squad **Reassign** +
-> **threat-centric defense** (`Secure{threat_room}`, `Defend{owned}` demoted) landed in super `4f41da8`
-> (**WFV 20**); v2 = the transfer/merge pending-slot primitive landed as ADR 0032's **Merge→Bk** column
-> (super `a03ee91`). The design text below is retained as-authored; the **Phasing** note at the end was
-> the accurate forward plan and both phases are now done.
-
-Subsumes backlog **#1 (defense targeting)** + **#5 (reassign survivors)**, and removes the
+Subsumes defense targeting and survivor reassignment, and removes the
 retire→re-field churn for non-loss terminals. Chosen shape: **threat-centric defense (Option B)**
 + **whole-squad reassignment** + **Lanchester-guarded creep transfer/merge** (the pending-slot rule
 below; only *dilutive* splitting is rejected). Reviewed against the existing objective model for
@@ -297,7 +194,7 @@ the squad useful).
   objective — re-gather at the new `shared_rally_point` (reset `engaged_once`/`focus_target`/
   `squad_path`), reopen the `COMMITMENT_BUDGET` lease (`set_deadline`), and let the Phase-B renew
   pass follow the new rally (renew only if it's near a spawn). No partial/per-creep reassignment
-  (see "Atomic squads" in Deferred/rejected) — atomicity is what keeps those three coordinated.
+  (see *Deferred / rejected* below) — atomicity is what keeps those three coordinated.
 - **WFV:** the in-place rebind only rewrites the already-serialized `objective_id` (no shape
   change), so reassignment alone needs no bump — but a bump is acceptable where it buys a cleaner
   model (we don't dodge it with ephemeral hacks). Option B's threat-centric `Defend` semantics +
@@ -317,7 +214,7 @@ ops collapse to one safe primitive:
 
 It is strictly positive: reuses A's invested creeps, **saves B's spawn energy + time** (B fields
 sooner), and the transferred creep can **RENEW with the forming receiver** (recover lifetime vs
-recycling). It also eases the spawn-starve forming-tail (backlog #6): two squads stuck at 1/4 each can
+recycling). It also eases the spawn-starve forming tail: two squads stuck at 1/4 each can
 **merge into one at 2/4** instead of both churning.
 
 **When it fires (donor sheds, never weakens mid-fight):** A is terminal (Resolved/ObjectiveGone) with
@@ -390,55 +287,37 @@ asset-priority boost + leash, demote `Defend{owned}` to an optional preemptive h
 room" half) · eval harness (the churn cases). Cross-ref ADR 0026 (threat-centric targeting is a
 doctrine/targeting change).
 
-## Update 2026-06-28 — v1.1 producer unification + sim-able production layer (audit)
+## Producer unification + the sim-able production layer
 
-A fan-out audit of every operation/doctrine/job/mission for combat-work assignment + a
-sim-layering review, to make objective assignment UNIFORM (one v1 pipeline) and every layer
-sim-able.
+Objective assignment is **uniform**: one pipeline, `producer kernel → objective_queue → squad_manager`,
+for every piece of combat work — and every layer of it is drivable offline.
 
-### Audit result — most combat work is ALREADY on v1
-**ON v1** (producer-kernel → `objective_queue` → `squad_manager` — the target pattern, no migration):
+### The producers
+
 - `war.rs:run_defense_scan` → `Secure{owned/neighbour threat room}` + `Defend{flag/remote}`
   (owner=Defense) via `emit_defense` + `neighbour_threats`.
-- `war.rs:run_offense_evaluation` → `Secure{room}`(AttackFlag) / `Dismantle{room,pos}`(InvaderCore)
-  / `Harass{room}`(ResourceDenial=GatedPlayerRaid) (owner=Attack). Legacy `AttackOperation` is gone.
+- `war.rs:run_offense_evaluation` → `Secure{room}` (AttackFlag) / `Dismantle{room,pos}` (InvaderCore)
+  / `Harass{room}` (ResourceDenial = GatedPlayerRaid), owner=Attack. There is no parallel legacy
+  offense path.
 - `SourceKeeperFarmMission` → `Farm{SourceKeeper}` (owner=SourceKeeper) → `duo_sk_farmer`.
-  **(Corrects the stale note that SK fields its own duo — SK combat is ON v1.)**
+- `SalvageMission` is a **thin producer**, not a combat manager: a breach producer emits
+  `Dismantle{room, breach-blocker pos}` (owner=Attack, LOW) when a breach is possible and there is
+  surplus — which is what gives the `SiegeBreach` doctrine a producer at all — and a declaim producer
+  emits `Declaim{room, controller}` when the controller is `ReachableNow`. Declaim carries its own
+  role/body/doctrine (`SquadRole::Declaimer`, a CLAIM body, the always-field `DeclaimAttack` doctrine,
+  `SquadTarget::AttackController`) and a `declaiming` lease-hold that persists across the 1000-tick
+  `attackController` cadence; the EV gate stays in `SalvageOperation`.
+- **Economy work stays off the combat pipeline by design:** salvage raiders (`HaulJob` — hauling, not
+  combat), claimers/builders, scouts, reservers/miners.
 
-**OFF v1** (the migration target):
-- `SalvageMission` (operations/salvage.rs → missions/salvage.rs): fields its OWN solo creeps via
-  `spawn_queue` — declaimers (`DeclaimJob` attackController), dismantlers (`DismantleJob` WORK),
-  raiders (`HaulJob`). Low urgency (only derelict/quiet rooms, aborts on re-arm).
-- `DefendMission`: **vestigial** (squads always empty, spawns nothing; only `is_room_safe()` is
-  consumed) — cleanup, not a combat migration.
-- Confirmed **economy, stay off by design**: salvage raiders (hauling), claimers/builders
-  (unescorted — no `Escort` objective emitted despite the variant existing), scouts, reservers/miners.
+The declaim path depends on the breach path (a breach is what opens the route to a walled controller),
+and the whole pipeline depends on the pure-kernel production layer below.
 
-### Migration phasing (critical path P0 → P1 → P2; P3 anytime)
-- **P0 (sim infra, independent — land first):** extract `war_decision::observe_neighbours` as a
-  PURE kernel (lift the `game::*` hostile-fold out of `run_defense_scan`) so neighbour-threat
-  observation becomes a sim-able layer; extend `run_v1_flow` to drive
-  observe_neighbours → neighbour_threats → emit_defense → queue → reconcile end-to-end; add a
-  `run_offense_flow` driver. Offline-provable. LOW risk.
-- **P1 (breach-dismantle — reuses the EXISTING `Dismantle` kind + `SiegeBreach` doctrine, lowest-
-  risk combat migration):** a salvage breach producer emits `Dismantle{room, breach-blocker pos}`
-  (owner=Attack, LOW) when breach-possible + surplus; delete the mission's breach-dismantler
-  fielding. Gives the dormant `SiegeBreach` its first live producer. Depends on P0. LOW risk.
-- **P2 (declaim — NEW kind + doctrine + role + body, highest risk):** add
-  `ObjectiveKind::Declaim{room, controller}` (+ the exhaustive `room`/`capability_class`/
-  `objective_target` arms) — **WFV bump** (fold into the deploy reset); `SquadRole::Declaimer` +
-  a CLAIM body; a `DeclaimAttack` always-field doctrine (EV gate stays in `SalvageOperation`);
-  `SquadTarget::AttackController`; the declaim producer emits when `ReachableNow`; delete
-  `spawn_declaimers`. Depends on P1 (breach opens the declaim path). Sim-provable except the live
-  1000-tick upgrade-block cadence (soak after sim). MEDIUM risk.
-- **P3 (cleanup, anytime):** delete `DefendMission`'s dead squads field; `is_room_safe` → a pure
-  predicate. LOW risk.
-
-### Sim-able layers (the operator's "sim the layers" requirement)
+### Sim-able layers (the "sim the layers" requirement)
 The combat stack, each layer with a pure kernel a harness drives:
-1. **Production / observation** — `emit_defense`, `neighbour_threats`, **`observe_neighbours`
-   (extract in P0 — the last live-only glue)**, the offense candidate→objective map;
-   `objective_value::value_e` (ADR 0032).
+1. **Production / observation** — `emit_defense`, `neighbour_threats`, `observe_neighbours` (the
+   `game::*` hostile-fold lifted out of `run_defense_scan` so observation is a pure kernel), the
+   offense candidate→objective map; `objective_value::value_e` (ADR 0032).
 2. **Assignment / lifecycle** — `reconcile`, the objective queue, **the EV-global assignment
    (ADR 0032)**.
 3. **Sizing** — `emit_requirement` + `optimize_composition` (ADR 0031).
@@ -446,9 +325,10 @@ The combat stack, each layer with a pure kernel a harness drives:
 5. **Movement / rally** — `shared_rally_point` + `gather_quorum_met` + the traverse kernels.
 6. **Combat / tactics** — `decide_squad_with_pathing` + the engine sim.
 
-Layers 2–6 already have pure kernels driven by `run_v1_flow` / `run_lifecycle_churn[_spatial]` /
-the agent sim / the eval. **P0 brings layer 1 fully in**, so the WHOLE stack is offline-provable —
-the explicit goal: prove pieces like neighbour-observation in the sim, not discover them broken on
+Every layer is driven offline by `run_v1_flow` (the full production chain
+observe_neighbours → neighbour_threats → emit_defense → queue → reconcile), `run_offense_flow`, and
+`run_lifecycle_churn[_spatial]` / the agent sim / the eval. The requirement is that the WHOLE stack be
+offline-provable — pieces like neighbour-observation are proven in the sim, not discovered broken on
 Docker.
 
 ### Cross-references
@@ -459,35 +339,35 @@ v2 transfer/merge as an EV-scored column. The new `DeclaimAttack` doctrine / `Sq
 / CLAIM body cross-ref the ADR 0026/0031 doctrine corpus; the sim-layering taxonomy cross-refs ADR
 0019/0020. Task #28 / #23 / #25.
 
-## Combat objective inventory — add/remove sites + migration status (2026-06-28)
+## Combat objective inventory — add/remove sites
 
-Every `ObjectiveKind` (objective_queue.rs:81-93), where it is ADDED (`combat_objective_queue.request`)
-and REMOVED, and whether it flows through the v1 system (producer → queue → squad_manager) vs legacy
-mission-owned creeps. **Result: every PRODUCED combat objective is on v1 — the migration out of legacy
-mission management is complete.** Generic remove paths apply to all: the lifecycle `reconcile`
-**Resolved → withdraw** (clean win) + **`mark_unwinnable`** (give-up), and the queue's **`expire`**
-(TTL elapsed AND not claimed AND no live deadline lease — objective_queue.rs:348).
+Every `ObjectiveKind` (objective_queue.rs:81-93), where it is ADDED
+(`combat_objective_queue.request`) and where it is REMOVED. Generic remove paths apply to all: the
+lifecycle `reconcile` **Resolved → withdraw** (clean win) and **`mark_unwinnable`** (give-up), plus the
+queue's **`expire`** (TTL elapsed AND not claimed AND no live deadline lease — objective_queue.rs:348).
 
-| Kind | ADD (producer → owner) | Dedicated REMOVE (beyond resolve/expire) | Status |
-|------|------------------------|------------------------------------------|--------|
-| `Secure{room}` | war.rs:534 owned-room threat (Defense), war.rs:589 neighbour threat (Defense), war.rs:1294→1427 AttackFlag (Attack) | — (resolve/expire) | **v1** |
-| `Defend{room}` | war.rs:682 defend-flag (Defense), war.rs:792 remote-invader (Defense) | — (resolve/expire) | **v1** |
-| `Dismantle{room,pos}` | war.rs:1286→1427 InvaderCore (Attack), salvage.rs:574 **P1 breach** (Attack) | salvage.rs:492 breach withdraw (pos-scoped via `SalvageBreachTracker`, on standdown/re-arm) | **v1** |
-| `Harass{room}` | war.rs:1305→1427 ResourceDenial / GatedPlayerRaid (Attack) | — (resolve/expire) | **v1** |
-| `Farm{SourceKeeper,room}` | sourcekeeperfarm.rs:414 (SourceKeeper) | sourcekeeperfarm.rs:349 stronghold-present / stand-down withdraw | **v1** |
-| `Declaim{room,controller}` | salvage.rs:465 **P2** (Attack) | salvage.rs:403 declaim withdraw (pos-scoped, on standdown/re-arm/neutralize) | **v1** |
-| `Escort{room}` | **no producer** | — | **inert** — defined + manager-handled; planned future producer = claim/build escort (claimers are unescorted today). Migrate claim → emit `Escort` when ready, or drop the variant. |
-| `Farm{Core}` / `Farm{PowerBank}` | **no producer** | — | **inert** — `value_e`/value-kind arms exist (squad_manager.rs:335/337) but nothing requests them; lvl0 cores are razed via `Dismantle`, not farmed. Implement producers or drop the FarmKinds. |
+| Kind | ADD (producer → owner) | Dedicated REMOVE (beyond resolve/expire) |
+|------|------------------------|------------------------------------------|
+| `Secure{room}` | war.rs:534 owned-room threat (Defense), war.rs:589 neighbour threat (Defense), war.rs:1294→1427 AttackFlag (Attack) | — (resolve/expire) |
+| `Defend{room}` | war.rs:682 defend-flag (Defense), war.rs:792 remote-invader (Defense) | — (resolve/expire) |
+| `Dismantle{room,pos}` | war.rs:1286→1427 InvaderCore (Attack), salvage.rs:574 breach (Attack) | salvage.rs:492 breach withdraw (pos-scoped via `SalvageBreachTracker`, on standdown/re-arm) |
+| `Harass{room}` | war.rs:1305→1427 ResourceDenial / GatedPlayerRaid (Attack) | — (resolve/expire) |
+| `Farm{SourceKeeper,room}` | sourcekeeperfarm.rs:414 (SourceKeeper) | sourcekeeperfarm.rs:349 stronghold-present / stand-down withdraw |
+| `Declaim{room,controller}` | salvage.rs:465 (Attack) | salvage.rs:403 declaim withdraw (pos-scoped, on standdown/re-arm/neutralize) |
+| `Escort{room}` | **no producer** — the variant is defined + manager-handled; its intended producer is a claim/build escort (claimers travel unescorted without it) | — |
+| `Farm{Core}` / `Farm{PowerBank}` | **no producer** — the `value_e`/value-kind arms exist (squad_manager.rs:335/337) but nothing requests them. `Farm{Core}` means denied-reservation *income*, which is distinct from razing a core via `Dismantle`; both are kept as planned-future kinds, to be given producers or dropped deliberately | — |
 
-**Legacy mission-owned combat-adjacent work NOT (yet) objective-based** (the only remaining
-mission-owned spawning; none produce an `ObjectiveKind`):
-- `SalvageMission` **teardown dismantlers** (raze-for-salvage within-horizon) — could migrate to
-  `Dismantle` (P3-adjacent; deferred — distinct from the breach corridor which IS migrated).
-- `SalvageMission` **raiders** (`HaulJob`) — **economy by design, stays off v1** (hauling, not combat).
-- `DefendMission` — **DELETED (P3, 2026-06-28)**; `is_room_safe()` is now the pure `is_remote_room_safe`
-  predicate the mining-outpost gate calls (missions/utility.rs).
+**Combat-adjacent work that is deliberately NOT objective-based** (mission-owned spawning; produces no
+`ObjectiveKind`):
+- `SalvageMission` **teardown dismantlers** (raze-for-salvage within the horizon) — a candidate to
+  express as `Dismantle`, but distinct from the breach corridor, which is objective-driven.
+- `SalvageMission` **raiders** (`HaulJob`) — **economy by design**: hauling, not combat.
+- Room-safety for the mining-outpost gate is a pure predicate, `is_remote_room_safe`
+  (missions/utility.rs), not a mission — there is no `DefendMission`.
 
-So `SalvageMission` is now a thin v1 *producer* (breach `Dismantle` + `Declaim`); the migration of every
-combat OBJECTIVE out of legacy mission management is **complete**, with only the two inert variants
-(Escort, Farm Core/PowerBank — implement-or-drop) and the non-objective teardown/raiders/`DefendMission`
-(P3) outstanding.
+## Landed
+
+- e4bbf0f v1 lifecycle base — commitment lease, resolve-vs-give-up, zero-orphan recall (2026-06-27)
+- d3352f2 scout/offense reach unblock — priority-driven Chebyshev reach, no slot truncation (2026-06-28)
+- 4f41da8 whole-squad Reassign + threat-centric defense (`Secure{threat_room}`) (2026-06-28)
+- d301324 stronghold rescout interval derived from `THREAT_DATA_MAX_AGE` + compile-time assert (2026-06-28)

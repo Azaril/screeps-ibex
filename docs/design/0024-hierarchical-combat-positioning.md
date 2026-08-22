@@ -1,12 +1,6 @@
 # ADR 0024 — Hierarchical Combat Positioning (strategic goal + threat-aware tactical step)
 
-- **Status:** Accepted; **Stages 1 + 2-3 LANDED 2026-06-24** (host-validated, NOT deployed). Stage 1 =
-  threat-weighted path cost (agent `a145462`). Stage 2-3 = the **target-flood** realization (decision
-  `6c4e0ba`): each member takes a LOCAL next-step toward the focus DOWNHILL on a safe-path-distance field
-  (a near-whole-room Dijkstra seeded at the focus over the threat-weighted matrix) — non-myopic, so it
-  reaches guarded objectives where the local-greedy/Chebyshev attempts wandered. Results: self-play
-  oscillation ~10-18%→6.2%; designed-4 guarded cross-room assault reaches + wins; all 14 harness gates +
-  116 decision tests green. Weights are tunable seams for the EXP-*/tournament sweep. See §Future work.
+- **Status:** Decided
 - **Date:** 2026-06-24
 - **Deciders:** operator + combat-AI
 - **Related:** [ADR 0019](0019-combat-position-selection.md) (the unified position utility this refines), [ADR 0020](0020-ev-adaptive-blob-combat.md), [ADR 0023a](0023a-staged-combat-harness.md) (the harness that surfaced the failures)
@@ -34,7 +28,7 @@ step to this tick* — and that conflation is the root of every positioning defe
   does **not** weight tower/threat exposure), the squad will beeline through a tower's range to reach
   a "safe" tile and die on the way.
 
-Four cohesion variants were tried this session, each regressing something:
+Four cohesion variants were tried, each regressing something:
 
 | Variant | Result |
 |---|---|
@@ -72,6 +66,15 @@ The global flood stops being the goal-picker. It (or a dedicated toward-objectiv
 the **strategic goal**; the **rover path** (threat-weighted) is the strategic mover; the **local
 tactical scan** is the per-tick refinement.
 
+**The realization is a target-flood.** The "progress toward the strategic goal" term is a
+**safe-path-distance field**: a near-whole-room Dijkstra (`TARGET_FLOOD_OPS`) seeded at the **focus**
+and expanded over the **threat-weighted** cost matrix. Each member's tactical step is then simply the
+locally-best neighbor that goes **downhill** on that field. Because the field is a true distance-to-
+target over real traversal cost, the step is **non-myopic**: it reaches guarded objectives that
+local-greedy / Chebyshev-gradient attempts merely wandered around, while still being a one-tile
+decision. Measured on the harness, this cut self-play oscillation from ~10–18% to ~6%, and the
+designed guarded cross-room assault reaches and wins where the greedy variants did not.
+
 This subsumes the prior terms cleanly:
 - **Centroid** → gone; the focus/objective is the strategic anchor and the strategic goal is the
   cohesion reference.
@@ -99,7 +102,8 @@ This subsumes the prior terms cleanly:
   goal + a short local scan are both inspectable in replays).
 - **CPU:** ~one strategic search per squad (as today) + a tiny per-member local scan (~9 tiles vs
   400) — net **cheaper** than the global per-member flood. The threat-weighted cost adds a per-tile
-  lookup to the matrix build (the `ThreatField` already exists as a layer).
+  lookup to the matrix build (the `ThreatField` already exists as a layer). The `TARGET_FLOOD_OPS`
+  field is per-squad-per-tick and is shared per target / capped so the cost stays bounded live.
 - **Negative / risk:** the strategic goal can be *stale* against a fast-moving focus (mitigated by
   recomputing it each tick — it's cheap and the anchor moves slowly); tuning the threat-cost weight
   (too high → cowardly detours, too low → picked off); a member with no reachable progress tile must
@@ -158,60 +162,56 @@ the oscillation metric.
   progress (a fully threat-avoidant squad never closes). The engage gate (ADR 0020 winnability)
   decides *whether* to commit; this ADR decides *how* to route once committed.
 - **Multi-room strategic paths** — the rover search is already multi-room; the threat field is
-  per-room. Cross-room strategic goals (the twin-room case) need the path cost stitched across the
-  seam (ties into the operator's "cross-room edge/flee awareness" follow-up).
+  per-room. Cross-room strategic goals (the twin-room case) need the target-flood field **stitched
+  across the room seam**; unstitched, a member's downhill step flips at the border. This is measurable
+  with the durable A-B-A metric (below): single-room assaults sit near ~0.5% ping-pong while an
+  unstitched cross-room breach phase ping-pongs on the great majority of its move-steps — it still
+  reaches and wins by grinding through, but the jitter is wasteful and reads badly live. Stitching the
+  field across the seam is the open design item (it ties into the "cross-room edge/flee awareness"
+  follow-up).
 
-## Future work (flagged follow-ups, not yet built)
+## Future work
 
-What landed is the *positioning* skeleton; these are the operator-flagged next refinements:
+The positioning skeleton above is the core; these are its refinements.
 
-1. **Capabilities over role archetypes — ✅ LANDED 2026-06-24** (decision; super pointer-bumped). Both
-   sides are now capability-derived, not archetype-labelled:
-   - *Intent side:* the melee-vs-heal **action** choice is EV-driven (the rigid "fighter-first" hack is
-     gone — `decide_combat` drops the engine-vetoed melee attack only when the heal **averts a death**,
-     see #2).
+1. **Capabilities over role archetypes.** Both sides of the model are capability-derived, not
+   archetype-labelled:
+   - *Intent side:* the melee-vs-heal **action** choice is EV-driven (no rigid "fighter-first" rule —
+     `decide_combat` drops the engine-vetoed melee attack only when the heal **averts a death**, see #2).
    - *Positioning side:* `LayoutRole` (Melee/Ranged/Healer) is replaced by `MemberCaps { can_melee,
      can_range, can_heal }` on `MemberLayoutSpec`. Desired engagement distance + claim-priority derive
-     from the capabilities a creep actually has: a **melee+ranged** creep now has `desired_range == 1` and
-     **closes to melee** (uses both weapons — they compose) instead of being frozen at the range-3 ring
-     where its ATTACK parts never fired; a **melee+heal** creep positions as a fighter (range 1), its heal
-     being the opportunistic EV heal; only a **pure** healer (heal, no offense) is a back-line support
-     slot (healer preset + §8 coverage). Tests: `member_caps_drive_distance_and_role`,
-     `a_melee_ranged_creep_approaches_to_melee_range`. Single-room oscillation unchanged (0.52%),
-     designed-4 still passes. (`SquadCapabilities` in `composition.rs` is the squad-level sizing aggregate
-     — distinct from this per-member `MemberCaps`.) Remaining nicety: a `can_dismantle` (WORK) capability
-     for siege creeps when the engine sim models dismantle bodies.
-2. **Preemptive, win-probability heal objective — ✅ LANDED 2026-06-24** (decision; super pointer-bumped).
-   Healing was reactive (`heal_best_nearby` targeted only *damaged* creeps). It now heals **preemptively**
-   on ANTICIPATED incoming damage (the `ThreatField` via `incoming_damage_at`): `best_heal_target` ranks
-   reachable allies (incl. self) by **mortal danger first** (incoming ≥ current hits → dies to the volley
-   unaided), then by *useful heal* = `min(output, deficit + incoming)` — so a full-HP creep about to eat a
-   tower/ranged volley is topped up before it drops, and the squad spends heal where it most prevents a
-   death (objective = manage incoming damage to maximize win probability). The squad-level `assign_heals`
-   got the same anticipation (mortal-first, urgency = deficit + max(observed, predicted incoming)). With no
-   threats the ranking reduces to the prior "most-wounded, adjacent-before-ranged" (byte-identical). Tests:
-   `preemptive_heal_tops_up_a_full_hp_ally_about_to_take_a_volley`,
-   `melee_heal_creep_drops_its_attack_to_save_a_dying_ally`,
-   `melee_heal_creep_keeps_attacking_when_the_ally_is_merely_wounded`. This is the heal side of ADR 0020 EV.
-3. **Live threat-cost recipe** — ✅ **LANDED 2026-06-24** (super `659dad6` / decision `cdcf427`). The
-   bot's `squad_manager::build_target_matrix` now folds the room `ThreatField` (via the new
-   `build_room_threat_field`) into the live movement matrix as the same hard-capped additive penalty the
-   sim uses, so live paths route around exposure. Inert with no threats (bot still undeployed).
+     from the capabilities a creep actually has: a **melee+ranged** creep has `desired_range == 1` and
+     **closes to melee** (both weapons compose) instead of being frozen at the range-3 ring where its
+     ATTACK parts never fire; a **melee+heal** creep positions as a fighter (range 1), its heal being
+     the opportunistic EV heal; only a **pure** healer (heal, no offense) is a back-line support slot
+     (healer preset + §8 coverage). (`SquadCapabilities` in `composition.rs` is the squad-level sizing
+     aggregate — distinct from this per-member `MemberCaps`.) Extension: a `can_dismantle` (WORK)
+     capability for siege creeps once the engine sim models dismantle bodies.
+2. **Preemptive, win-probability heal objective.** Healing is not reactive (targeting only *damaged*
+   creeps); it heals **preemptively** on ANTICIPATED incoming damage (the `ThreatField` via
+   `incoming_damage_at`): `best_heal_target` ranks reachable allies (incl. self) by **mortal danger
+   first** (incoming ≥ current hits → dies to the volley unaided), then by *useful heal* =
+   `min(output, deficit + incoming)` — so a full-HP creep about to eat a tower/ranged volley is topped
+   up before it drops, and the squad spends heal where it most prevents a death (objective = manage
+   incoming damage to maximize win probability). The squad-level `assign_heals` uses the same
+   anticipation (mortal-first, urgency = deficit + max(observed, predicted incoming)). With no threats
+   the ranking reduces to the prior "most-wounded, adjacent-before-ranged" byte-identically. This is
+   the heal side of ADR 0020 EV.
+3. **Live threat-cost recipe.** The bot's `squad_manager::build_target_matrix` folds the room
+   `ThreatField` (via `build_room_threat_field`) into the live movement matrix as the same hard-capped
+   additive penalty the sim uses, so live paths route around exposure. Inert when there are no threats.
 4. **EXP/tournament weight sweep** — `LAYOUT_DOABLE_BONUS`, `LAYOUT_SPACING_*`, `LAYOUT_DEAD_BAND`,
    `TARGET_FLOOD_OPS`, `THREAT_PATH_DIV/CAP` + the kite/engage presets are tunable seams; tune via the
-   self-play tournament once scenario diversity is sufficient (operator's plan).
-5. **designed-2 swamp-approach timeout** — the squad reaches but doesn't destroy the objective in time
-   (terrain-advance speed; oscillation already dropped 33%→7%, so it's an advance-rate issue, not the
-   pile-up).
-6. **CPU of the 2500-op target-flood** per engaged squad per tick — fine for the sim/harness; share
-   per-target / cap before MMO deploy.
-7. **Cross-room positioning oscillation (surfaced 2026-06-24 by the new durable metric).** A durable Rust
-   A-B-A metric now exists — `metrics::oscillation_rate` (period-2 ping-pong over each creep's tile
-   trajectory) + the `positioning_oscillation_stays_low_across_designed` harness gate, replacing the
-   ad-hoc node script. It confirms the **single-room** assaults are stable (mean **0.52%**, all ≤1.6%
-   across Designed#0-3,5 — the positioning fix holds) but the **cross-room** twin-room siege (Designed#4)
-   ping-pongs on ~**93%** of its move-steps in the engaged breach phase: the strategic path is *not*
-   stitched across the room seam (see Open Questions), so the member's downhill step flips at the border.
-   It still reaches + wins (grinds through), but the jitter is wasteful + would read badly live. This is
-   the concrete instance of the "cross-room edge/flee awareness / multi-room strategic path" follow-up;
-   the gate excludes Designed#4 from the strict bound and reports it as the tracked baseline.
+   self-play tournament once scenario diversity is sufficient.
+5. **Terrain-advance rate.** The designed-2 swamp approach is an advance-*rate* problem, not a
+   pile-up: the squad reaches the objective but can be too slow to destroy it inside the window
+   (oscillation there is already low). Advance rate over high-cost terrain is the lever.
+6. **Durable oscillation metric.** `metrics::oscillation_rate` (period-2 ping-pong over each creep's
+   tile trajectory) plus the `positioning_oscillation_stays_low_across_designed` harness gate are the
+   permanent instrument for this ADR — a Rust metric, not an ad-hoc script — and the measurement that
+   distinguishes the stable single-room case from the unstitched cross-room seam (see Open Questions).
+
+## Landed
+- `a145462` (agent) threat-weighted path cost (2026-06-24)
+- `6c4e0ba` (decision) target-flood strategic goal + local tactical step (2026-06-24)
+- `659dad6` (super) / `cdcf427` (decision) live threat-cost matrix recipe (2026-06-24)

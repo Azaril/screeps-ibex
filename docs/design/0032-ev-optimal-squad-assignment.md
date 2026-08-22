@@ -1,39 +1,28 @@
 # ADR 0032 — EV-Optimal Squad↔Objective Assignment (P-AUCTION)
 
-Status: **v1.1 IMPLEMENTED + DEPLOYED 2026-06-28** (the `value_e` energy-equivalent currency +
-the `pairing_p_win`/`pairing_ev`/`quantize_ev` EV-of-pairing helper + EV-positive-gated **per-squad**
-reassign/claim replacing greedy priority-then-proximity + enemy-creep-force pricing; super `98dc1e7`,
-decision `b848c26`). **v1.2 (the GLOBAL Hungarian matching) IMPLEMENTED 2026-06-28** (super `f12a711`,
-decision `2da289b`, eval `8543278`; `assignment.rs` replaces BOTH greedy loops with one deterministic
-global EV-maximizing solve; transient matrix → no WFV bump). **v2 (the Merge column) IMPLEMENTED
-2026-06-28** (super `a03ee91`, decision `43cc43e`, eval `9b26286`; transient matrix → no WFV bump).
-**AUCTION COMPLETE** — reassign / claim / StayPut / Recycle / **Merge** are chosen in one global EV-optimal
-solve per scan.
-**v3 (economic-value-unlocked target EV) IMPLEMENTED 2026-06-28** (reach-bug #3): a combat target's value is
-now the ECONOMIC value UNLOCKED by CONTROLLING its room — a FULL net-ROI from a PURE, REUSABLE
-room-economics kernel (`screeps-ibex/src/room_economics.rs`) — pushed UP from the auction into war/operation
-target selection so an undefended lvl0 invader core (the easiest, most valuable free win — it unlocks a
-reservable mining remote) is no longer ignored. Transient `EconomicIntel` on the ephemeral runtime entry →
-**no WFV bump**. The pure kernel is reusable by a future expansion/claim-selection scorer. See §"v3 —
-economic-value-unlocked target EV (reach-bug #3)" below.
+- **Status:** Decided
+
 Task #28 (P-AUCTION). Extends ADR 0027 (the reassignment / merge lifecycle + the objective queue),
 reuses ADR 0031 (the composition EV machinery), and makes concrete the cross-goal EV currency ADR
 0020 §11 deferred. The decision/identity changes live here; the doctrine/body specifics
 cross-reference ADR 0026/0031.
 
-### Phase status
-- **v1.1 (DONE)** — per-squad EV scoring + the EV-positive gate (StayPut/Recycle alternatives) +
-  `value_e` + enemy-force pricing. Offline-proven (the kernel pairing/gate/quantize tests +
-  `objective_ev_prices_enemy_creeps_no_free_win`).
-- **v1.2 (DONE)** — the global Hungarian solve (`assignment.rs`: `build_ev_matrix` + `solve_assignment`)
+### Version increments (the design's parts)
+
+The design lands as four increments; each is a part of the same end state, not a separate model.
+
+- **v1.1** — per-squad EV scoring + the EV-positive gate (StayPut/Recycle alternatives) +
+  `value_e` + enemy-force pricing. Offline proof: the kernel pairing/gate/quantize tests +
+  `objective_ev_prices_enemy_creeps_no_free_win`.
+- **v1.2** — the global Hungarian solve (`assignment.rs`: `build_ev_matrix` + `solve_assignment`)
   replaces BOTH greedy loops (`best_reassignment_near` + the per-squad `best_by_ev` claim/reassign) over
-  the `N×K` matrix; Phase C folded into EV-ranked claimable rows. Deterministic (integer-quantized EV, no
+  the `N×K` matrix; Phase C folds into EV-ranked claimable rows. Deterministic (integer-quantized EV, no
   HashMap, stable tie-break). The solver requires a per-row zero-cost escape column (the standard optional-
-  assignment formulation; `build_ev_matrix` supplies it via per-row Recycle@0) — documented contract +
+  assignment formulation; `build_ev_matrix` supplies it via per-row Recycle@0) — a documented contract +
   per-row `debug_assert` + a 6400-matrix brute-force cross-check proptest vs the exhaustive may-skip
-  optimum (0 mismatches). Offline-proven: `hungarian_strictly_beats_greedy_on_total_ev` +
+  optimum. Offline proof: `hungarian_strictly_beats_greedy_on_total_ev` +
   `run_auction_flow` (`auction_global_strictly_beats_greedy_in_the_flow`).
-- **v2 (DONE)** — the `Merge→Bk` column class (`ColumnKind::Merge`, appended so v1.2 indices are
+- **v2** — the `Merge→Bk` column class (`ColumnKind::Merge`, appended so v1.2 indices are
   byte-unchanged): cell EV = the receiver's **marginal P(win) lift** `[P(win|B.comp+donor.sheddable) −
   P(win|B.comp)]·value_e(B.obj) − transfer_cost`; column-feasibility = the **Lanchester pending-slot
   guard** (merge-eligible donor + role-matched open slot + no self-merge — the dilutive split is *never*
@@ -41,16 +30,19 @@ cross-reference ADR 0026/0031.
   B's open slot (rebind squad-ref+room, spawn-slot dropped, B is the coordination unit), emptied donor
   retires; the same-tick deferred-`exec_mut` vs Phase-B double-fill is guarded by the
   `create_spawn_callback` `is_slot_filled` recheck (surplus recalled-to-recycle, never orphaned).
-  Offline-proven: `merge_is_picked_over_a_marginal_solo_reassign_and_the_dilutive_split_is_absent` +
-  `run_merge_flow`. No WFV bump.
-- **v3 (DONE)** — economic-value-unlocked target EV (reach-bug #3). A PURE, REUSABLE room-economics net-ROI
+  Offline proof: `merge_is_picked_over_a_marginal_solo_reassign_and_the_dilutive_split_is_absent` +
+  `run_merge_flow`.
+- **v3** — economic-value-unlocked target EV (reach-bug #3). A PURE, REUSABLE room-economics net-ROI
   kernel values CONTROLLING a room; war/operation target selection ranks by `P(win)·net_roi − cost`; the
   emitted objective carries the net-ROI (transient `EconomicIntel`) so `value_e`'s economic arm prices it.
-  Defense stays dominant. Offline-proven: the standalone pure-kernel tests
+  Defense stays dominant. Offline proof: the standalone pure-kernel tests
   (`close_reservable_remote_beats_far_beats_no_economy`, `winnable_reservable_core_has_healthy_positive_value`,
   determinism), the war-EV ranking tests (`economic_rank_ranks_close_winnable_above_far_above_deathtrap`,
   `economic_rank_lifts_winnable_core_above_bare_score`), and the defense-dominant test
-  (`high_value_defend_out_ranks_a_remote_economic_target`). No WFV bump. See the §below.
+  (`high_value_defend_out_ranks_a_remote_economic_target`). See the §below.
+
+With all four in place, reassign / claim / StayPut / Recycle / **Merge** are chosen in one global
+EV-optimal solve per scan.
 
 ## v3 — economic-value-unlocked target EV (reach-bug #3)
 
@@ -75,8 +67,8 @@ projected over a horizon. This GENERALIZES the SK-farm net-ROI (ADR 0018 §3.2) 
 It takes plain room FACTS ([`RoomEconomyFacts`]: source count + per-source yield, distance, hold model,
 horizon) and returns an energy-equivalent net-ROI ([`RoomEconomyValue`]). It is positioned as a
 **standalone module in the bot crate**, deliberately NOT in `war.rs` and NOT in the combat-decision crate,
-chosen by the dependency graph: it must be importable by BOTH combat target selection (`operations::war`
-now) AND a FUTURE expansion/claim-selection scorer (`expansion`/`claim.rs`, which lives in the bot crate).
+chosen by the dependency graph: it must be importable by BOTH combat target selection (`operations::war`)
+AND expansion/claim-selection scoring (`expansion`/`claim.rs`, which lives in the bot crate).
 Putting it in the combat-decision crate would force expansion to depend on combat; putting it in `war.rs`
 would couple expansion to the war operation. A pure module in the bot crate avoids both. The bot ADAPTER
 (`war.rs`) GATHERS the facts from `RoomData`/visibility and passes them in; the kernel stays pure +
@@ -105,11 +97,11 @@ unit-testable + bit-deterministic.
 out-values a remote economic target — the economic fix lifts a winnable core from ~0 to its net-ROI, but a
 remote never out-bids defending the base (`high_value_defend_out_ranks_a_remote_economic_target`).
 
-**No `WORLD_FORMAT_VERSION` bump.** `EconomicIntel` is transient (ephemeral runtime, re-attached every
-offense scan), exactly the `RequiredForce`/matrix discipline. No serialized shape changed.
+**No `WORLD_FORMAT_VERSION` impact.** `EconomicIntel` is transient (ephemeral runtime, re-attached every
+offense scan), exactly the `RequiredForce`/matrix discipline. No serialized shape changes.
 
 ### Critical files (v3)
-- `screeps-ibex/src/room_economics.rs` (NEW — the pure, reusable net-ROI kernel + its standalone tests).
+- `screeps-ibex/src/room_economics.rs` (the pure, reusable net-ROI kernel + its standalone tests).
 - `screeps-ibex/src/operations/war.rs` (`AttackCandidate.economic_roi`, the InvaderCore arm's
   `room_net_roi` call, `economic_rank_score`, the `set_economic_intel` attach + tests).
 - `screeps-ibex/src/military/objective_queue.rs` (`EconomicIntel` + `ObjectiveRuntimeEntry.economic_intel`
@@ -152,8 +144,8 @@ EV(S, O) = P(win | caps(S) vs O.defense) · value_e(O)     [common-currency upsi
 
 ### EV currency — `value_e` (energy-equivalent), the ADR 0020 prerequisite made concrete
 A pure per-kind valuation `objective_value::value_e(kind, intel) -> f32` in **energy-equivalent**
-units, so all goal types are comparable in one matrix (today they are not: defense uses a
-`DEFENSE_TARGET_VALUE = 1_000_000` sentinel; offense uses `score · OFFENSE_TARGET_VALUE_SCALE`):
+units, so all goal types are comparable in one matrix (a `DEFENSE_TARGET_VALUE = 1_000_000` sentinel
+for defense and `score · OFFENSE_TARGET_VALUE_SCALE` for offense are not comparable):
 
 | kind | `value_e` |
 |---|---|
@@ -239,7 +231,7 @@ The optimizer is a **pure deterministic kernel**, driven offline like `reconcile
   Hungarian→auction only if N goes dynamic.
 
 ## Non-goals / risks
-- **No `WORLD_FORMAT_VERSION` bump** — the EV matrix is a transient per-scan structure, never
+- **No `WORLD_FORMAT_VERSION` impact** — the EV matrix is a transient per-scan structure, never
   serialized (the `RequiredForce`/`CompositionParams` discipline). `value_e` weights, if persisted
   as tunables, would touch serde — they needn't (env-driven at sweep time).
 - Determinism is the load-bearing risk → integer-quantized EV + stable tie-break + no `HashMap`.
@@ -247,10 +239,15 @@ The optimizer is a **pure deterministic kernel**, driven offline like `reconcile
   needs only per-objective `value_e`.
 
 ### Critical files
-- `screeps-combat-decision/src/assignment.rs` (new — the Hungarian kernel) + `objective_value.rs`
-  (new — `value_e`)
-- `screeps-combat-decision/src/composition.rs` (the P(win) decomposition + `commit_ev_threshold` to
-  lift into a shared pairing helper) · `lifecycle.rs` (`Reassign` reframed as row-admission)
+- `screeps-combat-decision/src/assignment.rs` (the Hungarian kernel) + `objective_value.rs`
+  (`value_e`)
+- `screeps-combat-decision/src/composition.rs` (the P(win) decomposition + `commit_ev_threshold`
+  lifted into a shared pairing helper) · `lifecycle.rs` (`Reassign` reframed as row-admission)
 - `screeps-ibex/src/military/squad_manager.rs` (Phase-A apply + Phase-C, the integration site) ·
   `objective_queue.rs` (`best_reassignment_near` retired → column feasibility)
 - `screeps-combat-eval/src/harness/lifecycle.rs` (`run_v1_flow` → `run_auction_flow`)
+
+## Landed
+- `98dc1e7` v1.1 EV pairing + EV-positive gate + `value_e` + enemy-force pricing (2026-06-28)
+- `f12a711` v1.2 global Hungarian `assignment.rs` replacing both greedy loops (2026-06-28)
+- `a03ee91` v2 `Merge→Bk` column class + pending-slot guard (2026-06-28)

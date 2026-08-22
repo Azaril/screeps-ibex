@@ -1,6 +1,12 @@
 # ADR 0035 — Scout-before-commit + Abandon-on-unwinnable-contact (the VACUOUS-INTEL ENGAGE CASCADE)
 
-- **Status:** **Accepted (2026-06-30)** — E1 (unwinnable latch + abandon, `911efe8`) + E2 (scout-before-commit / ScoutedEmpty defer, `7b76c09`) IMPLEMENTED per operator decision. OPEN follow-ups FU1 (explicit scout-first pipeline) and FU2 (committed-but-can't-engage give-up) deferred pending soak evidence. **Current state as of 2026-07-01:** both phases landed and deployed to MMO alongside the broader rally/engage/structure/tower-defense combat work (ADR 0027/0031/0032/0034/0035/0036/0037); this ADR's design is as-built except FU1/FU2 (below), which remain deferred. — **Phase E1 (D3+D4+D5+D6, the oscillation-stopper) DONE** (in `911efe8`; original per-crate decision `9d27db4`, eval `1032405`, super; no WFV bump). D3 = uncontested classifier now requires `==LiveVisible`/non-empty (RC-11 parity, not `is_reliable()`). D4 = reconcile distinguishes retreated-from-contact (gated on the GENUINE lose verdict `engaged_once && in_room && !present_force_wins_or_stalls`, carried WFV-neutrally via a `lost_in_room` BTreeSet in the ephemeral `SquadFormingProgress` — **not** the over-broad `Retreating` state, which would falsely abandon a winnable bloodied squad) from cleared. D5 = war.rs offense producer + auction reassign set skip `is_unwinnable_now`. D6 = `mark_unwinnable` backoff latch + `clear_unwinnable` on a genuine clear. **Phase E2 (D1/D2 scout-before-commit) DONE** (in `7b76c09`; original per-crate decision `c528192`, agent `d3f7793`, eval `91d2b9c`, super; no WFV bump). D1 = `TowerIntel {NeverSeen, Seen, ScoutedEmpty}` derived WFV-neutral in war.rs from the cached `hostile_tower_positions.is_empty()`; selection DEFERS (register HIGH re-scout + skip the upsert) on ScoutedEmpty-stale; `economic_rank_score` clamps `p_win_proxy<=0.5` for ScoutedEmpty. D2 = `SCOUT_RECONFIRM_TICKS=40` content-staleness gate (`should_defer_offense_commit`) distinct from the 200-tick last_seen gate, upstream of force-sizing. **Scout-timing trace (`w47zlyvrl`): NO scout runs before objective creation — the objective is judged on CACHED threat_data (~50-150t stale at spawn) and the first LiveVisible read is on ARRIVAL.** E2 is the pragmatic **register-don't-dispatch fail-safe** (blocks the cold-start spawn until `last_seen` refreshes; safe but a poll-until-fresh loop) — NOT a true scout-FIRST request/await pipeline. **Operator decision (2026-06-30, ACCEPTED): ship E1+E2 as the fix; defer the explicit scout-first pipeline + the "committed-but-can't-engage" give-up (for an already-CLAIMED churning objective, which E2's new-commit gate does NOT break) pending soak evidence that they're needed.** Open follow-ups (deferred): (FU1) explicit scout-first pipeline (pending-intel → await fulfillment with a bounded deadline + abandon signal); (FU2) a give-up for a committed squad that never enters/engages (the soak5 re-field churn).
+- **Status:** Decided
+- **Date:** 2026-06-30
+- **Phases:** the design has two halves that land independently — **E1** (D3+D4+D5+D6, the
+  oscillation-stopper: the uncontested-classifier parity fix, the retreated-vs-cleared split, the
+  producer-side backoff consult, and the abandon latch) and **E2** (D1+D2, scout-before-commit: the
+  `TowerIntel` tri-state + the content-staleness re-scout gate). Both are WFV-neutral by
+  construction (§4).
 - **One line:** A squad commits to a TOWERED room on EMPTY/STALE intel, reaches it (now that RC-11 unfroze
   travel), discovers it cannot win, and oscillates reach↔retreat forever with no abandon. Fix: make
   target-selection, force-sizing, AND the `target_is_uncontested` rally classification require REAL
@@ -17,7 +23,7 @@ P(win) directive), and [ADR 0032](0032-ev-optimal-squad-assignment.md) (the EV a
 
 ---
 
-## 0. Problem statement (live, 2026-06-30)
+## 0. Problem statement
 
 An offense squad commits to **W4N5 (a TOWERED room)** on EMPTY/unscouted intel, reaches at 3/3, the real
 in-room **P(win) = LOSE**, and it oscillates reach↔retreat: **455 ticks Retreating vs 1 Engaged, 0 kills, no
@@ -39,7 +45,7 @@ defense profile is VACUOUS — it means "no towers were visible the last time we
 
 ## 1. Consolidated ROOT-CAUSE MAP (each link → file:line)
 
-The cascade, end to end. Verified against the tree on 2026-06-30.
+The cascade, end to end.
 
 ### Commit half — selection / sizing / classification trust empty intel
 
@@ -91,25 +97,35 @@ RC-11 did not touch: target-selection, force-sizing, and the `uncontested` rally
 **Key changes (where they live):**
 
 - **D1 — Three-state defense reliability on the candidate (selection + sizing).** Replace the boolean
-  `candidate.defense: Option<DefenseProfile>` *implicitly* carrying reliability with an explicit tri-state.
-  Add to `RoomThreatData` a `tower_intel: TowerIntel` discriminant — `{ Seen, ScoutedEmpty, NeverSeen }` —
-  set in `threatmap.rs:run`: `Seen` when towers were found, `ScoutedEmpty` when the room was visible this
-  update with zero hostile towers, persisted across non-visible ticks. Thread it into `DefenseProfile` as
+  `candidate.defense: Option<DefenseProfile>` *implicitly* carrying reliability with an explicit tri-state:
+  a `tower_intel: TowerIntel` discriminant — `{ Seen, ScoutedEmpty, NeverSeen }` — where `Seen` means
+  towers were found, `ScoutedEmpty` means the room was seen with zero hostile towers, and `NeverSeen`
+  means no sighting at all. **It is DERIVED, not persisted:** computed at the war.rs consumption point
+  from the existing cached `hostile_tower_positions.is_empty()` + `last_seen`, so no new serialized field
+  is added (see §4 for why this form is mandatory). Thread it into `DefenseProfile` as
   `tower_intel` (war.rs:1136). Then:
   - **Selection gate (war.rs:1414):** a `honor_verdict()` doctrine DEFERS not just when `defense.is_none()`
     but also when `defense.tower_intel == ScoutedEmpty && stale` (see D2) — request a HIGH re-scout and skip.
     `Seen` (real towers) and `NeverSeen` (already handled by `is_none`) are unchanged.
   - **Sizing (force_sizing):** sizing already sizes to the supplied profile; with D2's re-scout gate, an
     empty-but-stale profile never reaches sizing. No oracle change needed — the gate is upstream.
-  - **Rank (war.rs:1733):** `economic_rank_score` clamps `p_win_proxy` to a **penalty** (e.g. ≤0.5) when
+  - **Rank (war.rs:1733):** `economic_rank_score` clamps `p_win_proxy` to a **penalty** (≤0.5) when
     `tower_intel == ScoutedEmpty` so a vacuous-empty room does NOT outrank a genuinely-`Seen`-clear one.
     (Defense-in-depth: even if D2's gate is bypassed, the room stops floating to the top.)
 - **D2 — Content-staleness gate distinct from `last_seen`-staleness.** The 200-tick `last_seen` gate
-  (war.rs:970) is about *recency of any vision*. Add a SEPARATE, tighter `SCOUT_RECONFIRM_TICKS` (e.g. 30–50)
-  gate **specifically for an empty-tower defense on an invader-core/attack candidate**: if `tower_intel ==
-  ScoutedEmpty` AND `now - last_seen > SCOUT_RECONFIRM_TICKS`, request a HIGH re-scout and skip the commit
+  (war.rs:970) is about *recency of any vision*. A SEPARATE, tighter `SCOUT_RECONFIRM_TICKS = 40`
+  gate (`should_defer_offense_commit`) applies **specifically to an empty-tower defense on an
+  invader-core/attack candidate**: if `tower_intel == ScoutedEmpty` AND `now - last_seen >
+  SCOUT_RECONFIRM_TICKS`, request a HIGH re-scout and skip the commit
   this scan. This catches "towers energized after the snapshot" without waiting for the 200-tick window. It
-  is scoped to candidates we're about to COMMIT a squad to (cheap — the loop already has the room in hand).
+  is scoped to candidates we're about to COMMIT a squad to (cheap — the loop already has the room in hand),
+  and it sits **upstream of force-sizing** so an empty-but-stale profile never reaches the oracle.
+
+  **What D2 is, precisely.** No scout runs before objective creation: the objective is judged on CACHED
+  `threat_data` (~50–150 ticks stale at spawn time) and the first `LiveVisible` read happens on ARRIVAL.
+  D2 is therefore a **register-don't-dispatch fail-safe** — it blocks the cold-start commit until
+  `last_seen` refreshes (a poll-until-fresh loop), NOT a true scout-FIRST request/await pipeline. The
+  explicit pipeline is an open design question (§2.1).
 - **D3 — `uncontested` requires `LiveVisible || non-empty`, NOT `is_reliable()` (the C7 fix — RC-11 parity).**
   In `squad_manager.rs:2131`, compute the uncontested-intel predicate the SAME way D9 computes
   `have_target_intel`: `uncontested_intel = !hostiles.is_empty() || !structures.is_empty() || intel_source ==
@@ -131,8 +147,8 @@ withdraw-as-clean (which invites instant re-field), and do NOT re-advance (which
 **Key changes (where they live):**
 
 - **D4 — Distinguish CLEARED from RETREATED in `reconcile` (the A2/A3 fix).** Add to `ReconcileSnapshot` a
-  `retreated_from_contact: bool` — true when the squad's combat state is `Retreating` (or `Engaged`-but-
-  losing per the present-force P(win)) while in-room, NOT merely focus-less. Then split the `resolved` gate:
+  `retreated_from_contact: bool` — true when the squad is in-room and the present-force P(win) says it is
+  losing, NOT merely focus-less (see the predicate note below). Then split the `resolved` gate:
   - `resolved` (clean clear) requires `engaged_once && in_target_room && !has_focus && has_members &&
     !declaiming && !retreated_from_contact` — a TRUE clear has no living hostile, so the squad is not
     retreating.
@@ -145,6 +161,11 @@ withdraw-as-clean (which invites instant re-field), and do NOT re-advance (which
   (the real in-room DTOs now drive `present_force_wins_or_stalls`; in-room ⇒ `LiveVisible`, so the assessment
   is over REAL towers — no vacuous win). This reuses the EXACT inverse of the retreat condition (lib.rs), so
   "abandon" and "retreat" can never disagree about losing.
+
+  **The predicate must be the GENUINE lose verdict, not the `Retreating` state.** The evidence is carried
+  WFV-neutrally as a `lost_in_room` BTreeSet on the ephemeral `SquadFormingProgress`. Gating on the
+  `Retreating` combat state instead would be over-broad: a winnable but bloodied squad that kites for a
+  tick would be falsely abandoned. Only `engaged_once && in_room && !present_force_wins_or_stalls` counts.
 - **D5 — Consult the abandon backoff in the producer (the A4 fix).** In war.rs's offense candidate loop,
   SKIP a candidate whose room `is_unwinnable_now(room, now)` (the exponential backoff `mark_unwinnable`
   already records — `objective_queue.rs:391/407`). This is the missing producer-side consumer: today the
@@ -156,6 +177,16 @@ withdraw-as-clean (which invites instant re-field), and do NOT re-advance (which
   ONCE per de-commit (the `Retire{mark_unwinnable}` path already calls `mark_unwinnable(room, now)` at
   `squad_manager.rs:1281`). Add `clear_unwinnable(room)` on a genuine `Resolved` clear so a later real win
   resets the backoff. No new serialized field beyond the already-serialized `unwinnable` vec.
+
+### 2.1 Open design questions (the end state beyond D1–D6)
+
+- **FU1 — an explicit scout-first pipeline.** D2 blocks a commit until intel refreshes; it does not
+  *request* intel and *await* fulfillment. The end-state alternative is a pending-intel request with a
+  bounded deadline and an abandon signal, so a commit is scheduled by intel arrival rather than by
+  polling. Undecided: whether the poll-until-fresh form is sufficient in practice.
+- **FU2 — a give-up for a committed-but-can't-engage squad.** D2's gate governs a NEW commit; it does
+  not cover an already-CLAIMED objective whose squad never enters or engages (re-field churn). The
+  give-up predicate for that case is not designed here.
 
 ---
 
@@ -169,20 +200,20 @@ TWO provable surfaces — the **pure kernels** and the **lifecycle harness integ
 - **K1 (rally.rs) — `target_is_uncontested` over an intel TRANSITION.** Call twice:
   `(no_real_intel=false, no_hostiles=true, no_towers=true, …)` ⇒ expect `false` (an empty-Cached towered room
   is NOT uncontested); then `(live_visible=true, no_towers=false, …)` ⇒ expect `false` (real towers seen).
-  Pin that the ONLY `true` path is `(real_intel=true, no_hostiles=true, no_towers=true, …)`. **RED today:**
-  the param is `is_reliable()` (Cached ⇒ true ⇒ uncontested true). **GREEN after D3.**
+  Pin that the ONLY `true` path is `(real_intel=true, no_hostiles=true, no_towers=true, …)`. With the
+  param as `is_reliable()` this fails (Cached ⇒ true ⇒ uncontested true); D3 is what makes it hold.
 - **K2 (rally.rs) — `shared_rally_point` stages one-room-short for a contested(empty-Cached) target.** With
   `uncontested=false` (the D3 output), assert the rally room is the neighbour toward the approach, NOT the
   target centre. Pins C8a.
 - **K3 (lib.rs) — `winnable_fast_path_allowed` chain over the transition** (extend the existing
   `winnable_fast_path_gated_on_real_target_intel`): vacuous-win + empty-Cached ⇒ blocked; same after
-  `LiveVisible` ⇒ allowed. Already GREEN (D9) — keep as the regression fence and add the empty-Cached case
+  `LiveVisible` ⇒ allowed. Held by D9 — keep as the regression fence and add the empty-Cached case
   explicitly so C7's "Cached is not LiveVisible" is pinned.
 - **K4 (lifecycle.rs) — `reconcile` distinguishes RETREATED from CLEARED.** Add:
   `reconcile(engaged_once=true, in_target_room=true, has_focus=false, retreated_from_contact=true)` ⇒
   `Retire { GaveUp, withdraw=false, mark_unwinnable=true }`, NOT `Retire { Resolved, withdraw=true }`. And the
-  mirror: `retreated_from_contact=false` (a true clear) ⇒ `Resolved/withdraw`. **RED today** (the field/gate
-  don't exist). **GREEN after D4.**
+  mirror: `retreated_from_contact=false` (a true clear) ⇒ `Resolved/withdraw`. This is exactly what D4 buys:
+  without the field and the split gate the two cases are indistinguishable.
 
 ### 3.2 Lifecycle-harness integration (`screeps-combat-eval/src/harness/lifecycle.rs`)
 
@@ -200,21 +231,21 @@ short-circuits to `DeployedAndEngaged` the moment DTOs are readable (`:813-817`)
 - **H3 — Arrival branch models cannot-win.** When `tick == arrives_at && arrival_has_towers`, the squad is
   in-room, `engaged_once` latches, but `present_force_wins_or_stalls=false` ⇒ set
   `retreated_from_contact=true` and feed `reconcile`.
-- **New `ChurnOutcome` variants:** `LapsedOnVacuousCommit` (RED: committed uncontested, reached, retreated,
-  reconcile mis-resolved → withdraw → re-field, generations climb) and `AbandonedOnContact` (GREEN: reconcile
-  returns `GaveUp/mark_unwinnable`, the producer suppresses via `is_unwinnable_now`, NO re-field within the
-  backoff — `generations` stable). 
-- **RED scenario:** `ChurnTarget { commit_intel_empty: true, arrival_has_towers: true, latch_engaged_in_room_only: true, /* D3/D4 disabled */ }` ⇒ expect `LapsedOnVacuousCommit` with `generations > 1` (the oscillation: false-resolve → re-upsert → re-field).
-- **GREEN scenario A (scout-before-commit):** D3 wired ⇒ `uncontested=false` on the empty commit view ⇒ the
+- **New `ChurnOutcome` variants:** `LapsedOnVacuousCommit` (the failure: committed uncontested, reached,
+  retreated, reconcile mis-resolved → withdraw → re-field, generations climb) and `AbandonedOnContact` (the
+  fixed behavior: reconcile returns `GaveUp/mark_unwinnable`, the producer suppresses via
+  `is_unwinnable_now`, NO re-field within the backoff — `generations` stable).
+- **The cascade scenario:** `ChurnTarget { commit_intel_empty: true, arrival_has_towers: true, latch_engaged_in_room_only: true, /* D3/D4 disabled */ }` ⇒ `LapsedOnVacuousCommit` with `generations > 1` (the oscillation: false-resolve → re-upsert → re-field).
+- **Scenario A (scout-before-commit):** D3 wired ⇒ `uncontested=false` on the empty commit view ⇒ the
   squad MASSES one-room-short and only advances on real intel. With `arrival_has_towers` it then either
   abandons cleanly (B) or, if winnable, engages.
-- **GREEN scenario B (abandon-on-contact):** D4+D5 wired ⇒ `AbandonedOnContact`, `generations` stable (no
+- **Scenario B (abandon-on-contact):** D4+D5 wired ⇒ `AbandonedOnContact`, `generations` stable (no
   oscillation), the room in backoff.
 - **H4 — Param-sweep gate:** add the cascade family to `ParamScore` (`param_sweep.rs`) so the RED→GREEN is
   permanently regression-fenced, mirroring ADR 0034 Phase 4.
 
-**Order:** K1/K4 RED first (pure, fast) → D3/D4 to GREEN → H1–H3 RED on the production driver → D5/D6 +
-harness-wiring to GREEN → H4 fence. Production code changes land only after the matching RED test exists.
+**Order:** K1/K4 first (pure, fast) → D3/D4 → H1–H3 on the production driver → D5/D6 +
+harness-wiring → the H4 fence. Production code changes land only after the matching failing test exists.
 
 ---
 
@@ -258,15 +289,11 @@ harness-wiring to GREEN → H4 fence. Production code changes land only after th
     serialized shape. (Confirm the `unwinnable` vec is part of the serialized objective-queue snapshot; if it
     is NOT currently serialized, the latch is session-only, which is acceptable — a VM reset re-scouts and
     re-assesses anyway — and still no WFV bump.)
-  - D1 (`TowerIntel` on `RoomThreatData`): **the one to watch.** `RoomThreatData` is a `Component`; if it is
-    serialized (ConvertSaveload), adding a field changes the serialized shape ⇒ a WFV bump (one loud reset).
-    Verify at implementation time. If `RoomThreatData` is NOT serialized (it is re-derived from live/cached
-    structures each tick — likely, since `threatmap.rs:run` rebuilds it from `get_structures`), then no bump.
-    **Mitigation if it is serialized:** carry `TowerIntel` as a derived value in war.rs (computed from
-    `hostile_tower_positions.is_empty()` + `last_seen` recency) rather than a new persisted field — keeping
-    D1 entirely WFV-neutral. This is the PREFERRED form: D1 needs no new persisted state at all if the
-    `ScoutedEmpty` discriminant is computed from the existing `hostile_tower_positions` emptiness + the
-    existing `last_seen` at the war.rs consumption point.
+  - D1 (`TowerIntel`): **the one to watch, and the reason D1 is specified as derived.** Adding a field to
+    `RoomThreatData` (a `Component`) would change the serialized shape if it is `ConvertSaveload` ⇒ a WFV
+    bump. D1 therefore needs **no new persisted state at all**: the `ScoutedEmpty` discriminant is computed
+    at the war.rs consumption point from the existing `hostile_tower_positions` emptiness + the existing
+    `last_seen` recency, keeping D1 entirely WFV-neutral.
 
 ---
 
@@ -276,9 +303,13 @@ harness-wiring to GREEN → H4 fence. Production code changes land only after th
 - [ADR 0027](0027-objective-squad-lifecycle.md) — `reconcile` kernel, `mark_unwinnable` backoff, withdraw.
 - [ADR 0031](0031-capability-driven-force-composition.md) — force-sizing oracle / P(win) directive.
 - [ADR 0032](0032-ev-optimal-squad-assignment.md) — EV auction / reassign.
-- Code (verified 2026-06-30): `military/threatmap.rs:266,308-311,335-344,390-408`;
+- Code: `military/threatmap.rs:266,308-311,335-344,390-408`;
   `operations/war.rs:970,1127-1145,1184,1398,1414-1416,1490-1494,1733-1748`;
   `military/squad_manager.rs:1799,2131,2135-2140,2167-2169,2220,2324,2630-2631`;
   `screeps-combat-decision/src/rally.rs:61,80-82,280-302`; `…/src/lib.rs:1430,1447`;
   `…/src/lifecycle.rs:166,205-206`; `military/objective_queue.rs:391,407`;
   `screeps-combat-eval/src/harness/lifecycle.rs:226-278,813-817,645-680`.
+
+## Landed
+- `911efe8` E1 — unwinnable latch + abandon-on-contact (D3–D6) (2026-06-30)
+- `7b76c09` E2 — scout-before-commit / `ScoutedEmpty` defer (D1–D2) (2026-06-30)

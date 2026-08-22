@@ -1,6 +1,7 @@
 # ADR 0031b — Force-composition tuning results (sweep note)
 
-- **Status:** Results note (output of ADR 0031 D16/D17 / ADR 0031a §4 tournament sweep)
+- **Status:** Results note
+- **Role:** output of the ADR 0031 D16/D17 / ADR 0031a §4 tournament sweep
 - **Date:** 2026-06-27
 - **One line:** Reports the `CompositionParams` Tier-1 (count × margin) tournament sweep across all four bed regimes, maps the emergent per-regime strategy, and concludes the research-grounded seeds (`hold 1.3 / over 1.5 / dyn 1.0 / mem 3000 / commit 0`) are **confirmed Pareto-optimal across regimes and KEPT** — no `CompositionParams::default()` change.
 
@@ -59,16 +60,17 @@ Rationale:
 
 **Regime tension (documented, not resolved by a default change):** a default tuned for *resource-denial / creep-clear-only* contexts would prefer more-cheaper members (mem ~1300, over ~1.6); a default tuned for *structure razing* would prefer the cheapest member-energy. The single global default cannot capture both edges — it sits at the defended-Kill floor, which is the correct conservative choice because the gate that the global default must satisfy is the union of all beds. The path to *regime-aware* params (a per-objective `CompositionParams`) is a Tier-2/3 follow-up below, not a Tier-1 default change.
 
-**Gates at the recommended (= current) Default:**
-- `cargo test -p screeps-combat-decision` → 179 passed, 0 failed.
-- `cargo test -p screeps-combat-eval` → 65 passed, 0 failed, 19 ignored; including `default_params_hold_the_structure_gates`, `oracle_sized_force_forms_and_kills_a_defended_core`, `assembler_kills_across_defended_regimes`, `calibration_is_deterministic`.
-- OracleCalibration: FP = 0.0000 (≤ 0.010), FN = 0.0962 (≤ 0.200). SizingWins / CreepClearWins / acceptance Kill: HELD. (No `default()` change → no re-baseline needed; the gate suites above run at Default.)
+**Gates at the recommended (= current) Default:** the `screeps-combat-decision` and `screeps-combat-eval`
+suites hold — `default_params_hold_the_structure_gates`, `oracle_sized_force_forms_and_kills_a_defended_core`,
+`assembler_kills_across_defended_regimes`, `calibration_is_deterministic` — with OracleCalibration at
+FP = 0.0000 (≤ 0.010) and FN = 0.0962 (≤ 0.200), and SizingWins / CreepClearWins / acceptance Kill HELD.
+(No `default()` change ⇒ no re-baseline; those gate suites run at Default.)
 
 ---
 
-## 4. Open Tier-2/3 items (next sweep)
+## 4. Open Tier-2/3 levers
 
-The Tier-1 count × margin sweep is exhausted (the seeds are confirmed). The remaining levers are the body/archetype axis — they require *extending the search*, not just sweeping `CompositionParams`. From ADR 0031a §2B/§4:
+The Tier-1 count × margin sweep is exhausted (the seeds are confirmed). The levers beyond it are on the body/archetype axis — they require *extending the search*, not just sweeping `CompositionParams`. From ADR 0031a §2B/§4:
 
 - **Tier-2 — `archetype` (weapon select) as a tuned EV dimension.** The biggest gap and the original failure (WORK-siege-vs-guard = 0 damage). `{RangedBlob, MeleeAttack, WorkDismantle, derived Drainer}` swept per bed-type, with `fighter_role` demoted to a feasible-set constraint. Expected emergent result: RangedBlob wins creep-defended + immune-core beds, WorkDismantle wins dismantle-able-ring beds.
 - **Tier-2 — `tough_fraction` / EHP.** Already wired as the internal `TOUGH_LADDER = [0.0, 0.1, 0.2]` in `optimize_composition`; promote it to a graded, tower-present acceptance bed so `tough > 0` becomes *required* to pass (today every v1 bed passes at tough 0 — the beds don't yet punish bare bodies under sustained tower fire). Couple to heal (broken-TOUGH/tick must be refillable).

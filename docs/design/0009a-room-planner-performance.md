@@ -1,22 +1,11 @@
 # ADR 0009a — Room-Planner Performance: Diagnosis & Redesign
 
-- **Status:** Proposed — **Phase 1 (UNDEFENDED fix + D4 cleanups) and Phase 2 (road Dijkstra) IMPLEMENTED 2026-06-14** (see §9); D1/D5 + placement-driven reachability outstanding.
+- **Status:** Research note
 - **Date:** 2026-06-14
 - **Deciders:** William Archbell
 - **Addendum to:** [0009 — Room Planning & Multi-Room Layout](0009-room-planning-and-multiroom-layout.md)
 - **Supersedes (in part):** ADR 0009's "Alternatives Considered" row that *rejected* a planner rewrite on the grounds that *"no evidence the current cost is a problem (it is budgeted)."* Operator field evidence — the planner is "very slow" — plus the measurements below overturn that premise. The cost **is** a problem: not in wall-clock per tick (it is budgeted), but in **convergence latency** — a freshly-claimed open room burns hundreds of tick-budget slices before it has *any* layout to build.
-
-## Closeout decision log (2026-07-02)
-
-Source of truth: [adr-closeout-2026-07-02.md](../reviews/adr-closeout-2026-07-02.md) §2 (Q8) + §4. The `Status` header is accurate (Phase 1 + Phase 2 landed; D1/D5 + placement-driven reachability outstanding); this note records the operator closeout only. Code was verified over prose.
-
-- **Q8 — ADD the adaptive beam-widen/cap-lift provability fallback.** Phase 2's adversarial review (§9a) left the anchor beam (top-16) and the `controller_infra` satisfice/4+3 cap as *empirically* no-plan-loss (0 loss on 40 rooms) but **not provably** so. The fallback is now **live and can be hung on** — the escalation ladder `ESCALATION_BEAMS = [16, 64, usize::MAX]` exists in `screeps-foreman/src/planner.rs:160`, driven by `roomplansystem.rs`'s `beam_level` (`182-263`): a room that finds no plan at beam 16 escalates to 64, then unbounded, before ever reporting `Failed`. **Attach the cap-lift for `controller_infra` (and any other satisficing cap) to the same escalation levels** so the no-plan-loss gate is *provable*, not just measured. (See ADR [0009c](0009c-room-planner-road-connectivity.md) §D2/EP-6.8 for the same escalation-only relaxation contract on road-connectivity.)
-- **§9a doc-hygiene:** the §9a closing line "Uncommitted, pending operator review" is **stale — Phase 2 is on master** (10 files, +417/−188, clippy-clean, 24 tests). Corrected inline below.
-- **Tower-plan supersession:** [0009b](0009b-room-planner-scoring-and-evaluation.md) supersedes 0009a's tower plan (the `TowerReservationLayer` → coverability-weighted min-cut → `TowerPlacementLayer` architecture replaced the reposition-based approach 0009a referenced).
-
-### Resume-point
-
-Wire the cap-lift into the existing `ESCALATION_BEAMS` ladder (make `controller_infra`'s satisfice cap and any beam-bounded heuristic widen per level) to make no-plan-loss provable (Q8), then the §10 outstanding items: placement-driven reachability (`UtilityLayer` Factory/PowerSpawn approach-tile reservation) → D1 bounded/stamped footprint → D5 scorer-quality fixes (the D5 quality work is jointly owned with [0009b](0009b-room-planner-scoring-and-evaluation.md)).
+- **Superseded in part by:** [0009b](0009b-room-planner-scoring-and-evaluation.md) for tower placement — its `TowerReservationLayer` → coverability-weighted min-cut → `TowerPlacementLayer` architecture replaces the reposition-based tower approach this ADR references. The D5 scorer-quality work is jointly owned with 0009b.
 
 ---
 
@@ -79,7 +68,7 @@ Consensus across Overmind, glitchassassin ("Architects"), Harabi, and TooAngel: 
 
 ## 4. What we tried (prototypes) and what the numbers proved
 
-Every surgical, search-level fix was prototyped and measured on the corpus; all are reverted (the tree is clean). The results are the core evidence for the decision:
+Every surgical, search-level fix was prototyped and measured on the corpus, then reverted. The results are the core evidence for the decision:
 
 | Prototype | Speed | Quality / safety | Verdict |
 |---|---|---|---|
@@ -99,13 +88,15 @@ Keep the per-room `PlannerRoomDataSource → Plan` seam, the stamp infrastructur
 
 **D2 — Bounded anchor search, exhaustive only where it matters.** With defendability no longer a near-random filter, rank anchors by the existing composite *plus a real (cheap, conservative) defensibility term* and evaluate the full pipeline on the **top-K (~10–20)** survivors — glitchassassin's beam. The anchor dimension is the one that drives quality, so it stays a genuine (bounded) search; infra-detail layers `satisfice` (commit to first valid). Together: ~10–20 anchors × ~1 infra each = tens of full-tail runs, not 6,282.
 
-**D3 — Min-cut once, on the winner (or the top-K).** Demote the exact Dinic min-cut, the heavy `all_buildings` road pass, road-prune, and the reachability BFS to **single-winner finalization** (or top-K), and fold reachability into the committed-anchor floodfill (Harabi) so unreachable layouts are never built up. Min-cut still runs *last*; it just runs O(K) times, not O(candidates).
+**D3 — Min-cut once, on the winner (or the top-K).** Demote the exact Dinic min-cut, the heavy `all_buildings` road pass, road-prune, and the reachability BFS to **single-winner finalization** (or top-K), and fold reachability into the committed-anchor floodfill (Harabi) so unreachable layouts are never built up. Min-cut still runs *last*; it just runs O(K) times, not O(candidates). **Refined by §9a:** `reachability` is a *rejection gate*, so it cannot be demoted to the winner — if the winner fails it you have no plan and have already discarded the runners-up. The road/reachability passes are made cheap **in place** instead (single hub Dijkstra; placement fixes upstream).
 
 **D4 — Cheap mechanical fixes (do regardless):** memoize `controller_infra_v2`'s flood-fill (it recomputes a full BFS ~6,600×); add `satisfice()` to the layer trait (it is sound and becomes powerful once completions are common after D1); add proper `screeps-timing` annotations to the layers so this profiling is reproducible without ad-hoc instrumentation.
 
 **D5 — Quality fixes (make the output *objectively better*, not just faster):** correct `UpkeepScoreLayer` to weight by real decay energy; weight the min-cut toward terrain chokepoints; add a filler-walk/extension-compactness score; retire or rescale the saturated `hub_quality` metric. Calibrate weights on the bench corpus (ADR 0009 D2's standing plan-loss-accounting gate applies).
 
-**Investigate first — possible cheap win:** the **93% `UNDEFENDED`** rate is suspicious. A correct min-cut over an 8-neighbour graph should rarely fail its own 8-neighbour seal-validation. Candidate causes worth a focused look before the larger redesign: `defense.rs:428` **skips ramparts on border tiles** (`!loc.is_border()`) which can leave a seal gap; and a possible mismatch between the *protected* set (what the cut seals) and the *must_defend* set (what validation checks). If this is over-rejection rather than genuine, fixing it would raise the completion rate dramatically and make D2/`satisfice` immediately effective — a large win inside the current architecture. If it is genuine (open rooms truly cannot be sealed sprawled), it directly confirms D1.
+**D6 — Escalation-only relaxation: every bounded heuristic widens with the beam ladder.** The anchor beam (top-K) and `controller_infra`'s satisfice cap are *empirically* no-plan-loss but not *provably* so — a pathological room whose only feasible anchor or placement ranks low could still be dropped. The escalation ladder `ESCALATION_BEAMS = [16, 64, usize::MAX]` (`screeps-foreman/src/planner.rs:160`, driven by `roomplansystem.rs`'s `beam_level`, `182-263`) already re-runs a room at successively wider beams before ever reporting `Failed`. **Every satisficing cap and beam-bounded heuristic must be indexed by the same escalation level**, so relaxation happens only on escalation and no-plan-loss becomes a property of the design rather than a measurement on one corpus. ADR [0009c](0009c-room-planner-road-connectivity.md) §D2/EP-6.8 states the same escalation-only relaxation contract for road connectivity.
+
+**The 93% `UNDEFENDED` rejection rate is over-rejection, not a property of open rooms** — §9 gives the root cause and the fix. That matters to the shape of this decision: with defendability no longer a near-random filter, D2's bounded anchor beam becomes safe and `satisfice` becomes effective, both of which were unsafe/inert while the rejection rate was 99%.
 
 ---
 
@@ -122,11 +113,12 @@ Fallback ladder: bunker square fits → tier 1; else stamps fit → tier 2; else
 ## 7. Incremental roadmap (each bench-validated; plan-loss accounting per ADR 0009 D2)
 
 0. **Reproducible profiling:** add `screeps-timing` annotations to the layers; commit the shard3 corpus baseline (203.9 s, scores) as the regression yardstick. *(None-breaking, offline.)*
-1. **Investigate the 93% `UNDEFENDED`.** If over-rejection: fix → re-measure (may already be a large win). *(Behavioral, in-flight-plan reset.)*
+1. **The defence over-rejection fix** (uncuttable room-edge tiles, §9) — this is the step that makes the beam and `satisfice` safe, so it must precede them. *(Behavioral, in-flight-plan reset.)*
 2. **D4 cheap fixes** (flood-fill memoization, `satisfice()`): safe, no plan loss. *(Behavioral, fingerprint reset.)*
 3. **D1 bounded extension footprint** behind a builder flag; A/B vs baseline on the corpus — expect rejection rate and total CPU work to fall sharply with equal-or-better scores. *(Behavioral, in-flight-plan reset.)*
 4. **D2/D3 beam + min-cut-on-survivors**; verify identical-or-better winning plans at a fraction of the candidate count. *(Behavioral.)*
 5. **D5 quality fixes + weight calibration** on the corpus. *(Behavioral.)*
+6. **D6 escalation-indexed relaxation:** index every satisficing cap / bounded heuristic by the beam level so no-plan-loss is provable rather than measured. *(Behavioral.)*
 
 **Breaking-change posture:** all changes are intra-room `Plan`-producing behavior + in-flight `PlanningState` (seg-60) resets via the layer-name fingerprint (completed `Plan`s persist). No `Plan`-format break.
 
@@ -140,11 +132,11 @@ Fallback ladder: bunker square fits → tier 1; else stamps fit → tier 2; else
 
 ---
 
-## 9. Implemented — Phase 1 (2026-06-14)
+## 9. Phase 1 — the defence over-rejection fix and its supporting changes
 
-The UNDEFENDED investigation and the safe cleanups landed together; all on the bench corpus (shard3, `compare --limit 40`), all unit tests pass, warning-free.
+The UNDEFENDED root cause and the safe cleanups form one coupled change set; the evidence below is from the bench corpus (shard3, `compare --limit 40`).
 
-**Root cause of the 93% UNDEFENDED (identified, then fixed).** Instrumentation proved **100% of UNDEFENDED rejections had the min-cut routing through room-edge tiles** (3–40 per rejection). The flow network treated edge tiles as cuttable (capacity 1), so the cheapest cut "sealed" exits by ramparting the *exit tiles themselves* — unbuildable (no structure sits on the room border), so they were dropped on cut-extraction (`defense.rs` `!is_border()` filter), leaving seal gaps. The planner was **rejecting layouts that had a valid buildable interior seal**, just not the cheapest one.
+**Root cause of the 93% UNDEFENDED.** Instrumentation proved **100% of UNDEFENDED rejections had the min-cut routing through room-edge tiles** (3–40 per rejection). The flow network treated edge tiles as cuttable (capacity 1), so the cheapest cut "sealed" exits by ramparting the *exit tiles themselves* — unbuildable (no structure sits on the room border), so they were dropped on cut-extraction (`defense.rs` `!is_border()` filter), leaving seal gaps. The planner was **rejecting layouts that had a valid buildable interior seal**, just not the cheapest one.
 
 **Fix (`defense.rs`):** give room-edge tiles **infinite in→out capacity** (uncuttable), forcing the min-cut onto buildable interior tiles. Standard min-cut-for-Screeps practice. Now the computed cut is always buildable; defense rejects ~0% instead of 99%.
 
@@ -166,13 +158,13 @@ The UNDEFENDED investigation and the safe cleanups landed together; all on the b
 
 The defense fix is a **correctness** win (it was wrongly rejecting defendable layouts); the headline outcomes are far better worst-case latency, +8 recovered rooms, and uniformly better layouts.
 
-## 9a. Implemented — Phase 2: road network as a single Dijkstra tree (2026-06-14)
+## 9a. Phase 2 — road network as a single Dijkstra tree
 
 Phase 1 left the *total* CPU flat because the edge-fix made defense accept ~all candidates, so the expensive tail ran on every survivor. The first idea — "demote `road_network`/`road_prune`/`reachability` to the winner" — is **unsound**: `reachability` is a *rejection gate*, so if the winner fails it you have no plan and have discarded the runners-up. The better fix is to make those layers cheap and/or non-rejecting in place:
 
 **Road network → one hub shortest-path tree (`road_network.rs`).** Replaced the N independent per-destination A* searches with a **single Dijkstra from the hub** (same edge-cost model: existing-road 0, plain 10, swamp 60, container +100, slot +200, building impassable, −1 road-adjacency discount), then trace each destination back through parent pointers. Trunk-merging is automatic (a shortest-path tree shares edges near the root); early-terminates once all *reachable* targets are finalized. This eliminates the all-buildings pass's biggest waste — N **failed** full-room A* searches looking for impassable building goals (1022 ms → ~580 ms on W3S52), and is behaviour-preserving (impassable/unreachable destinations get no road, exactly as the old A* returned "no path"). **Corpus: 210.8 s → 168.7 s (now below the 203.9 s baseline), worst room 8.5 s → 6.46 s, quality unchanged (30 improved / 1 same / 1 negligible, 40/40 rooms).**
 
-**Reachability investigated, not changed (correctly).** Two hypotheses were tried and reverted: a reachability-aware min-cut (flip interior-disconnecting walls to ramparts) left rejections *exactly* unchanged — so they are **not** min-cut-wall-caused; and routing roads to building-adjacent tiles was inert. Instrumentation showed **~89 % of reachability rejections are placement issues** — 98/99 "unreachable" cases are the **Factory boxed in by `UtilityLayer`** (`place_near_hub` takes the first free tile with no access check), the rest are spawn-adjacent dead-end pockets. These rejections are **benign** (they don't reject the *best* plan and cause no room failures), and `reachability` is already cheap (~94 µs/candidate), so it stays per-candidate. The real remedy is a placement fix (reserve an access tile for the Factory/PowerSpawn, like the controller approach) — deferred as its own change.
+**Reachability investigated, not changed (correctly).** Two hypotheses were tried and reverted: a reachability-aware min-cut (flip interior-disconnecting walls to ramparts) left rejections *exactly* unchanged — so they are **not** min-cut-wall-caused; and routing roads to building-adjacent tiles was inert. Instrumentation showed **~89 % of reachability rejections are placement issues** — 98/99 "unreachable" cases are the **Factory boxed in by `UtilityLayer`** (`place_near_hub` takes the first free tile with no access check), the rest are spawn-adjacent dead-end pockets. These rejections are **benign** (they don't reject the *best* plan and cause no room failures), and `reachability` is already cheap (~94 µs/candidate), so it stays per-candidate. The real remedy is a placement fix (reserve an access tile for the Factory/PowerSpawn, exactly as the controller approach tile is reserved) — a separate change, described in §10.
 
 ### Cumulative result (baseline → Phase 2), clean single-threaded measure
 
@@ -186,19 +178,17 @@ The `compare` harness runs rooms in parallel (rayon), so its per-room durations 
 | W3S52 (open room) | 37 s / 0.727 | **3.6 s / 0.813** (≈10×, +0.086 score) |
 | Quality vs baseline | — | **30 improved, 1 same, 1 × −0.002** |
 
-10 files changed (+417/−188), **clippy-clean**, 24 tests pass. ~~Uncommitted, pending operator review.~~ **[2026-07-02] Committed and on master** — Phase 1 + Phase 2 are both live (the escalation ladder `ESCALATION_BEAMS` in `planner.rs:160` is the shipped realization of the "widen the beam if no plan is found" fallback this section flagged as a should-fix).
+**Correctness properties established by adversarial review of this change set.** The edge-fix can never make a defendable room undefendable (a finite interior cut always exists; `INF_CAP` never overflows); the admissible prune is a genuine upper bound (all scores ∈[0,1]; `total_score_weight` constant); the road Dijkstra is behaviour-preserving and deterministic; serde/wasm/fingerprint are neutral. Two heuristic caveats are *empirically* zero-plan-loss on the 40-room corpus but not *provably* safe — the anchor beam (top-16) and the `controller_infra` satisfice/4+3 cap could drop a pathological room whose only feasible anchor/placement ranks low; **D6** is the answer to that. The beam and the defence edge-fix are a **coupled** change set — top-K is unsafe *before* the edge-fix — and must therefore ship together.
 
-**Adversarial correctness review (6-agent workflow):** verdict GO after one must-fix (a clippy `needless_range_loop` in the edge-fix loop — fixed). Core changes verified **sound** — the edge-fix can never make a defendable room undefendable (a finite interior cut always exists; `INF_CAP` never overflows), the admissible prune is a genuine upper bound (all scores ∈[0,1]; `total_score_weight` constant), the road Dijkstra is behaviour-preserving and deterministic, and serde/wasm/fingerprint are neutral. Two **should-fix** heuristic caveats remain (empirically 0 plan-loss on 40 rooms, but not *provably* safe): the anchor beam (top-16) and `controller_infra` satisfice/4+3 cap could drop a pathological room whose only feasible anchor/placement ranks low — an **adaptive "widen the beam / lift the cap if no plan is found" fallback** would make the no-plan-loss gate provable. The reviewer also notes the beam and the defense edge-fix are a **coupled** change set (top-K was unsafe *before* the edge-fix) and must ship together.
+## 10. Further levers in this design
 
-## 10. Still outstanding (next phases)
-
-- **Placement-driven reachability rejections** — fix `UtilityLayer` Factory/PowerSpawn placement (reserve a hub-connected approach tile) and the spawn dead-end-pocket cases. Reduces wasted per-candidate work and recovers anchors currently rejected.
-- **`tower` (≈4 ms/call) and `defense` min-cut (≈0.9 ms/call)** are now the co-dominant per-candidate costs — candidates flow through them because nothing rejects early. Cheaper tower-coverage scoring and/or fewer candidates (tighter beam, or D1) are the next speed levers.
+- **Placement-driven reachability rejections.** `UtilityLayer` Factory/PowerSpawn placement must reserve a hub-connected approach tile (as the controller approach tile is reserved), and the spawn dead-end-pocket cases must be avoided at placement time. This removes wasted per-candidate work and recovers anchors that the reachability gate otherwise rejects.
+- **`tower` (≈4 ms/call) and `defense` min-cut (≈0.9 ms/call)** are the co-dominant per-candidate costs once the road pass is a single Dijkstra — candidates flow through them because nothing rejects early. Cheaper tower-coverage scoring and/or fewer candidates (tighter beam, or D1) are the remaining speed levers.
 - **D1 — bounded/stamped footprint** further shrinks the search and improves compactness.
-- **D5 — scorer quality fixes**: `UpkeepScoreLayer` weights are backwards (ramparts decay ~30× more but are weighted lowest); weight the min-cut toward chokepoints; add a filler-walk / extension-compactness score; retire the saturated `hub_quality`.
+- **D5 — scorer quality**: `UpkeepScoreLayer` weights are backwards (ramparts decay ~30× more but are weighted lowest); weight the min-cut toward chokepoints; add a filler-walk / extension-compactness score; retire the saturated `hub_quality`.
 
 ## Appendix — evidence artifacts
 
 - Per-layer timings, candidate counts, and defense rejection breakdown: §2 (reproduce with the bench build note + `RUST_LOG=screeps_foreman=debug`).
-- Prototype experiment results: §4 (all reverted; tree clean).
+- Prototype experiment results: §4 (all prototypes reverted).
 - Cited research brief (Overmind/Harabi/glitchassassin/TooAngel, min-cut/DT/beam, quality metrics): multi-agent research run, 19 agents, 35 findings, 14 adversarially verified, 2 refuted (including the "min-cut early" folklore).

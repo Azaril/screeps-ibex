@@ -1,6 +1,7 @@
 # ADR 0031a — Force-composition tunable parameter set (research note)
 
-- **Status:** Research note (input to ADR 0031 D16 `optimize_composition`)
+- **Status:** Research note
+- **Role:** input to ADR 0031 D16 `optimize_composition`
 - **Date:** 2026-06-27
 - **One line:** Maps a four-bot survey (Overmind, The-International, TooAngel, bonzAI/community meta) + Screeps combat-mechanics ground truth onto our `CompositionParams` knob set, recommends a concrete tournament-sweep parameter list with grounded ranges, and calls out the structural levers our current 7-knob design is missing.
 

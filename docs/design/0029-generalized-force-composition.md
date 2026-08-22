@@ -1,6 +1,6 @@
 # ADR 0029 — Generalized force composition (one oracle, custom only where it pays)
 
-- **Status:** Accepted (core landed) — the §7/D7 player-room raid follow-up **LANDED 2026-06-27** as the NEW `GatedPlayerRaid` doctrine (decision `8ce4643` / super `efa3336`), deployed. NB: it landed as a **separate doctrine** (`GatedPlayerRaid`/`RaidCreeps` — sized + gated, honors `None` → defer); the original `PlayerRaid`/`ClearCreeps` remains **always-field** (operator-intended split — see the doctrine.rs module doc)
+- **Status:** Decided
 - **Date:** 2026-06-27
 - **Extends:** [0026 §9](0026-*.md) (the doctrine registry), [0020 §12](0020-ev-adaptive-blob-combat.md) (the force-sizing oracle), [0028](0028-lifecycle-harness.md) (the lifecycle harness that proves it)
 - **Supersedes:** the `GarrisonDefense` solo/duo/quad bucket selection (the former `DefenseEscalation::from_threat`)
@@ -39,15 +39,15 @@ offense. After this:
 |---|---|---|---|---|
 | `NpcCore` | KillImmuneStructure | offense | **oracle** (`assess`) | size ranged kill-parts to core HP + tower drain |
 | `SiegeBreach` | DismantleStructure | offense | **oracle** (`assess`) | size dismantlers to the wall ring + heal to towers |
-| `PlayerRaid` | ClearCreeps | offense | **oracle** (`clear_force`) | size ranged+heal to out-power the room's creeps |
-| `GarrisonDefense` | ClearCreeps | **defense** | **oracle** (`clear_force`) ⟵ *was buckets* | size ranged+heal to out-power+out-heal the attacker |
+| `PlayerRaid` | ClearCreeps | offense | **oracle** (`clear_force`) | size ranged+heal to out-power the room's creeps; **always-field** (never defers) |
+| `GarrisonDefense` | ClearCreeps | **defense** | **oracle** (`clear_force`) | size ranged+heal to out-power+out-heal the attacker; continuous, no buckets |
 | `SkSuppression` | Suppress | sk | **custom kiting duo** | a *behavioral* mix (kite + out-heal one keeper); not a blob |
 | `HarassRemote` | Harass | offense | **fixed solo** | deny an *undefended* remote; one cheap creep, no fight to size |
-| `GatedPlayerRaid` *(added 2026-06-27, §7/D7 follow-up — `efa3336`)* | RaidCreeps | offense | **oracle** (`clear_force`), **gated** — honors `None` → DEFER | the sized+gated resource-denial raid; unlike `PlayerRaid` above (which is ALWAYS-FIELD, never defers), this one defers via the war.rs sizing gate |
+| `GatedPlayerRaid` (§7/D7) | RaidCreeps | offense | **oracle** (`clear_force`), **gated** — honors `None` → DEFER | the sized+gated resource-denial raid; unlike `PlayerRaid`, which is ALWAYS-FIELD, this one defers via the war.rs sizing gate |
 
-Three of six now size through the same `clear_force` path; two more through `assess`. Only **two** are
-non-oracle, and both for a defensible reason (§5). *(Counts describe the original six rows; the
-`GatedPlayerRaid` row landed later — do not conflate it with `PlayerRaid`, which stays always-field.)*
+Five of the seven size through the oracle (three via `clear_force`, two via `assess`). Only **two** are
+non-oracle, and both for a defensible reason (§5). `PlayerRaid` and `GatedPlayerRaid` are a deliberate split —
+do not conflate them: same sizing path, opposite gating discipline (see the `doctrine.rs` module doc).
 
 ## 4. The W9N8 root cause this fixes (the live bug)
 
@@ -62,15 +62,14 @@ on a `requested = 1` tick the lone slot-0 creep satisfied the rally gate, depart
 Compounding it, the defense scan passed `member_energy: 0`, so `sized_for` returned `None` and `GarrisonDefense`
 fell back to the **bare template** — the parts were never sized at all.
 
-**Fix (landed):**
+**The fix:**
 - `GarrisonDefense::plan` sizes a single `quad_ranged` base via `clear_force` → `sized_for` — **no buckets**. A
-  continuous size cannot straddle; the defender floors at the 4-member base (over-spend a trivial threat, the
+  continuous size cannot straddle; the defender floors at a small base (over-spend a trivial threat, the
   safe side — you can never under-defend an owned room) and grows monotonically. (`doctrine.rs`)
 - The defense scan passes `member_energy = ` the defended room's `energy_capacity_available()`, so the oracle
   actually sizes. (`war.rs`)
-- Test `garrison_defense_sizes_continuously_no_straddle` asserts the floor + monotonicity (replaces the bucket
-  test). The pre-existing rally-gate fix (count present ≥ requested, [[0028]]) tolerates any residual smooth
-  drift.
+- Test `garrison_defense_sizes_continuously_no_straddle` asserts the floor + monotonicity (it replaces the bucket
+  test). The rally-gate rule (count present ≥ requested, [[0028]]) tolerates any residual smooth drift.
 
 ## 5. When custom (non-oracle) composition is justified
 
@@ -84,7 +83,7 @@ warranted":
    (a gate), not "how big?" (a size). One cheap creep, fielded or not.
 3. **A measured optimal mix the blob model misses** — e.g. a tough-tanked dismantle wedge where the EV-optimal
    ratio of tough:work:heal isn't what `sized_for`'s per-role growth produces. **This is the part-auction's
-   domain (§8); none is in flight today.**
+   domain (§8).**
 
 Anything else — "this enemy is bigger/smaller", "this room has towers" — is a *sizing* question and belongs to
 the oracle, not a new template.
@@ -106,22 +105,21 @@ So: keep composition on the doctrine+oracle axis; keep the strategy layer for ta
 pick a *role mix* by strategy (e.g. "siege vs. raze this base"), that is a new *doctrine activator input*, not a
 move of sizing into the strategy layer.
 
-## 7. The SK and player-room fixes (landed this ADR)
+## 7. The SK and player-room fixes
 
 - **SK farm spawn contention (zero-SK-farm, live `W6N4 present=1/3`).** The SK objective was upserted at
   `OBJECTIVE_PRIORITY_LOW`, which `spawn_priority_for` maps to `SPAWN_MEDIUM` — *below* economy — so its forming
-  slots lost every spawn lane to CRITICAL miners / HIGH haulers and never completed the duo. Raised to
+  slots lost every spawn lane to CRITICAL miners / HIGH haulers and never completed the duo. It sits at
   `OBJECTIVE_PRIORITY_MEDIUM` → forming slots map to `SPAWN_HIGH` and win lanes; CRITICAL miners still out-rank
   it, so income is protected. (`sourcekeeperfarm.rs`)
-- **Player-room under-sizing (offense calibration, latent — not a reported live symptom).** `ResourceDenial`
-  mapped to `Harass` → `HarassRemote` (fixed solo, no gate), so a defended hostile *player* room was fed a doomed
-  lone harasser. **Landed (safe half):** only harass towerless rooms — a solo can deny an undefended remote but is
-  just fed to a tower. **Follow-up — LANDED + DEPLOYED (2026-06-27, decision `8ce4643` / super `efa3336`):**
-  `ResourceDenial` is routed through a NEW sized+gated doctrine, **`GatedPlayerRaid`** (DoctrineObjective
-  **`RaidCreeps`** — not `ClearCreeps`), populating `candidate.defense` so the winnability + ROI gate sizes a real
-  raid or DEFERS (the doctrine honors `None`); the towerless-solo band-aid was removed. *(As-built correction to
-  the text above: the original `PlayerRaid`/`ClearCreeps` was NOT made gated — it remains ALWAYS-FIELD by operator
-  intent; the gated behavior lives in the separate `GatedPlayerRaid`/`RaidCreeps` path.)*
+- **Player-room under-sizing (offense calibration).** `ResourceDenial` mapped to `Harass` → `HarassRemote` (fixed
+  solo, no gate), so a defended hostile *player* room was fed a doomed lone harasser — a solo can deny an
+  undefended remote but is just fed to a tower. `ResourceDenial` is therefore routed through the sized+gated
+  doctrine **`GatedPlayerRaid`** (DoctrineObjective **`RaidCreeps`**, not `ClearCreeps`), populating
+  `candidate.defense` so the winnability + ROI gate sizes a real raid or DEFERS (the doctrine honors `None`).
+  The towerless-solo band-aid is not part of the end state. Note the deliberate split: the original
+  `PlayerRaid`/`ClearCreeps` path is NOT gated — it remains **always-field** by operator intent; the gated
+  behavior lives only in the separate `GatedPlayerRaid`/`RaidCreeps` path.
 
 ## 8. The part-auction's place (task #28, future)
 
@@ -133,55 +131,50 @@ revisit the auction when a concrete objective demonstrably loses value to blob-o
 
 ## 9. Decisions
 
-- **D1.** Generalize `GarrisonDefense` onto the continuous oracle; delete the solo/duo/quad buckets. *(landed)*
+- **D1.** Generalize `GarrisonDefense` onto the continuous oracle; delete the solo/duo/quad buckets.
 - **D2.** Defense sizing budget from `quad_ranged` (sizes a strong threat) but FLOOR from `duo_attack_heal` (2) —
-  the floor is decoupled from the budget so a trivial threat doesn't over-spawn to 4. *(landed; the original
-  4-member floor over-loaded the spawn lanes — corrected in §11 FIX B)*
-- **D3.** Defense scan sizes to the defended room's spawn capacity, not 0. *(landed)*
-- **D4.** Composition stays on the doctrine+oracle axis; the strategy layer stays tactics. *(decision)*
-- **D5.** Custom templates only for behavioral mixes / no-fight / measured optimal mixes (§5); SkSuppression and
-  HarassRemote qualify, nothing else does today. *(decision)*
+  the floor is decoupled from the budget so a trivial threat doesn't over-spawn to 4. (A 4-member floor
+  over-loads the spawn lanes — §11 FIX B.)
+- **D3.** Defense scan sizes to the defended room's spawn capacity, not 0.
+- **D4.** Composition stays on the doctrine+oracle axis; the strategy layer stays tactics.
+- **D5.** Custom templates only for behavioral mixes / no-fight / measured optimal mixes (§5); `SkSuppression` and
+  `HarassRemote` qualify, nothing else does.
 - **D6.** SK objective → `OBJECTIVE_PRIORITY_MEDIUM` so it forms (SPAWN_HIGH) without starving CRITICAL economy.
-  *(landed)*
-- **D7.** ResourceDenial: only solo-harass towerless rooms now; route defended rooms through a sized+gated
-  raid as a reviewed follow-up. *(BOTH halves landed — the follow-up shipped 2026-06-27 as the new
-  `GatedPlayerRaid`/`RaidCreeps` doctrine, decision `8ce4643` / super `efa3336`, deployed; see §7.)*
-- **D8.** Defer the part-auction until a measured objective needs a non-blob mix. *(decision)*
+- **D7.** `ResourceDenial` routes through the sized+gated `GatedPlayerRaid`/`RaidCreeps` doctrine, not a fixed
+  solo harasser (§7).
+- **D8.** Defer the part-auction until a measured objective needs a non-blob mix.
 - **D9.** The rally-until-full gate is OFFENSE-only: defenders (`ObjectiveKind::Defend`) deploy immediately with
-  whatever has spawned (§11 FIX A). *(landed)*
-- **D10.** The `MAX_FORMING_SQUADS` pace counts only OFFENSE forming squads; defense is exempt (§11 FIX C). *(landed)*
+  whatever has spawned (§11 FIX A).
+- **D10.** The `MAX_FORMING_SQUADS` pace counts only OFFENSE forming squads; defense is exempt (§11 FIX C).
 - **D11.** Renew-while-forming is moot once defense deploys immediately + offense forming is paced (D9/D10); left in
-  place (harmless) but not relied on (§11 FIX D). *(decision)*
+  place (harmless) but not relied on (§11 FIX D).
 
-## 10. Remaining work
+## 10. The validation seam
 
-1. **Harness proof (§4):** a `run_defended_lifecycle` test ([[0028]]) — an oracle-sized force, *forming + moving*,
-   vs a *defended* core — to close the seam between `SizingWins` (oracle-sized, pre-placed, ~99%) and
-   `run_lifecycle` (formed, undefended). Discriminates "form/travel degrades a sized force" from "the live
-   under-sizing was the whole story".
-2. ~~**D7 follow-up:** the sized+gated raid routing for `ResourceDenial` (operator review — offense behavior).~~
-   **DONE — landed + deployed 2026-06-27** as the new `GatedPlayerRaid`/`RaidCreeps` doctrine (decision
-   `8ce4643` / super `efa3336`); `PlayerRaid` itself stays always-field (see §7).
-3. **Live re-soak (private server):** ✅ W9N8 oscillation fixed (stable 4-slot request) + renew fires — but the
-   re-soak EXPOSED the forming-completion wall (§11); FIX A/B/C landed + re-deployed, re-verifying.
+The evidence that closes §4 is a **defended** lifecycle scenario in the harness ([[0028]]): an oracle-sized force,
+*forming + moving*, against a *defended* core. It sits in the gap between `SizingWins` (oracle-sized, pre-placed,
+~99% win) and `run_lifecycle` (formed, undefended), and it is what discriminates the two competing explanations —
+"form/travel degrades a sized force" versus "the live under-sizing was the whole story". Any future claim about
+force composition adequacy has to be settled on that seam, not on either endpoint alone.
 
-## 11. Forming-completion under contention (the generalization's second-order effect — landed)
+## 11. Forming-completion under contention (the generalization's second-order effect)
 
-The §4 generalization fixed the W9N8 size oscillation, but the live re-soak then showed a NEW wall: four squads
-forming at once, every one stuck at N-1/4 forever, none departing (defenders never deploy, offense never attacks).
-A parallel investigation ranked the causes:
+The §4 generalization fixes the W9N8 size oscillation, but it exposes a second-order failure: four squads forming
+at once, every one stuck at N-1/4 forever, none departing (defenders never deploy, offense never attacks). The
+causes, ranked:
 
-- **#1 (dominant) — the rally-until-full gate was applied to DEFENSE.** `squad_ready_to_depart` holds a squad at
+- **#1 (dominant) — the rally-until-full gate applied to DEFENSE.** `squad_ready_to_depart` holds a squad at
   home until `present >= requested` — correct for an OFFENSE bloc crossing into a contested room, but WRONG for a
   defender of an owned room under attack: it sits at home massing a 4th member that contention never delivers while
   the room burns. The *direct, sufficient* cause of "stuck at N-1, never departs".
-- **#2 — the 4-member defense floor over-loaded the lanes.** §4's `quad_ranged` floor × N contested rooms ≈ 16
-  concurrent HIGH spawns saturate throughput, so the missing member never spawns (D2 was the original mistake).
+- **#2 — a 4-member defense floor over-loads the lanes.** A `quad_ranged` floor × N contested rooms ≈ 16
+  concurrent HIGH spawns saturate throughput, so the missing member never spawns (this is why D2 decouples the
+  floor from the budget).
 - **#3 — the forming cap gated new claims, not in-flight stock** (so concurrent forming was unbounded).
-- **#4 — renew was a *symptom*** (it needs a free spawn; under contention spawns are busy, so it can't fire — the
-  `ttl` declines despite the request).
+- **#4 — renew is a *symptom***: it needs a free spawn, and under contention spawns are busy, so it can't fire —
+  the `ttl` declines despite the request.
 
-**Fixes (landed), ordered by leverage:**
+**The fixes, ordered by leverage:**
 - **FIX A (D9) — rally gate objective-kind-aware:** defenders deploy immediately. *Subsumes the visible lockup + most
   of renew.* (`squad_manager.rs` `compute_squad_orders`)
 - **FIX B (D2) — decouple the defense floor from the budget:** quad budget (sizes a strong threat) + duo floor (no
@@ -189,6 +182,9 @@ A parallel investigation ranked the causes:
 - **FIX C (D10) — count only OFFENSE forming** toward `MAX_FORMING_SQUADS`: defense exempt; offense serializes at ≤2.
 - **FIX D (D11) — renew demoted:** A+B make it moot; left in place, harmless.
 
-**Recommended follow-up:** extend `run_forming` ([[0028]]) to model MULTI-squad lane contention (today it is
-single-squad) and prove A+B+C reproduce-then-fix the N-1 stall offline — the operator's tune-offline-not-live
-preference (the second-order analogue of §10 #1).
+The offline analogue of §10 applies here too: multi-squad lane contention belongs in `run_forming` ([[0028]],
+today single-squad), so that A+B+C are shown to reproduce-then-fix the N-1 stall in the harness rather than on the
+live server.
+
+## Landed
+- `8ce4643` (super `efa3336`) `GatedPlayerRaid`/`RaidCreeps` sized+gated resource-denial raid (2026-06-27)

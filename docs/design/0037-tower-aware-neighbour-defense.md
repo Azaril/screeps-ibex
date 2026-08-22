@@ -1,6 +1,7 @@
 # ADR 0037 — Tower-aware neighbour defense (suppress bare Secure + route towered rooms to offense)
 
-- **Status:** Accepted (2026-07-01) — **ALL THREE STAGES COMPLETE + DEPLOYED TO MMO.** Stages: **T1** (`tower_danger` signal, `ebfdd5a`); **T2** (suppress bare Secure + hardened count-quorum advance, `2c66423`); **T3** (route towered neighbours to the offense oracle, `cc168ff`). **MMO-safe: no new attack paths, only improved gating.** No WFV bump across all three (tower signal is an additive pure input; suppression + advance-gate are ephemeral; offense routing is objective-queue plumbing). **T1:** `tower_danger` signal on the neighbour observation (distinct from creep danger) + the neighbour-Secure log now prints `(dps, tower_dps, towers, adjacent)`. **T2:** (a) `neighbour_threats` drops a `danger==0 && tower_danger>0` neighbour (a non-attacking creep under towers isn't attacking us; real attackers + non-towered dismantlers still defended); (b) hardened the count-quorum anchor advance on `present_wins_or_stalls` (via `squad_is_gathered` — `count_quorum_advances = gather_quorum_met && present_wins_or_stalls`) so an unwinnable force never crosses a border into towers (no deadlock: vacuously-true no-intel mass still advances; latch preserved). **T3:** pure gate `towered_neighbour_offense_reason(has_core, hostile_owned, controllable_roi)` + a diagnostic routing seam — **verified structurally incapable of a new attack** (the seam only reads candidates + logs; worthwhile towered rooms are still produced ONLY by the existing EV+winnability+affordability-gated InvaderCore/ResourceDenial arms; the common dismantler-under-towers is ignored). decision 310 / agent 52(lib) / eval 106 / bot 220; clippy-wasm + build-wasm clean.
+- **Status:** Decided
+- **Date:** 2026-07-01
 - **One line:** A `Secure` objective fires for a towered adjacent room with `dps=0`, fields a bare
   floor-sized defender, and sends it toward the towered room — pointless (a floor squad can never beat
   towers) with a thin dangerous tail (the count-quorum anchor advance can step a bare body across the border
@@ -8,7 +9,7 @@
   neighbour threat tower-aware, suppress the bare defense reflex + harden the advance gate, and route a
   towered neighbour to the winnability-gated offense path.
 
-## 0. Problem (live, MMO shardX)
+## 0. Problem
 
 `[War] Secure objective for NEIGHBOUR threat room W13N56 prio=75 (dps=0, adjacent=true)` for a room that has
 **powered towers**. Root causes (traced):
@@ -35,34 +36,40 @@ winnability veto gates only the *fast-path*, **not the count-quorum anchor advan
 border into tower range for ~1 tick before the retreat gate flips it — an unhealed body can occasionally die.
 **LOW–MEDIUM severity: a resource/logic waste with a thin safety tail.**
 
-## 1. Fix — three stages (each sim-first, committed separately)
+## 1. Fix — three stages (each sim-first, landed separately)
 
-**Current state as of 2026-07-01: all three stages landed + deployed to MMO (T1 `ebfdd5a`, T2 `2c66423`, T3 `cc168ff`); no WFV bump was needed. The stage descriptions below are the as-designed intent, now realized.**
-
-### Stage T1 — Tower-aware neighbour threat signal (the enabling data) — **DONE (`ebfdd5a`)**
+### Stage T1 — Tower-aware neighbour threat signal (the enabling data)
 Expose the neighbour's hostile-tower DPS as a signal on the observation. The raw read (war.rs:449-459) already
 has the scouted `RoomData` for each neighbour; add its energized-tower count/DPS (reuse
 `tower_attack_damage_at_range` / `RoomThreatData.hostile_tower_positions`+`tower_energy`, the same signal
 offense uses) to `RawObservation`/`ObservedRoom` as a `tower_danger` (kept **distinct** from the creep
 `danger`, because a *defender* must not be sized to beat towers). Pure-kernel: a towered neighbour's
-observation carries the tower threat; a non-towered one carries 0. **No WFV bump** (additive pure input).
+observation carries the tower threat; a non-towered one carries 0. Additive pure input — no serialized shape.
+The neighbour-Secure log prints `(dps, tower_dps, towers, adjacent)` so the two danger channels stay legible.
 
-### Stage T2 — Suppress the bare defense reflex + harden the advance gate — **DONE (`2c66423`)**
+### Stage T2 — Suppress the bare defense reflex + harden the advance gate
 - **Suppress:** in `observe_neighbours`/`emit_defense`, do **not** emit a `Secure` for a neighbour whose only
   threat is a `danger=0` creep under hostile towers (a non-attacking creep sitting in a towered/hostile-owned
   room is not attacking *us*; it becomes a real threat only if it enters our room, which fires its own
-  owned-room Secure). Use the T1 tower signal to gate it.
+  owned-room Secure). Use the T1 tower signal to gate it. Real attackers and non-towered dismantlers are
+  still defended.
 - **Harden (general, closes the dangerous tail):** gate the **count-quorum anchor advance** on
-  `present_force_wins_or_stalls` the same way the fast-path is gated (squad_manager.rs:2392-2424), so **no**
-  unwinnable-sized force ever advances the anchor across a border into towers — not just this case. Scope so a
-  genuinely-winnable contested assault is unaffected. **No WFV bump** (ephemeral gates).
+  `present_force_wins_or_stalls` the same way the fast-path is gated (squad_manager.rs:2392-2424) — via
+  `squad_is_gathered`, `count_quorum_advances = gather_quorum_met && present_wins_or_stalls` — so **no**
+  unwinnable-sized force ever advances the anchor across a border into towers, not just this case. Scope so a
+  genuinely-winnable contested assault is unaffected, and so a vacuously-true no-intel mass still advances
+  (no deadlock); the latch is preserved. Ephemeral gates — no serialized shape.
 
-### Stage T3 — Route towered neighbours to the winnability-gated offense path — **DONE (`cc168ff`)**
+### Stage T3 — Route towered neighbours to the winnability-gated offense path
 A towered adjacent room that we might want to clear is a static **offense** problem, not a defense reflex.
 When the T1 signal shows towers, hand the room to the offense/winnability oracle (`military::force_sizing` /
 `RequiredForce`, which already computes energized-tower DPS + breach corridors, per ADR 0031/0035): **attack
-it sized-to-the-towers if winnable, ignore it if unwinnable** — instead of a bare defender. Pure/objective-queue
-plumbing, ephemeral. **No WFV bump.**
+it sized-to-the-towers if winnable, ignore it if unwinnable** — instead of a bare defender. The seam is a pure
+gate `towered_neighbour_offense_reason(has_core, hostile_owned, controllable_roi)` plus a diagnostic routing
+seam; it must remain **structurally incapable of opening a new attack path** — the seam only reads candidates
+and logs, and worthwhile towered rooms are still produced ONLY by the existing EV+winnability+affordability-
+gated InvaderCore/ResourceDenial arms (the common dismantler-under-towers is ignored). Objective-queue
+plumbing, ephemeral — no serialized shape.
 
 ## 2. Interactions & consequences
 - ADR 0034/0035 (engage cascade): T2's advance-gate hardening extends the winnability veto from the fast-path
@@ -72,9 +79,14 @@ plumbing, ephemeral. **No WFV bump.**
   path — a winnable towered neighbour is cleared by an appropriately-sized offense that razes its towers/core.
 - ADR 0027 (defense/objective lifecycle): T2 refines the neighbour-Secure emission gate; owned-room Secure is
   unchanged (a threat *in our room* still defends).
-- **WFV:** none across all three — **confirmed at implementation** (tower signal is an additive pure input;
-  suppression + advance-gate are ephemeral; offense routing is objective-queue plumbing).
+- **Serialized shape:** untouched across all three stages — the tower signal is an additive pure input;
+  suppression + advance-gate are ephemeral; offense routing is objective-queue plumbing.
 
 ## 3. Cross-references
 ADR 0027 (objective/defense lifecycle), 0031 (force-sizing/winnability oracle), 0034 (rally/convergence),
 0035 (engage cascade — uncontested/winnability/abandon), 0036 (structure targeting / raze).
+
+## Landed
+- `ebfdd5a` T1 — `tower_danger` signal on the neighbour observation (2026-07-01)
+- `2c66423` T2 — suppress bare Secure + count-quorum advance gate (2026-07-01)
+- `cc168ff` T3 — towered-neighbour offense routing seam (2026-07-01)

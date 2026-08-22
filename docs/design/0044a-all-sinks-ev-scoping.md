@@ -1,8 +1,10 @@
 # ADR 0044a — All-Sinks-EV: Scoping Document
 
-**Status:** Decision-ready (scoping). Synthesized from three independent investigation briefs and one adversarial code review (all claims below re-verified against the code at the cited file:line).
+- **Status:** Scoping note
 **Date:** 2026-07-06
 **Decision owner:** operator
+
+Synthesized from three independent investigation briefs and one adversarial code review (all claims below verified against the code at the cited file:line).
 
 ---
 
@@ -214,7 +216,7 @@ A3 is **narrow, not sweeping**. "All-sinks-EV" is a misnomer — only the contro
 1. **Phase 0 — Validate (sim only, no live edit).** Add the `a3_live_control: bool` control arm to `MarketArmCfg` (`market.rs:60-69`). Arm A reverts **both** defects (tier deposit bid via the `container_roles` role lookup **and** bypassed admission gate); Arm B is the current EV+admission default. Tournament on Family-C (benefit, both RCL populations) + Family-S (regression guard) in `tournament.rs`. **Decision gate:** proceed to live only if B beats A on the predeclared Family-C primary metric by at least the noise band, without Family-S regression beyond that band. A wash ⇒ ship Phase 2 (correctness) only, treat Phase 1 as cosmetic parity.
 2. **Phase 1 — Live repricing (Defect 1).** In `execute_demands` (`room_transfer.rs:367-380`), extend the `is_refill` EV branch to EV-price the controller container deposit via `buffer_deposit_bid(upgrade_bid(near_level_up), free, CONTAINER_CAPACITY)` through the existing numeric `TransferDepositRequest::new` path; delete the A8 "keep their tier for now" stub. Confirm no WFV bump (numeric path).
 3. **Phase 2 — Live admission parity (Defect 2, the correctness fix).** Wire `admit_use_withdraw`/`admit_repair` + `downgrade_veto` into the live consumer pickup / repair selection (`haulbehavior.rs:46`, `build.rs:64-80`), gating on the *raw* `upgrade_sink_bid`/`repair_bid` against the published floor (`transfersystem.rs:1637-1668`), mirroring `runner.rs:1376/1528/1598`. **Also gate the builder self-fetch pickup** (`build.rs:87-97, 137-146`, currently `TransferPriorityFlags::ALL` with no floor consult) so builders too shed under deficit. Keep it behavior-only — **confirm no serialized floor snapshot, hence no WFV bump.**
-4. **Phase 3 — Verify.** Private-server soak on a maxed room: confirm the idle-upgrader-beside-empty-container scenario resolves (near-empty container out-bids par storage when refill is satisfied *and* the leg distance permits; refill still wins under deep deficit; consumers shed under deficit; downgrade veto fires when the clock is below `downgrade_veto_q`). Then MMO on go-ahead per standing policy.
+4. **Phase 3 — Verify.** Private-server soak on a maxed room: confirm the idle-upgrader-beside-empty-container scenario resolves (near-empty container out-bids par storage when refill is satisfied *and* the leg distance permits; refill still wins under deep deficit; consumers shed under deficit; downgrade veto fires when the clock is below `downgrade_veto_q`).
 
 **Making build/repair true haul sinks (Architecture 2) is explicitly out of scope** and is a separate, much larger initiative that is not recommended. Their EV is represented spawn-side and (post-Phase-2) floor-gated on the withdraw.
 

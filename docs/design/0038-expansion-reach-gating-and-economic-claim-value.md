@@ -1,15 +1,10 @@
 # ADR 0038 — Expansion reach-gating + economic (net-ROI) claim value
 
-- **Status:** **Implemented + LIVE.** Committed master `cf5e8be` (2026-07-01); its reset shipped with the WFV-24 deploy and it has been live on MMO since. (Header corrected 2026-08-22 — it had read "MMO deploy pending operator go-ahead" long after the deploy happened.)
-  Operator-directed redesign of claim/expansion selection, decided this session: **combined one-pass** change
-  (unblock + value-unify together), **ADR-first**, WFV 22→23 reset approved. Landed: the pure
-  `claim_economics.rs` kernel (13 tests) + `RoomEconomyFacts::owned_colony`; `claim.rs` reach-gating + cadence +
-  kernel scorer + deterministic tie-break; `ClaimFeatures` config migration; `gather.rs` `frontier_truncated`
-  removal; `game_loop.rs` WFV 22→23. **Host: 233/233 green; wasm clippy: clean, zero warnings.** Committed at
-  `cf5e8be`; the pending loud reset is now **WFV 22→24** (v24 folds in REC-001 — two post-`cf5e8be` rover
-  `StuckState` shape changes; see the `game_loop.rs` history +
-  [`../reviews/reconciliation-2026-07-01.md`](../reviews/reconciliation-2026-07-01.md)). The MMO deploy itself
-  still awaits explicit operator go-ahead (one loud reset).
+- **Status:** Decided
+- **Date:** 2026-07-01
+- **Shape:** a **combined one-pass** redesign of claim/expansion selection — unblock (Part A) and
+  value-unify (Part B) together, rather than two sequenced changes; Part C is the posture refinement the
+  same model implies.
 - **One line:** The empire stops expanding because claim selection **hard-rejects every candidate below a
   distance-4 floor** and the last-resort escape hatch is gated on a search-radius ratchet that widens one hop
   per ~500-tick discover cycle (or never, when boxed in). Fix: gate claims **only on claimer reach**
@@ -24,13 +19,12 @@ Extends [ADR 0032](0032-ev-optimal-squad-assignment.md) (which built the pure `r
 **explicitly pre-committed** it to "a FUTURE expansion/claim-selection scorer" — `0032:17,79,82-83`;
 `room_economics.rs:16-18`). Interacts with [ADR 0017](0017-threat-aware-expansion-lifecycle.md) (the claim
 safety/lifecycle gate, unchanged) and [ADR 0014](0014-empire-strategy-and-posture.md) (the CPU room-cap,
-unchanged). The adaptive-radius/cannibalization machinery being removed here has **no governing ADR** — it
-shipped in `2e54f66` as a code-comment-only "Workstream B" (audited this session), so this is the first ADR to
-own claim *selection*.
+unchanged). The adaptive-radius/cannibalization machinery being removed here has **no governing ADR** — it arrived as a
+code-comment-only "Workstream B", so this is the first ADR to own claim *selection*.
 
 ---
 
-## 0. Problem statement (live MMO, 2026-07-01)
+## 0. Problem statement (observed on live MMO)
 
 The bot has GCL/CPU headroom (`available=3` room slots, `max_rooms=11`, `owned=8`, `at_capacity=false`,
 `cpu_healthy=true`) and **6 valid claim candidates**, yet creates **zero** claim missions, every discover
@@ -61,7 +55,7 @@ farther is ever claimed.
 
 ---
 
-## 1. Root-cause map (the stall) — verified against the tree 2026-07-01
+## 1. Root-cause map (the stall)
 
 | # | Mechanism | file:line |
 |---|---|---|
@@ -208,14 +202,14 @@ claim_value(R, d) = intrinsic_roi(R) · unlock_fraction(d) · support_decay(d) �
 | 1-source @ d=8 | ~8571 | **beats** the near cannibalizing 2-source @ d=2 (~8467) — sprawl intent, by ~1% (⇒ D8 tie-break is load-bearing) |
 | 0-source / no-controller | 0 | excluded by the **viable gate** (`claim.rs:147`) primarily; score-0 is defense-in-depth |
 
-### Part C — rapid-spread posture + cannibalization patience (D9, post-deploy 2026-07-01)
+### Part C — rapid-spread posture + cannibalization patience (D9)
 
-Live shardX feedback after the first deploy: the empire "still cannibalizes and does not sprawl enough — the
+Live shardX feedback: the empire "still cannibalizes and does not sprawl enough — the
 ability to rapidly spread is a survival trait." Diagnosis: the scoring already prefers far rooms and
 `max_score_delta` already blocks a much-worse close room *when a far one is scored* — so the residual
 cannibalization is the bot **spending a claim slot on an adjacent room while the farther rooms that would win
 are merely still being scouted** (they are not in the scored set at decision time), compounded by cautious
-throttles. Two fixes, both **config/logic only — no serialized change, no reset**:
+throttles. Two fixes, both **config/logic only — no serialized change**:
 
 - **D9a — Cannibalization patience (the anti-cannibalization guarantee).** A candidate at
   `distance < ring_separation_hops` (one that overlaps an existing colony's radius-1 remote ring) is committed
@@ -232,9 +226,9 @@ throttles. Two fixes, both **config/logic only — no serialized change, no rese
   new claims frequently on slow-tick MMO rather than idling for hours. All `#[serde(default)]` — tunable live
   via `Memory._features.claim` without a redeploy.
 
-> Note: the kit's `console`/`exec` require username auth and cannot reach the MMO **token** entry, so this
-> round was reasoned from the pipeline rather than a live shardX probe; the values above are a starting posture
-> and are expected to be tuned from live observation.
+> Note: the D9b values were reasoned from the pipeline rather than a live shardX probe (the kit's
+> `console`/`exec` require username auth and cannot reach the MMO **token** entry), so they are a starting
+> posture expected to be tuned from live observation.
 
 ---
 
@@ -323,18 +317,18 @@ nothing the kernel tests don't pin. In `claim_economics.rs`'s `mod tests`:
 13. `support_never_gates_at_reach_ceiling` — `value(1,d=max_claim_radius_hops()) > 0`.
 
 Part A (reach/cadence) is mechanical; guard it with a `run_select`-shaped unit test if practical, else rely on
-the existing pipeline + a live post-deploy watch (a boxed/dense empire must create a claim mission).
+the existing pipeline + a live watch (a boxed/dense empire must create a claim mission).
 
 ---
 
-## 6. WORLD_FORMAT_VERSION — **BUMP 22 → 23** (one loud reset)
+## 6. WORLD_FORMAT_VERSION — a serialized-shape change (one loud reset)
 
 `ClaimOperation` derives `ConvertSaveload` (`claim.rs:50`) and rides the positional bincode component stream;
 removing the serialized `current_search_radius: u32` and `frontier_truncated: bool` (D2) is a struct-shape
-change bincode cannot decode from an old payload ⇒ the version fingerprint is the only gate. Bump
-`WORLD_FORMAT_VERSION` at `game_loop.rs:672` **22 → 23**, add a `/// 23 = …` history line, and correct the WFV=6
-note (`game_loop.rs:595-597`) that describes the now-removed fields — a clean reset per the reset-anytime
-policy. **No bump** for: `ClaimFeatures` (`#[serde(default)]`, lives in `Memory._features`, not the world save);
+change bincode cannot decode from an old payload ⇒ the version fingerprint is the only gate. So this design
+requires a `WORLD_FORMAT_VERSION` bump (`game_loop.rs:672`) with a history line, and the stale WFV=6
+note (`game_loop.rs:595-597`) describing the now-removed fields is corrected — a clean reset per the
+reset-anytime policy. **No bump** for: `ClaimFeatures` (`#[serde(default)]`, lives in `Memory._features`, not the world save);
 the `claim_economics` scoring (per-cycle transient, like `EconomicIntel`/the EV matrix — `0032:108-109,242-243`);
 `gather.rs frontier_truncated` (transient scan struct); the `CandidateSubScores` viz reshape (not world-serialized).
 
@@ -367,10 +361,12 @@ the `claim_economics` scoring (per-cycle transient, like `EconomicIntel`/the EV 
 - [ADR 0018](0018-source-keeper-room-exploitation.md) — the SK net model `room_net_roi` generalises.
 - Kernel: `screeps-ibex/src/room_economics.rs` (`room_net_roi:151`, `reservable_remote:112`, `HoldModel:73`,
   `TILES_PER_ROOM:65`, engine consts `:31-65`).
-- Claim pipeline (verified 2026-07-01): `operations/claim.rs` — scoring `:155-262`, radius `:278-283`, floor/
+- Claim pipeline: `operations/claim.rs` — scoring `:155-262`, radius `:278-283`, floor/
   escape `:655-665`, skip `:769-778`, ratchet `:913-935`, feasibility gate `:868`, sort `:626`, viable gate `:147`.
 - Reach: `missions/utility.rs:91-103` (`is_claim_feasible`, `max_claim_radius_hops=11`). Remote ring:
   `operations/miningoutpost.rs:110` (radius 1). Config: `features.rs:382-496`. WFV: `game_loop.rs:595-597,672`.
 - war.rs adapter template: `operations/war.rs:1148-1188` (fact-gather + hops→tiles), `:1907-1956`
   (`economic_rank_score`, continuous-key discipline).
-```
+
+## Landed
+- `cf5e8be` reach-gating + `claim_economics` net-ROI claim value (Parts A/B) (2026-07-01)
