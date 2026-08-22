@@ -4,6 +4,12 @@ Architecture Decision Records (ADRs) for the rewrite's pillars, plus design note
 
 - New ADRs: copy `adr-template.md`, number sequentially (`NNNN-title.md`).
 - **Status lifecycle:** Proposed → Accepted → Superseded by NNNN.
+- **⚠ Do not trust an ADR's `Status:` header for implementation state.** A code-grounded pass on
+  2026-08-22 verified all 56 ADRs and found **29 stale headers** — several said "Proposed" for
+  systems long shipped, and several claimed deploy dates predating the only real deploy. The
+  verified state lives in [`../execution/implementation-tracker.md`](../execution/implementation-tracker.md)
+  §5–§6; ADRs remain authoritative for **design rationale**, not status. Fixing the headers is
+  tracked there as CHORE-1.
 - The five seed ADRs below are **Proposed stubs**, pre-filled with the current approach, the pain, and candidate alternatives drawn from the review prompt. Fill in **Decision / Consequences / Migration Path** after the review.
 
 | ADR | Pillar | Drives | Status |
