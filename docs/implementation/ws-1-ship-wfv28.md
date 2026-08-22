@@ -7,7 +7,7 @@
 **Blocked on one elevated command, waiting on the operator being at the machine (expected
 2026-08-23).**
 
-`master` (`6844e3c`+, WFV 28) has never executed against any world. The private soak is the next
+`master` (WFV 28) has never executed against any world. The private soak is the next
 step and cannot start because `com.docker.service` is Stopped/Manual and starting it needs
 Administrator.
 

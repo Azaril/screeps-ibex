@@ -51,7 +51,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 **State: BLOCKED on tooling (see §2). Nothing else should start.**
 
-`master` (`2506b58`, WFV 28) carries ADR 0046 plus the expansion fixes and has **never run against
+`master` (WFV 28) carries ADR 0046 plus the expansion fixes and has **never run against
 any world**. This is the only genuinely half-finished thing in the project — everything else is
 either shipped or not started.
 
@@ -106,10 +106,10 @@ Each is one workstream. Do not begin one while §1 is occupied.
 |---|---|---|---|
 | Live MMO (shardX) | `ab692bd` + decision `f6c084a` | 27 | 2026-07-28 |
 | Docker private | same | 27 | 2026-07-28 |
-| `master` | `2506b58` | **28 — never executed anywhere** | 2026-08-22 |
+| `master` | HEAD (WFV-anchored; do not pin a SHA here — it drifts every commit) | **28 — never executed anywhere** | since 2026-08-22 |
 
 **Anything committed after `ab692bd` is undeployed.** Use this as the test when an ADR claims a
-deploy — several claim deploy dates that predate the only real one (see CHORE-1).
+deploy — pre-split ADRs claimed deploy dates predating the only real one (fixed by the doc split).
 `wfv27-deployable-e857c76` is the last no-reset point. Live MMO baseline 2026-08-22: 7 rooms,
 GCL 12, CPU 18.5/140, bucket 10000 flat.
 
@@ -125,7 +125,8 @@ bundle) · **On master** (merged, undeployed) · **Partial** · **Design-only** 
 **Live** — `0002 0004 0005 0008 0017 0019 0024 0025 0027 0029 0031 0031b 0032 0034 0035 0036 0038 0040 0042 0044 0044a`
 **Host-only** — `0006 0023 0023a 0025a 0026 0026a 0033`
 **On master, undeployed** — `0046`
-**Partial** — `0003 0007 0008a 0009 0009a 0009b 0011 0012 0018 0020 0021 0022 0028 0030 0031a 0037 0039 0043`
+**Partial** — `0003 0007 0008a 0009 0009a 0009b 0011 0012 0018 0020 0021 0028 0030 0031a 0037 0039 0043`
+**Superseded** — `0022` (by 0027; its P-AUCTION residue is owned by 0020/0031, and its P-OBJ asks were superseded by 0027's observed-success model — no open work of its own)
 **Design-only, zero code** — `0010 0013 0014 0015 0016 0041 0045`
 
 Open work for these is in §6 and §7. An ADR absent from both is Closed.
@@ -134,14 +135,13 @@ Open work for these is in §6 and §7. An ADR absent from both is Closed.
 
 ## 6. Open work by owning ADR
 
-One line per item. Header-drift is **not** listed here — that is CHORE-1.
+One line per item.
 
 **Combat**
 - `0008` — S1/S2 synchronized spawning unbuilt; W2 supervisor trim + W4 `WarDecl` posture outstanding; O5 power-bank + heavy multi-squad assault deferred.
 - `0008a` — Tier 0 T-HEAL-3 unbuilt (`project_enemy` hard-codes `hits: 0`); T-DEF-1 cover term, T-DEF-5 predictive safe-mode, T-POS-5 exit-tile cost all unbuilt; Tier 3 untouched.
 - `0019` — S4-TUNE weight sweep flat on melee beds; boosted-TOUGH conversion blocked on 0041.
 - `0020` — S5 blob role auction + R7 currency, S6 adaptivity, S7 adversarial room-gen: zero code. **S5-CAP: `MAX_CONCURRENT_SQUADS` still hardcoded 4** (`squad_manager.rs:211`).
-- `0022` — P-AUCTION and P-OBJ largely unbuilt; sequencing overtaken by 0026/0027/0031/0032/0034–0037. See RULING-4.
 - `0026` — L6c doctrine weights untuned; L8 coordination keyed on `TargetSource` not observed bodies.
 - `0026a` — six deferred modes unbuilt; the nine activator signals still uncomputed.
 - `0027` — `Farm{Core}` and `Farm{PowerBank}` inert, no producer; salvage teardown still mission-owned.
@@ -177,7 +177,7 @@ One line per item. Header-drift is **not** listed here — that is CHORE-1.
 **Platform / tooling**
 - `0004` — governor thresholds still flagged INITIAL, pending pressure-scenario calibration.
 - `0005` — an aborted tick loses its serialize and rolls back one tick (divergence from the ADR's goal; loudly accounted, not fixed).
-- `0006` — server-harness combat scenarios absent (`Fault` enum is only CpuBurn/GlobalReset/PanicOnce).
+- `0006` — server-harness combat scenarios absent (`Fault` enum is only CpuBurn/GlobalReset/PanicOnce); **H5 sim-vs-server parity oracle** (golden vectors + nightly gate — reassigned here from 0008/0028, see UNOWNED-2; blocked on B-1).
 - `0013` / `0014` / `0015` / `0016` / `0045` — design-only. 0015 (testkit + seam registry) and 0016 (HUD) were marked "in scope" by the ultracode completion kickoff, a program that has driven nothing since 2026-07-02 (see RULING-5).
 - `0023` / `0023a` — S5 border scenarios deferred; cross-room `Flee` still single-room; no MultiRoom generator.
 - `0025` / `0025a` — `action_oscillation_rate` metric never implemented; residual 15–20% objects reading as wall unexplained.
@@ -189,8 +189,9 @@ One line per item. Header-drift is **not** listed here — that is CHORE-1.
 ## 7. Cross-cutting work with no ADR owner
 
 - **UNOWNED-1 · Ship WFV 28.** No ADR owns "soak and deploy". Owned here as **WS-1**.
-- **UNOWNED-2 · H5 sim-vs-server parity oracle.** ADR 0008 says 0028 tracks it; 0028 does not. No
-  `parity.rs`, no golden vectors, no nightly gate. Blocked on B-1. **Assign to ADR 0006.**
+- **UNOWNED-2 · H5 sim-vs-server parity oracle — assigned to ADR 0006** (2026-08-22; 0008 had
+  mis-routed it to 0028). No `parity.rs`, no golden vectors, no nightly gate. Blocked on B-1.
+  Listed under 0006 in §6.
 - **UNOWNED-3 · `#![allow(dead_code)]` at `lib.rs:2`** silences the compiler for the whole bot and
   is why §8 accumulated invisibly. Remove it and fix or annotate the fallout.
 - **UNOWNED-4 · `remote_mine.search_radius` still defaults to `1`** (`features.rs:209`) — the
@@ -237,7 +238,7 @@ Recorded because the corpus contradicted itself and a future reader would otherw
 - **RULING-1 · Minted `SquadId`/`SquadStore` (I1/I2) will NOT be built.** `EntityOption<Entity>` +
   `repair_entity_integrity` is the end state (ADR 0001, REC-009b). Three sources disagreed
   (0008 listed it open, 0020 said "dropped per 0022 D1", plan §3 and phase-2 CP-I list it blocking).
-  ⇒ **CP-I is retired, not pending.** Amend 0008 and plan §3 as part of CHORE-1.
+  ⇒ **CP-I is retired, not pending.** 0008 was retargeted to the marker-converted `squad_entity` in the 2026-08-22 doc split; plan §3 is historical.
 - **RULING-2 · "Live" means "in the deployed wasm artifact."** Offline harnesses are **Host-only**,
   a separate state. Previously both were called Live, making "is it live?" unanswerable.
 - **RULING-3 · D27 is closed AND created dead code.** Both facts stand; ADR 0037 owns the cleanup.
