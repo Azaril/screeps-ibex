@@ -1,6 +1,6 @@
 # Combat Tier −1 Wave B — implementation
 
-**Workstream:** WS-2 · **Advances:** ADR 0008a, ADR 0037, [combat review 2026-07-09](../reviews/combat-systems-review-2026-07-09.md) · **Status:** parked
+**Workstream:** WS-2 · **Advances:** ADR 0008a, ADR 0037, [combat review 2026-07-09](../reviews/combat-systems-review-2026-07-09.md) · **Status:** active
 
 ## Resume point
 
@@ -22,13 +22,13 @@ plus the residual D28 that Wave A's own verification surfaced.
 
 Grouped so each group can soak as one increment. **No WFV bump on any of these.**
 
-- [ ] **Safe-mode pair** — protects an irreversible resource, two-line class fixes
-  - [ ] **D2** — `CRITICAL_STRUCTURE_MIN_HITS = 5000` (`safe_mode.rs:19`) equals spawn max hits, so any spawn scratch arms the trigger
-  - [ ] **D3** — the `activated` latch (`safe_mode.rs:41,217`) is permanent and has no reset path, so a room auto-safe-modes at most once ever
-- [ ] **Roster-churn cluster** — breaks the casualty cycle every fight exercises
-  - [ ] **D4** — mid-fight slot refill re-anchors an engaged skirmish squad, disabling kiting for the whole replacement window
-  - [ ] **D5** — formation layout only ever shrinks (`squad.rs:831`, `living_count < slot_count`), so a refilled seat resolves to offset `(0,0)` — a phantom seat stacked on the anchor
-  - [ ] **D6** — Phase C counts engaged, battle-damaged squads as "forming", silently turning `MAX_FORMING_SQUADS` into an offense-concurrency reducer
+- [x] **Safe-mode pair** (`8fa0c60`) — protects an irreversible resource, two-line class fixes
+  - [x] **D2** — `CRITICAL_STRUCTURE_MIN_HITS = 5000` (`safe_mode.rs:19`) equals spawn max hits, so any spawn scratch arms the trigger
+  - [x] **D3** — the `activated` latch (`safe_mode.rs:41,217`) is permanent and has no reset path, so a room auto-safe-modes at most once ever
+- [x] **Roster-churn cluster** (`be5ce24`) — breaks the casualty cycle every fight exercises
+  - [x] **D4** — mid-fight slot refill re-anchors an engaged skirmish squad, disabling kiting for the whole replacement window
+  - [x] **D5** — formation layout only ever shrinks (`squad.rs:831`, `living_count < slot_count`), so a refilled seat resolves to offset `(0,0)` — a phantom seat stacked on the anchor
+  - [x] **D6** — Phase C counts engaged, battle-damaged squads as "forming", silently turning `MAX_FORMING_SQUADS` into an offense-concurrency reducer
 - [ ] **Live-adapter gaps** — the sim believes these work; the bot never got them
   - [ ] **D9** — the engaged stuck-threshold ladder was never wired into the live bot (zero `stuck_thresholds` hits in `screeps-ibex/src`)
   - [ ] **D10** — rover discards incomplete flee results (`screeps-rover/src/movementsystem.rs:1678`), so retreating creeps freeze under a swarm

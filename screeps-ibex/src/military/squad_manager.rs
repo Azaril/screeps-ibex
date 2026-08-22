@@ -1987,6 +1987,17 @@ impl<'a> System<'a> for SquadManagerSystem {
             // P-OBJ #23 / ADR 0027: the pure reconcile kernel decides retire-vs-keep (unit-tested offline
             // in `screeps_combat_decision::lifecycle`). The manager only builds the snapshot and applies the
             // action — single source of truth, shared with the offline lifecycle harness (no drift).
+            // D28 (combat review §7.2a): the vacuous-clear evidence — the objective's room is
+            // LIVE-visible this tick AND its (fresh, same-tick) DTO shows zero hostile creeps. The
+            // `game::rooms()` gate is load-bearing: a CACHED-empty DTO must never count (R10 — the
+            // vacuous-intel class), so no visibility ⇒ false, never "assume clear".
+            let vacuous_clear = squad_room
+                .filter(|room| game::rooms().get(*room).is_some())
+                .and_then(|room| data.mapping.get_room(&room))
+                .and_then(|e| data.room_data.get(e))
+                .and_then(|rd| rd.get_creeps())
+                .map(|c| c.hostile().is_empty())
+                .unwrap_or(false);
             let snapshot = lifecycle::ReconcileSnapshot {
                 objective_gone,
                 duplicate: covered.contains(&obj_id),
@@ -1995,6 +2006,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 wiped,
                 has_focus,
                 engaged_once,
+                vacuous_clear,
                 in_target_room,
                 has_members,
                 forming,
