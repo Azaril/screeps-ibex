@@ -36,9 +36,9 @@ Grouped so each group can soak as one increment. **No WFV bump on any of these.*
   - [x] **D4** — mid-fight slot refill re-anchors an engaged skirmish squad, disabling kiting for the whole replacement window
   - [x] **D5** — formation layout only ever shrinks (`squad.rs:831`, `living_count < slot_count`), so a refilled seat resolves to offset `(0,0)` — a phantom seat stacked on the anchor
   - [x] **D6** — Phase C counts engaged, battle-damaged squads as "forming", silently turning `MAX_FORMING_SQUADS` into an offense-concurrency reducer
-- [ ] **Live-adapter gaps** — the sim believes these work; the bot never got them
-  - [ ] **D9** — the engaged stuck-threshold ladder was never wired into the live bot (zero `stuck_thresholds` hits in `screeps-ibex/src`)
-  - [ ] **D10** — rover discards incomplete flee results (`screeps-rover/src/movementsystem.rs:1678`), so retreating creeps freeze under a swarm
+- [x] **Live-adapter gaps** (`1a85a57`) — the sim believes these work; the bot never got them
+  - [x] **D9** (`1a85a57`) — the engaged stuck-threshold ladder was never wired into the live bot (zero `stuck_thresholds` hits in `screeps-ibex/src`)
+  - [x] **D10** (rover `850a06b`) — rover discards incomplete flee results (`screeps-rover/src/movementsystem.rs:1678`), so retreating creeps freeze under a swarm
 - [x] **D28** (`b26eba4`) — an uncontested `Secure` over a hostile-free room can never reach `Resolved`: the terminal requires `engaged_once`, which latches only in-room *with* a focus, and an empty room offers no focus. Let `resolved` fire for an uncontested objective with in-room members, live visibility and zero hostiles.
 - [ ] Decide the fate of the **T1/T2 neighbour kernels** orphaned by Wave A's D27 (`war_decision.rs:182,327` have no non-test callers; `war.rs:531` passes `tower_danger: 0.0`) — wire or delete. Owned by ADR 0037.
 
