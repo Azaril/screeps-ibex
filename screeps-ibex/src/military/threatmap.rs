@@ -26,6 +26,12 @@ pub struct HostileCreepInfo {
     pub work_parts: u32,
     /// Whether any body part is boosted.
     pub boosted: bool,
+    /// T-HEAL-3a: the boost-adjusted effective HP pool ([`effective_hits`]). `serde(default)` —
+    /// the FIRST additive field shipped under ADR 0047's tolerant stream (no WFV bump): pre-field
+    /// payloads decode as 0 and consumers fall back to raw `hits` via `effective_hits.max(hits)`
+    /// until the next threat scan repopulates (visible rooms rescan every tick).
+    #[serde(default)]
+    pub effective_hits: u32,
 }
 
 /// Information about an incoming nuke.
@@ -183,12 +189,21 @@ pub fn analyze_hostile_creep(creep: &Creep) -> HostileCreepInfo {
         }
     }
 
+    // Raw HP currently sitting in living TOUGH parts (each part's remaining hits) —
+    // the un-boosted portion `effective_hits` replaces with the boost-adjusted pool.
+    let raw_tough_hits: u32 = body
+        .iter()
+        .filter(|p| p.part() == Part::Tough)
+        .map(|p| p.hits())
+        .sum();
+
     let owner = creep.owner().username();
+    let hits = creep.hits();
 
     HostileCreepInfo {
         position: creep.pos(),
         owner,
-        hits: creep.hits(),
+        hits,
         hits_max: creep.hits_max(),
         melee_dps,
         ranged_dps,
@@ -196,7 +211,44 @@ pub fn analyze_hostile_creep(creep: &Creep) -> HostileCreepInfo {
         tough_hp,
         work_parts,
         boosted,
+        effective_hits: effective_hits(hits, raw_tough_hits, tough_hp),
     }
+}
+
+/// T-HEAL-3a (review D-item, 0008a Tier 0 #1): the creep's EFFECTIVE HP pool — raw hits with the
+/// TOUGH portion replaced by its boost-adjusted equivalent (a T3-boosted TOUGH part soaks ~333
+/// damage, not 100). This is the `hits` the kill-time / killability math must divide by; feeding
+/// it raw `hits` under-prices boosted tanks 3×, and feeding it `0` (the old `project_enemy`
+/// hard-code) priced every enemy as dying instantly. Pure for the pin.
+pub fn effective_hits(hits: u32, raw_tough_hits: u32, effective_tough_hp: f32) -> u32 {
+    hits.saturating_sub(raw_tough_hits) + effective_tough_hp.max(0.0) as u32
+}
+
+/// T-HEAL-3a (review D-item, 0008a Tier 0 #1): the room's SUSTAIN heal, counting only heal that
+/// can actually REACH the fighting force — a healer contributes full output within adjacent range
+/// (≤1) of any damage-dealer (itself included: a self-healing fighter sustains itself), one third
+/// (the ranged-heal ratio) at range 2–3, and NOTHING beyond. The old fold summed every hostile's
+/// heal unconditionally, so a healer parked across the room suppressed our commit gates exactly
+/// as if it stood in the fight (the review's distant-healer scenario). Mirrors the engaged-side
+/// `heal_reaching` kernel's range ladder (combat-decision lib.rs). Pure for the pins.
+pub fn reachable_estimated_heal(creeps: &[HostileCreepInfo]) -> f32 {
+    let fighters: Vec<Position> = creeps
+        .iter()
+        .filter(|c| c.melee_dps + c.ranged_dps > 0.0)
+        .map(|c| c.position)
+        .collect();
+    creeps
+        .iter()
+        .filter(|c| c.heal_per_tick > 0.0)
+        .map(|c| {
+            let min_range = fighters.iter().map(|f| c.position.get_range_to(*f)).min().unwrap_or(u32::MAX);
+            match min_range {
+                0..=1 => c.heal_per_tick,
+                2..=3 => c.heal_per_tick / 3.0,
+                _ => 0.0,
+            }
+        })
+        .sum()
 }
 
 /// Classify the threat level of a set of hostile creeps.
@@ -319,7 +371,6 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
                 for hostile in creeps.hostile() {
                     let info = analyze_hostile_creep(hostile);
                     estimated_attack_dps += info.melee_dps + info.ranged_dps;
-                    estimated_heal += info.heal_per_tick;
                     // Defenders repair the breach target (e.g. invader-stronghold creeps repairing
                     // ramparts). Conservative proxy: all hostile WORK repairs at REPAIR_POWER/part
                     // (over-estimating repair makes the breach oracle defer rather than feed a losing
@@ -329,6 +380,11 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
                     hostile_creep_infos.push(info);
                 }
             }
+
+            // T-HEAL-3a: sustain heal counts only heal that can REACH the fighting force —
+            // the pure kernel replaces the old sum-everything fold (a healer parked across
+            // the room no longer suppresses commit gates). See `reachable_estimated_heal`.
+            estimated_heal = reachable_estimated_heal(&hostile_creep_infos);
 
             // Gather hostile tower positions + energy from structures (ADR 0020 §12.2: a drained tower
             // deals no damage, so the force oracle needs per-tower energy, not just positions).
@@ -488,7 +544,58 @@ mod tests {
             tough_hp: 0.0,
             work_parts: 0,
             boosted,
+            effective_hits: 1000,
         }
+    }
+
+    /// A hostile at an explicit position (the reachable-heal pins need geometry).
+    fn hostile_at(x: u8, y: u8, dps: f32, heal: f32) -> HostileCreepInfo {
+        let mut h = hostile("p", dps, 0.0, heal, false);
+        h.position = Position::new(
+            RoomCoordinate::new(x).expect("x"),
+            RoomCoordinate::new(y).expect("y"),
+            "E0N0".parse().expect("room"),
+        );
+        h
+    }
+
+    /// T-HEAL-3a pin: sustain heal counts ONLY heal that can reach the fighting force.
+    /// The old fold summed every hostile's heal, so a healer parked across the room
+    /// suppressed commit gates exactly as if it stood in the fight.
+    #[test]
+    fn distant_healers_do_not_count_toward_sustain() {
+        let fighter = hostile_at(25, 25, 30.0, 0.0);
+        let adjacent_healer = hostile_at(26, 25, 0.0, 36.0);
+        let rim_healer = hostile_at(28, 25, 0.0, 36.0); // range 3
+        let distant_healer = hostile_at(45, 25, 0.0, 36.0); // range 20
+        let all = vec![fighter, adjacent_healer, rim_healer, distant_healer];
+        let sustain = reachable_estimated_heal(&all);
+        // adjacent full (36) + rim ranged-third (12) + distant NOTHING = 48, not 108.
+        assert!((sustain - 48.0).abs() < 0.01, "expected 48, got {sustain}");
+    }
+
+    /// T-HEAL-3a pin: a self-healing FIGHTER sustains itself (distance 0 to itself),
+    /// and a lone healer with no fighters anywhere contributes nothing.
+    #[test]
+    fn self_heal_counts_and_healers_without_fighters_do_not() {
+        let solo_fighter_healer = vec![hostile_at(25, 25, 30.0, 24.0)];
+        assert!((reachable_estimated_heal(&solo_fighter_healer) - 24.0).abs() < 0.01);
+        let lone_healers = vec![hostile_at(25, 25, 0.0, 36.0), hostile_at(26, 25, 0.0, 36.0)];
+        assert!(reachable_estimated_heal(&lone_healers).abs() < 0.01, "no fighters => no sustain");
+    }
+
+    /// T-HEAL-3a pin: effective hits replaces the raw TOUGH portion with its boost-adjusted
+    /// pool. The old project_enemy hard-coded 0 - every enemy priced as dying instantly.
+    #[test]
+    fn effective_hits_swaps_raw_tough_for_the_boosted_pool() {
+        // 10-part creep, 1000 hits, 2 boosted TOUGH (200 raw -> ~666 effective).
+        assert_eq!(effective_hits(1000, 200, 2.0 * (100.0 / 0.3)), 1000 - 200 + 666);
+        // Unboosted TOUGH: effective == raw, identity.
+        assert_eq!(effective_hits(1000, 200, 200.0), 1000);
+        // No TOUGH at all: identity.
+        assert_eq!(effective_hits(500, 0, 0.0), 500);
+        // Damaged TOUGH (raw > pool bookkeeping edge) never underflows.
+        assert_eq!(effective_hits(100, 200, 0.0), 0);
     }
 
     #[test]

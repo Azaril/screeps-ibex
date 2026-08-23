@@ -2251,6 +2251,7 @@ mod tests {
             ),
             owner: "somePlayer".to_string(),
             hits,
+            effective_hits: hits,
             hits_max: hits,
             melee_dps,
             ranged_dps,

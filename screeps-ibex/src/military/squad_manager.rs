@@ -886,15 +886,18 @@ fn project_defense(threat: Option<&crate::military::threatmap::RoomThreatData>) 
 
 /// Build the hostile CREEP `EnemyForce` the EV P(win) is judged against, from the room's scouted threat —
 /// the `enemy` arg `pairing_p_win` actually reads (parity with war.rs's owned-defense path, war.rs ~486-492).
-/// `dps`/`heal` are the threat totals; `hits = 0` (this prices the attrition the squad takes, NOT a structure
-/// objective to kill — the structure/breach cost is on `DefenseProfile`); `count`/`boosted` come from the
-/// per-creep intel. `None` intel ⇒ no enemy (`None`), the genuinely-undefended case.
+/// `dps`/`heal` are the threat totals; `hits` is the enemy's boost-adjusted EFFECTIVE HP pool
+/// (T-HEAL-3a — the old hard-coded `0` priced every enemy as dying instantly, so the kill-time /
+/// anti-creep sizing math (`structure_defense_kill_dps`) was over-optimistic against exactly the
+/// defended targets that matter; `effective_hits.max(hits)` falls back to raw hits for pre-field
+/// decoded intel until the next scan). `count`/`boosted` come from the per-creep intel.
+/// `None` intel ⇒ no enemy (`None`), the genuinely-undefended case.
 fn project_enemy(threat: Option<&crate::military::threatmap::RoomThreatData>) -> Option<EnemyForce> {
     let td = threat?;
     Some(EnemyForce {
         dps: td.estimated_attack_dps,
         heal: td.estimated_heal,
-        hits: 0,
+        hits: td.hostile_creeps.iter().map(|c| c.effective_hits.max(c.hits)).sum(),
         count: td.hostile_creeps.len() as u32,
         boosted: td.hostile_creeps.iter().any(|c| c.boosted),
     })
@@ -4423,6 +4426,7 @@ mod tests {
             position: Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), r),
             owner: "enemy".to_string(),
             hits: 2_000,
+            effective_hits: 2_000,
             hits_max: 2_000,
             melee_dps: 240.0,
             ranged_dps: 0.0,
