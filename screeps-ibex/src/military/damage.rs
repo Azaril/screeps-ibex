@@ -30,12 +30,14 @@ pub fn total_tower_damage(tower_positions: &[Position], target_pos: Position) ->
 
 /// Calculate net damage (tower damage minus enemy healing) for a target.
 /// Returns positive if towers can overcome healing, negative if not.
+#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
 pub fn net_tower_damage(tower_positions: &[Position], target_pos: Position, enemy_heal_per_tick: f32) -> f32 {
     total_tower_damage(tower_positions, target_pos) - enemy_heal_per_tick
 }
 
 /// Determine if towers should fire at a target, considering the enemy's healing capability.
 /// Only fire if net damage is positive (we can actually hurt them).
+#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
 pub fn should_towers_fire(tower_positions: &[Position], target_pos: Position, enemy_heal_per_tick: f32) -> bool {
     net_tower_damage(tower_positions, target_pos, enemy_heal_per_tick) > 0.0
 }
@@ -61,6 +63,7 @@ pub fn is_likely_tower_drain(target_pos: Position, target_heal_per_tick: f32, to
 /// Estimate how many ticks it would take for towers to kill a creep,
 /// given the creep's total HP, healing, and the tower damage at its position.
 /// Returns `None` if towers cannot overcome healing.
+#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
 pub fn estimated_ticks_to_kill(
     tower_positions: &[Position],
     target_pos: Position,
@@ -75,6 +78,7 @@ pub fn estimated_ticks_to_kill(
 }
 
 /// Calculate the range between two positions, handling same-room only.
+#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
 pub fn range_between(a: Position, b: Position) -> u32 {
     a.get_range_to(b)
 }
@@ -91,11 +95,13 @@ pub fn range_between(a: Position, b: Position) -> u32 {
 /// we size a defender to full capacity (rather than holding for refill). Keeps a
 /// capable room on a momentary energy dip from emitting an under-strength creep.
 /// Overridden by the urgent branch when nothing is holding the line.
+#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
 pub const WAIT_REFILL_FRACTION: f32 = 0.85;
 
 /// Outcome of the spawn-now-vs-wait decision. `SpawnNow(budget)` carries the
 /// energy budget to size the body against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
 pub enum SpawnReadiness {
     SpawnNow(u32),
     Wait,
@@ -112,6 +118,7 @@ pub enum SpawnReadiness {
 ///   a full-strength body sized to capacity.
 /// - **Otherwise** (a capable room on a momentary dip, or a tower is covering):
 ///   wait for refill rather than emit a runt.
+#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
 pub fn defender_spawn_readiness(
     available: u32,
     capacity: u32,

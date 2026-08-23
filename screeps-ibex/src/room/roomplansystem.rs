@@ -103,6 +103,7 @@ impl RoomPlanData {
 // Planner internals
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
 struct RoomDataPlannerDataSource {
     room_name: RoomName,
     terrain: FastRoomTerrain,
@@ -287,6 +288,7 @@ pub struct RoomPlannerData {
 // ---------------------------------------------------------------------------
 
 #[derive(SystemData)]
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
 pub struct RoomPlanSystemData<'a> {
     memory_arbiter: WriteExpect<'a, MemoryArbiter>,
     entities: Entities<'a>,

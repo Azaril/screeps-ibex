@@ -1930,10 +1930,6 @@ fn invader_core_attack_score(
     (score > 0.0).then_some(score)
 }
 
-/// Per-room-step distance cost (in launch-priority score units) charged against an economic target's EV —
-/// the `cost_to_take` distance term of `EV = P(win) · room_net_roi − cost` (the haul/CPU penalty already
-/// rode into `room_net_roi`; this is the marching/spawn-overhead cost the ranking pays per room of reach).
-const ECON_RANK_DISTANCE_COST: f32 = 1.0;
 /// Scale converting the kernel's energy-equivalent net-ROI into launch-priority score units so an economic
 /// win meaningfully out-ranks the bare threat/proximity score (which lives in ~[1, 60]). Tuned so a healthy
 /// reservable remote (~10k energy net-ROI) lands a few tens of score points above a worthless target, never

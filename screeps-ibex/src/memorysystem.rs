@@ -14,6 +14,7 @@ pub type SegmentLoadFn = Box<dyn Fn(&mut World) + Send + Sync>;
 /// Describes one logical segment need registered during environment setup.
 pub struct SegmentRequirement {
     /// Human-readable label (for logging / debugging).
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
     pub label: &'static str,
     /// Segment IDs this requirement covers.
     pub segments: Vec<u32>,

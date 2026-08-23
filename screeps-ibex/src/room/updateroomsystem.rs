@@ -6,6 +6,7 @@ use specs::prelude::*;
 pub struct UpdateRoomDataSystemData<'a> {
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
     updater: Read<'a, LazyUpdate>,
     identity: Read<'a, crate::identity::BotIdentity>,
 }

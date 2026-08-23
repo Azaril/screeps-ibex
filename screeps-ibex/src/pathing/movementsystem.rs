@@ -140,6 +140,7 @@ fn count_wasted_moves(records: impl IntoIterator<Item = (Position, Option<(Posit
 
 #[derive(SystemData)]
 pub struct MovementUpdateSystemData<'a> {
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
     entities: Entities<'a>,
     movement: WriteExpect<'a, MovementData<Entity>>,
     movement_results: WriteExpect<'a, MovementResults<Entity>>,
@@ -238,6 +239,7 @@ impl<'a> MovementVisualizer for IbexMovementVisualizer<'a> {
     }
 }
 
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
 struct MovementSystemExternalProvider<'a, 'b> {
     entities: &'b Entities<'a>,
     creep_owner: &'b ReadStorage<'a, CreepOwner>,

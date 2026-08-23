@@ -45,12 +45,14 @@ impl CandidateRoom {
     }
 }
 
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
 pub struct UnknownRoom {
     room_name: RoomName,
     home_room_data_entities: Vec<Entity>,
     distance: u32,
 }
 
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
 impl UnknownRoom {
     pub fn room_name(&self) -> RoomName {
         self.room_name

@@ -41,25 +41,6 @@ pub fn mark_idle(tick_context: &mut JobTickContext) {
     builder.range(0).priority(MovementPriority::Low).allow_shove(true).allow_swap(true);
 }
 
-/// Register the creep as immovable at its current position. Call this when a
-/// creep must stay on its exact tile (e.g. static miners on a container).
-/// The movement resolver will never shove or swap this creep.
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn mark_immovable(tick_context: &mut JobTickContext) {
-    let creep = tick_context.runtime_data.owner;
-    let creep_pos = creep.pos();
-
-    let mut builder = tick_context
-        .runtime_data
-        .movement
-        .move_to(tick_context.runtime_data.creep_entity, creep_pos);
-
-    builder
-        .range(0)
-        .priority(MovementPriority::Immovable)
-        .allow_shove(false)
-        .allow_swap(false);
-}
 
 /// Register the creep as stationed at its current position. The creep uses
 /// High priority so it wins tile conflicts against most other creeps, causing

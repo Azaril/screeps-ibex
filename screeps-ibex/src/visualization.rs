@@ -345,11 +345,6 @@ pub struct RoomVisualizationData {
     pub transfer_stats: Option<crate::transfer::transfersystem::TransferRoomSnapshot>,
 }
 
-impl RoomVisualizationData {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
 
 /// One visibility queue entry for the global visibility panel.
 #[derive(Debug, Clone)]

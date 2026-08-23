@@ -152,6 +152,7 @@ impl TerminalMission {
     }
 }
 
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
 struct ResourceThresholds {
     desired_storage_amount: u32,
 

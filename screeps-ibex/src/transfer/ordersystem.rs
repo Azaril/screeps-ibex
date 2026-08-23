@@ -89,6 +89,7 @@ impl OrderQueue {
 }
 
 #[derive(SystemData)]
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
 pub struct OrderQueueSystemData<'a> {
     order_queue: Write<'a, OrderQueue>,
     updater: Read<'a, LazyUpdate>,

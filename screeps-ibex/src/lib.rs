@@ -1,5 +1,5 @@
 #![recursion_limit = "256"]
-#![allow(dead_code)]
+
 #![warn(clippy::all)]
 
 #[cfg(target_arch = "wasm32")]
@@ -22,7 +22,6 @@ mod expansion;
 mod features;
 mod findnearest;
 mod game_loop;
-mod gameview;
 mod identity;
 mod intents;
 mod jobs;
@@ -47,7 +46,6 @@ mod stats_history;
 mod statssystem;
 mod structureidentifier;
 mod transfer;
-mod ui;
 mod visualization;
 mod visualize;
 

@@ -289,24 +289,6 @@ where
     }
 }
 
-pub trait EntityItertools: Iterator {
-    fn into_entity_group_map<K, V>(self) -> EntityHashMap<K, EntityVec<V>>
-    where
-        Self: Iterator<Item = (K, V)> + Sized,
-        K: Hash + Eq,
-    {
-        let mut lookup = EntityHashMap::new();
-
-        for (key, val) in self {
-            lookup.entry(key).or_insert(EntityVec::new()).push(val);
-        }
-
-        lookup
-    }
-}
-
-impl<T: ?Sized> EntityItertools for T where T: Iterator {}
-
 pub fn encode_to_string<T>(data: T) -> Result<String, String>
 where
     T: Serialize,

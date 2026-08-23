@@ -14,7 +14,6 @@ pub const VISIBILITY_PRIORITY_CRITICAL: f32 = 100.0;
 pub const VISIBILITY_PRIORITY_HIGH: f32 = 75.0;
 pub const VISIBILITY_PRIORITY_MEDIUM: f32 = 50.0;
 pub const VISIBILITY_PRIORITY_LOW: f32 = 25.0;
-pub const VISIBILITY_PRIORITY_NONE: f32 = 0.0;
 
 /// Default TTL for visibility requests (in ticks). Must be longer than the
 /// longest interval between re-requests (e.g. mining outpost pushes every 50
@@ -469,6 +468,7 @@ mod tests {
 pub struct VisibilityQueueCleanupSystem;
 
 #[derive(SystemData)]
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
 pub struct VisibilityQueueCleanupSystemData<'a> {
     visibility_queue: Write<'a, VisibilityQueue>,
     visibility_data: WriteStorage<'a, VisibilityQueueData>,

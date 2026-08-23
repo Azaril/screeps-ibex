@@ -534,9 +534,11 @@ fn member_travel_action(
 /// REC-017 — whether a too-short-TTL member HOLDS for the Phase-B renew (kept as the boolean the existing
 /// pin tests assert; delegates to [`member_travel_action`]). `Recycle` also holds *nothing* — it is a
 /// distinct terminal — so this is `== HoldForRenew`, NOT "not Travel".
+#[cfg_attr(not(test), allow(dead_code))] // TEST-PINNED (ws-triage): live-unwired but pin-asserted; wire or retire with its owner
 fn should_hold_for_renew(decision: screeps_combat_decision::rally::CommitDecision, at_home_room: bool, at_rally: bool) -> bool {
     matches!(member_travel_action(decision, at_home_room, at_rally), MemberTravelAction::HoldForRenew)
 }
+
 
 /// FIGHTER-FIRST spawn ordering (deep-reach fix — Break #1): the slot indices of `slots` reordered so the
 /// FIGHTER roles (RangedDPS / Dismantler / MeleeDPS) come BEFORE the support roles (Healer / Tank / Hauler).
@@ -2767,6 +2769,7 @@ enum CombatIntelSource {
 
 impl CombatIntelSource {
     /// Whether the DTOs are TRUSTWORTHY: empty hostiles/towers genuinely mean clear, not merely unseen.
+    #[cfg_attr(not(test), allow(dead_code))] // TEST-PINNED (ws-triage): live-unwired but pin-asserted; wire or retire with its owner
     fn is_reliable(self) -> bool {
         matches!(self, CombatIntelSource::Cached | CombatIntelSource::LiveVisible)
     }

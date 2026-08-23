@@ -30,7 +30,9 @@ use crate::room_economics::{room_net_roi, RoomEconomyFacts};
 /// Intra-room one-way haul distance (tiles) for a claimed, self-hauling colony — ~half a room. **Distance-
 /// INDEPENDENT** (ADR 0038 D4): a claimed room hauls to its own storage, so its intrinsic value must not carry
 /// the parent-distance haul the remote adapter uses.
+#[cfg_attr(not(test), allow(dead_code))] // TEST-PINNED (ws-triage): live-unwired but pin-asserted; wire or retire with its owner
 pub const INTERNAL_HAUL_TILES: u32 = 25;
+
 
 /// Tunables for the claim value model (ADR 0038 D5–D7). The claim adapter fills these from `ClaimFeatures`.
 #[derive(Debug, Clone, Copy)]

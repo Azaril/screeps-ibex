@@ -34,6 +34,7 @@
 /// `SOURCE_ENERGY_NEUTRAL_CAPACITY` — a *reservable/neutral* source holds 1500 per regen cycle (a RESERVED
 /// remote source restores to `SOURCE_ENERGY_CAPACITY` = 3000; we use the conservative neutral figure for an
 /// as-yet-unreserved room, and the caller may pass the reserved figure once the reservation is held).
+#[allow(dead_code)] // KEEP (ws-triage): 0018 K-RECONCILE input
 pub const SOURCE_ENERGY_NEUTRAL_CAPACITY: f64 = 1500.0;
 /// `SOURCE_ENERGY_CAPACITY` — a source in a room WE reserve restores 3000 per cycle (the upside controlling
 /// the room unlocks — double the neutral yield).
@@ -85,6 +86,7 @@ pub enum HoldModel {
     Reserve,
     /// A Source-Keeper room: we hold it by SUPPRESSING the keepers — the caller supplies the suppression
     /// duo's body-energy in [`RoomEconomyFacts::hold_body_cost`].
+#[allow(dead_code)] // KEEP (ws-triage): unreachable until 0018 K-RECONCILE unifies the duplicate SK ROI kernel onto this model
     Suppress,
     /// No standing hold needed (a one-shot raze / already-owned room): hold cost = 0 beyond mining + haul.
     None,

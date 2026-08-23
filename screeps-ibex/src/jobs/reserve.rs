@@ -1,3 +1,4 @@
+#![allow(dead_code)] // TRIAGE 2026-08-23 (ws-triage.md): the describe/visualize overlay layer is inert until ADR 0016 dispatches it — file-level by design.
 use super::actions::*;
 use super::context::*;
 use super::jobsystem::*;

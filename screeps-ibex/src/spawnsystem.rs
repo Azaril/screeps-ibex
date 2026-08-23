@@ -311,6 +311,7 @@ pub struct SpawnQueueSystemData<'a> {
     spawn_queue: Write<'a, SpawnQueue>,
     spawn_queue_snapshot: Write<'a, SpawnQueueSnapshot>,
     updater: Read<'a, LazyUpdate>,
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
     room_plan_data: ReadStorage<'a, RoomPlanData>,

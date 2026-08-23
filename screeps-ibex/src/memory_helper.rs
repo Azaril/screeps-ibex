@@ -17,10 +17,6 @@ pub fn path_get(path: &str) -> JsValue {
     current
 }
 
-/// Read a boolean value at a dotted path, defaulting to `false`.
-pub fn path_bool(path: &str) -> bool {
-    path_get(path).as_bool().unwrap_or(false)
-}
 
 /// Read an f64 value at a dotted path.
 pub fn path_f64(path: &str) -> Option<f64> {

@@ -531,6 +531,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
         memory_arbiter: WriteExpect<'a, MemoryArbiter>,
         metrics: Write<'a, crate::metrics::MetricsState>,
         entities: Entities<'a>,
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
         marker_allocator: Write<'a, SerializeMarkerAllocator>,
         markers: ReadStorage<'a, SerializeMarker>,
         creep_spawnings: ReadStorage<'a, CreepSpawning>,

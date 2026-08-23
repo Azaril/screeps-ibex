@@ -28,39 +28,6 @@ pub fn virtual_anchor_target(virtual_pos: Position, layout: &FormationLayout, fo
         virtual_pos.room_name(),
     ))
 }
-
-/// Issue movement requests for all squad members using the virtual anchor approach.
-/// Every creep independently issues MoveTo toward their formation offset relative
-/// to the virtual position. No Follow intents are used.
-///
-/// This is a convenience function that combines `advance_squad_virtual_position`
-/// (strategic advancement) with per-member movement commands. When the mission
-/// and job layers are split (mission advances, job moves), use
-/// `advance_squad_virtual_position` and `virtual_anchor_target` separately.
-pub fn issue_virtual_anchor_movement(squad: &mut SquadContext, destination: Position, movement: &mut MovementData<Entity>) {
-    // Advance the virtual position (cohesion checks, mode transitions).
-    advance_squad_virtual_position(squad, destination);
-
-    // Read the resulting virtual position.
-    let virtual_pos = squad.squad_path.as_ref().map(|p| p.anchor.virtual_pos).unwrap_or(destination);
-
-    let layout = squad.layout.clone();
-
-    // Issue MoveTo for each living member toward their formation offset.
-    for member in squad.members.iter() {
-        let target_tile = if let Some(ref layout) = layout {
-            virtual_anchor_target(virtual_pos, layout, member.formation_slot).unwrap_or(virtual_pos)
-        } else {
-            destination
-        };
-
-        movement
-            .move_to(member.entity, target_tile)
-            .range(0)
-            .priority(MovementPriority::High);
-    }
-}
-
 /// Advance the squad's virtual position toward the destination, handling
 /// formation cohesion checks and mode transitions. Call this once per squad
 /// per tick from the mission layer. Individual creeps then read the resulting
@@ -392,25 +359,6 @@ fn corridor_layout_transition(shape: Option<FormationShape>, member_count: usize
 }
 
 const ROOM_SIZE: u8 = 50;
-
-/// Issue flee movement for all squad members using virtual anchor approach.
-/// Each member independently flees from hostile positions.
-pub fn issue_virtual_anchor_flee(
-    squad: &SquadContext,
-    hostile_positions: &[Position],
-    flee_range: u32,
-    movement: &mut MovementData<Entity>,
-) {
-    let targets: Vec<FleeTarget> = hostile_positions.iter().map(|&pos| FleeTarget { pos, range: flee_range }).collect();
-
-    if targets.is_empty() {
-        return;
-    }
-
-    for member in squad.members.iter() {
-        movement.flee(member.entity, targets.clone()).range(flee_range);
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -181,6 +181,7 @@ pub struct TourBuild {
     pub tours: Vec<Vec<RoomName>>,
     /// Insertion-delta evaluations performed — memoization telemetry, pinned
     /// by `memoized_insertion_matches_naive_and_bounds_evaluations`.
+#[allow(dead_code)] // KEEP (ws-triage): memoization telemetry, pinned by tests
     pub delta_evaluations: usize,
 }
 
@@ -212,6 +213,7 @@ fn best_insertion(scout_room: RoomName, tour: &[RoomName], room: RoomName, budge
 }
 
 /// Total travel ticks of a tour from the scout's current room (Chebyshev legs).
+#[allow(dead_code)] // KEEP (ws-triage): 0046 tour metric, test-exercised only today
 fn tour_ticks(scout_room: RoomName, tour: &[RoomName]) -> u32 {
     let mut prev = scout_room;
     let mut total = 0u32;

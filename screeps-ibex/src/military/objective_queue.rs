@@ -44,7 +44,6 @@ pub const OBJECTIVE_PRIORITY_CRITICAL: f32 = 100.0;
 pub const OBJECTIVE_PRIORITY_HIGH: f32 = 75.0;
 pub const OBJECTIVE_PRIORITY_MEDIUM: f32 = 50.0;
 pub const OBJECTIVE_PRIORITY_LOW: f32 = 25.0;
-pub const OBJECTIVE_PRIORITY_NONE: f32 = 0.0;
 
 /// Default TTL for objectives (ticks). Must exceed the longest interval between
 /// a producer's re-requests (the SK coordinator and the war scans all re-assert

@@ -364,9 +364,6 @@ pub mod target_filters {
         matches!(target, TransferTarget::Link(_))
     }
 
-    pub fn terminal(target: &TransferTarget) -> bool {
-        matches!(target, TransferTarget::Terminal(_))
-    }
 }
 
 impl std::convert::TryFrom<&StructureObject> for TransferTarget {
@@ -2473,6 +2470,7 @@ impl<'a> System<'a> for TransferStatsSnapshotSystem {
 // ─── Transfer queue update system ────────────────────────────────────────────
 
 #[derive(SystemData)]
+#[allow(dead_code)] // FOLLOW-UP (ws-triage 2026-08-23): unused fetch/field — remove in the SystemData cleanup pass
 pub struct TransferQueueUpdateSystemData<'a> {
     transfer_queue: Write<'a, TransferQueue>,
     updater: Read<'a, LazyUpdate>,

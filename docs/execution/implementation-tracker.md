@@ -226,8 +226,7 @@ One line per item.
 - **UNOWNED-2 · H5 sim-vs-server parity oracle — assigned to ADR 0006** (2026-08-22; 0008 had
   mis-routed it to 0028). No `parity.rs`, no golden vectors, no nightly gate. Blocked on B-1.
   Listed under 0006 in §6.
-- **UNOWNED-3 · `#![allow(dead_code)]` at `lib.rs:2`** silences the compiler for the whole bot and
-  is why §8 accumulated invisibly. Remove it and fix or annotate the fallout.
+- ~~**UNOWNED-3**~~ **CLOSED 2026-08-23** (ws-triage): the crate-wide allow is GONE; 115 warnings triaged to zero. The compiler now IS the dead-code register. New annotations carry an owner tag (KEEP/TEST-PINNED/FOLLOW-UP).
 - **UNOWNED-4 · `remote_mine.search_radius` still defaults to `1`** (`features.rs:209`) — the
   expansion Wave-1 fix shipped the knob at the value that was the bug. "Wave 1 done" reads as if the
   remote ring widened; it did not.

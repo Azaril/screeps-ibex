@@ -36,13 +36,6 @@ pub enum CleanupEntry {
 }
 
 impl CleanupEntry {
-    pub fn entity(&self) -> Entity {
-        match self {
-            CleanupEntry::Creep(c) => c.entity,
-            CleanupEntry::Mission(m) => m.entity,
-            CleanupEntry::Operation(o) => o.entity,
-        }
-    }
 }
 
 /// World resource: collects entities scheduled for deletion.

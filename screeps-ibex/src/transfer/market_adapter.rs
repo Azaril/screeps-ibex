@@ -40,6 +40,7 @@ pub trait HaulDistance {
 /// The straight-line stand-in: same-room it ≈ the true routed distance (small error inside 50×50);
 /// cross-room it is the global-coordinate Chebyshev. Always `Some` (it never proves unreachability).
 /// Used by unit tests and the parity fixture.
+#[allow(dead_code)] // KEEP (ws-triage): 0044 P3 all-sinks remainder — becomes live when build/repair register as EV-priced haul (Phase 5)
 pub struct ChebyshevDistance;
 
 impl HaulDistance for ChebyshevDistance {
@@ -63,9 +64,11 @@ pub struct RoomMarketInput {
 
 /// One room's market result — the per-carrier assignments + the published floor + the top unmet
 /// bids for the readout.
+#[allow(dead_code)] // KEEP (ws-triage): 0044 P3 all-sinks remainder (Phase 5)
 pub struct RoomMarketResult {
     pub assignments: Vec<MarketAssignment>,
     /// The opportunity floor (highest materially-unmet deposit bid, milli-e/t).
+#[allow(dead_code)] // KEEP (ws-triage): 0044 P3 all-sinks remainder — becomes live when build/repair register as EV-priced haul (Phase 5)
     pub opportunity_floor: u32,
     /// The top-3 unmet deposit bids (descending) — the readout payload.
     pub top_unmet_bids: Vec<u32>,
@@ -129,6 +132,7 @@ pub fn run_room_market(
 /// builder drawing supply) is admitted iff the DESTINATION sink's bid meets the floor
 /// ([`econ::admit_use_withdraw`]) — so under a deep refill deficit the upgrade sink is priced
 /// out and stops draining the container the refill hauler needs.
+#[allow(dead_code)] // KEEP (ws-triage): 0044 P3 all-sinks remainder — becomes live when build/repair register as EV-priced haul (Phase 5)
 pub fn admit_use_withdraw(sink_bid: u32, floor: u32) -> bool {
     econ::admit_use_withdraw(sink_bid, floor)
 }
@@ -136,6 +140,7 @@ pub fn admit_use_withdraw(sink_bid: u32, floor: u32) -> bool {
 /// Repair admission (spec Part 3 — the S1-replacing gate): a repair is admitted iff its
 /// `repair_bid` meets the floor ([`econ::admit_repair`]). Survival overrides (near-dead
 /// containers, hostile towers) bypass this entirely — they are vetoes, not bids.
+#[allow(dead_code)] // KEEP (ws-triage): 0044 P3 all-sinks remainder — becomes live when build/repair register as EV-priced haul (Phase 5)
 pub fn admit_repair(repair_bid: u32, floor: u32) -> bool {
     econ::admit_repair(repair_bid, floor)
 }
