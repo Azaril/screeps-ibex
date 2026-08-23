@@ -1123,6 +1123,14 @@ pub fn tick() {
         }
 
         //
+        // ADR 0041 P3 / ADR 0010 L0 — the per-tick BoostQueue reset its doc comment always claimed
+        // (the IBEX-027 audit found it never called): the queue is ephemeral and self-healing —
+        // owners (the SquadManager) re-file, the labs re-mark, every tick.
+        //
+
+        env.world.write_resource::<BoostQueue>().clear_ready();
+
+        //
         // Segment pre-pass: request all registered segments and check readiness gates.
         //
 

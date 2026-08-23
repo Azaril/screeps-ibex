@@ -745,6 +745,114 @@ impl LabsMission {
             .map(|structures| !structures.labs().is_empty())
             .unwrap_or(false)
     }
+
+    /// ADR 0041 P3 / ADR 0010 §4 — the boost FULFILLER. Reads this room's pending `BoostQueue`
+    /// requests (filed by the SquadManager LAST tick — the stage order), assigns one lab per
+    /// distinct compound (deterministic: labs sorted by id, compounds in priority-file order),
+    /// files the load transfers (withdraw foreign contents, deposit compound + boost energy), and
+    /// `mark_ready`s each request whose assigned lab already holds its full 30/part compound +
+    /// 20/part energy. Returns `true` iff requests pend (the caller pauses the reaction FSM so the
+    /// brew never fights the boost labs). Direct queue filing — this runs at `RunMission`, before
+    /// the hauling pass consumes the transfer queue at `RunJob`.
+    fn service_boosts(system_data: &mut MissionExecutionSystemData, context: &LabsMissionContext) -> bool {
+        let Some(room_data) = system_data.room_data.get(context.room_data) else {
+            return false;
+        };
+        let room_name = room_data.name;
+        let pending: Vec<crate::military::boostqueue::BoostRequest> = system_data
+            .boost_queue
+            .pending_for_room(room_name)
+            .into_iter()
+            .cloned()
+            .collect();
+        if pending.is_empty() {
+            return false;
+        }
+        let Some(structures) = room_data.get_structures() else {
+            return true; // pending, but nothing to service with — still pause (transient)
+        };
+        let mut labs: Vec<_> = structures.labs().to_vec();
+        labs.sort_by_key(|l| l.id().to_string());
+        if labs.is_empty() {
+            return true;
+        }
+
+        // Aggregate demand per compound (priority-file order = first-seen order — deterministic).
+        let mut demand: Vec<(ResourceType, u32)> = Vec::new();
+        for req in &pending {
+            for &(compound, parts) in &req.compounds {
+                match demand.iter_mut().find(|(c, _)| *c == compound) {
+                    Some(e) => e.1 += parts,
+                    None => demand.push((compound, parts)),
+                }
+            }
+        }
+
+        // One lab per compound, up to the lab count; load via the transfer system.
+        for ((compound, total_parts), lab) in demand.iter().zip(labs.iter()) {
+            let mineral_needed = total_parts * 30;
+            let energy_needed = total_parts * 20;
+
+            // Clear foreign contents (a leftover reaction mineral blocks the boost load).
+            for unwanted in lab
+                .store()
+                .store_types()
+                .into_iter()
+                .filter(|r| *r != ResourceType::Energy && r != compound)
+            {
+                let amount = lab.store().get(unwanted).unwrap_or(0);
+                if amount > 0 {
+                    system_data.transfer_queue.request_withdraw(TransferWithdrawRequest::new_tier(
+                        TransferTarget::Lab(lab.remote_id()),
+                        unwanted,
+                        TransferPriority::High,
+                        amount,
+                        TransferType::Haul,
+                    ));
+                }
+            }
+
+            let have_mineral = lab.store().get(*compound).unwrap_or(0);
+            if have_mineral < mineral_needed {
+                system_data.transfer_queue.request_deposit(TransferDepositRequest::new_tier(
+                    TransferTarget::Lab(lab.remote_id()),
+                    Some(*compound),
+                    TransferPriority::High,
+                    mineral_needed - have_mineral,
+                    TransferType::Haul,
+                ));
+            }
+            let have_energy = lab.store().get_used_capacity(Some(ResourceType::Energy));
+            if have_energy < energy_needed {
+                system_data.transfer_queue.request_deposit(TransferDepositRequest::new_tier(
+                    TransferTarget::Lab(lab.remote_id()),
+                    Some(ResourceType::Energy),
+                    TransferPriority::High,
+                    energy_needed - have_energy,
+                    TransferType::Haul,
+                ));
+            }
+        }
+
+        // Mark ready: each request whose compound's assigned lab holds ITS OWN full need (per-creep
+        // parts, not the aggregate — one loaded lab boosts the queueing members serially).
+        for req in &pending {
+            for &(compound, parts) in &req.compounds {
+                let Some((_, lab)) = demand.iter().zip(labs.iter()).find(|((c, _), _)| *c == compound) else {
+                    continue; // more compounds than labs — the overflow waits (bounded by the requester's deadline)
+                };
+                let has_mineral = lab.store().get(compound).unwrap_or(0) >= parts * 30;
+                let has_energy = lab.store().get_used_capacity(Some(ResourceType::Energy)) >= parts * 20;
+                if has_mineral && has_energy {
+                    system_data.boost_queue.mark_ready(
+                        &req.creep,
+                        crate::military::boostqueue::BoostAllocation { compound, lab: lab.id() },
+                    );
+                }
+            }
+        }
+        true
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -783,6 +891,16 @@ impl Mission for LabsMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
+        // ADR 0041 P3 / ADR 0010 §4 — the boost FULFILLER: while boost requests pend for this room,
+        // designate labs, file the load transfers, mark ready allocations, and PAUSE the reaction
+        // FSM (any state → wait) so the brew never fights the boost labs for contents. Bounded: the
+        // requester's AwaitBoost deadline stops the demand, so the pause self-releases. Inert while
+        // `boost_military` is off (no requests are ever filed).
+        if Self::service_boosts(system_data, &self.context) {
+            self.state = LabsState::wait(5);
+            return Ok(MissionResult::Running);
+        }
+
         crate::machine_tick::run_state_machine_result(&mut self.state, "LabsMission", |state| {
             state.tick(system_data, mission_entity, &mut self.context)
         })?;

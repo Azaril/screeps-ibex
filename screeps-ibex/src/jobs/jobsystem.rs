@@ -33,6 +33,9 @@ pub struct JobSystemData<'a> {
     mapping: Read<'a, EntityMappingData>,
     squad_contexts: WriteStorage<'a, SquadContext>,
     repair_queue: Read<'a, RepairQueue>,
+    /// ADR 0041 P3 — read-only: the `AwaitBoost` job state consumes ready lab allocations (the
+    /// SquadManager produces requests; the LabsMission fulfils).
+    boost_queue: Read<'a, crate::military::boostqueue::BoostQueue>,
     economy: Read<'a, EconomySnapshot>,
     features: Read<'a, Features>,
     energy_leak: Write<'a, EnergyLeakStats>,
@@ -65,6 +68,8 @@ pub struct JobExecutionSystemData<'a> {
     pub squad_contexts: &'a WriteStorage<'a, SquadContext>,
     pub repair_queue: &'a RepairQueue,
     pub economy: &'a EconomySnapshot,
+    /// ADR 0041 P3 — the boost fulfilment the `AwaitBoost` state polls (read-only).
+    pub boost_queue: &'a crate::military::boostqueue::BoostQueue,
     pub features: &'a Features,
     pub governor: GovernorSnapshot,
     /// ADR 0044 A3 (Defect 2) — the per-room opportunity floor + top unmet bids published by
@@ -132,6 +137,7 @@ impl<'a> System<'a> for PreRunJobSystem {
             squad_contexts: &data.squad_contexts,
             repair_queue: &data.repair_queue,
             economy: &data.economy,
+            boost_queue: &data.boost_queue,
             features: &data.features,
             governor: *data.governor,
             market_bids: &empty_market_bids,
@@ -195,6 +201,7 @@ impl<'a> System<'a> for RunJobSystem {
             squad_contexts: &data.squad_contexts,
             repair_queue: &data.repair_queue,
             economy: &data.economy,
+            boost_queue: &data.boost_queue,
             features: &data.features,
             governor: *data.governor,
             // The floor published above (line ~169) — read by consumer Use-lane pickup admission.

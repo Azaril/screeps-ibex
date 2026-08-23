@@ -217,7 +217,7 @@ const SQUAD_TRACE_HEARTBEAT: u32 = 25;
 /// `spawn_priority_for`), so serializing rosters at ≤ MAX_FORMING_SQUADS is what lets any complete
 /// (observed: two squads co-stalled at 3/5 and 1/2 for thousands of ticks); complete squads never
 /// count toward it, and REC-008: defense never does either.
-use screeps_combat_decision::claim_pacing::{claim_admission, max_concurrent_squads, DEFENSE_SURGE_SQUADS, MAX_FORMING_SQUADS};
+use screeps_combat_decision::claim_pacing::{claim_admission, max_concurrent_squads, DEFENSE_SURGE_SQUADS};
 
 /// While a squad is still FORMING (incomplete roster), renew a present member whose remaining TTL drops
 /// below this so a slow/contested form does not bleed out its early members to old age before the roster
@@ -1610,6 +1610,7 @@ fn create_spawn_callback(
     slot_index: usize,
     target_room: RoomName,
     squad_entity: Entity,
+    boost_tier: screeps_combat_decision::bodies::BoostTier,
 ) -> SpawnQueueCallback {
     Box::new(move |system_data, name| {
         let name = name.to_string();
@@ -1638,9 +1639,10 @@ fn create_spawn_callback(
             // carries the zero-orphan recall machinery (ADR 0027 §(d)) — and THEN decide registration. A creep
             // we do NOT register (squad dead, or its slot already filled by a merge transfer) is a surplus that
             // must still be cleaned up: its job recalls it home to recycle rather than orphaning it in-world.
-            let creep_job = crate::jobs::data::JobData::SquadCombat(crate::jobs::squad_combat::SquadCombatJob::new_with_squad(
+            let creep_job = crate::jobs::data::JobData::SquadCombat(crate::jobs::squad_combat::SquadCombatJob::new_with_squad_boosted(
                 target_room,
                 squad_entity,
+                boost_tier,
             ));
             let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -1691,6 +1693,9 @@ pub struct SquadManagerSystemData<'a> {
     creep_owner: ReadStorage<'a, CreepOwner>,
     visibility: Write<'a, VisibilityQueue>,
     features: Read<'a, crate::features::Features>,
+    /// ADR 0041 P3 — the manager is the boost-demand PRODUCER (0010 §4: owners file demands): it
+    /// re-files each awaiting member's remaining compounds every tick (the queue is ephemeral).
+    boost_queue: Write<'a, crate::military::boostqueue::BoostQueue>,
 }
 
 /// A home room that can act as a spawn source for a squad.
@@ -1749,6 +1754,11 @@ impl<'a> System<'a> for SquadManagerSystem {
             .filter_map(|(e, ctx)| ctx.objective_id.map(|id| (e, id)))
             .collect();
         managed.sort_by_key(|(e, _)| e.id());
+
+        // ADR 0041 P3 — the producer's staged clear: wipe last tick's boost requests before this
+        // tick's re-filing (the labs mission consumed them at RunMission, earlier this tick; ready
+        // marks are cleared at tick start by `game_loop`). See `BoostQueue`'s stage doc.
+        data.boost_queue.clear_requests();
 
         // ── REC-023: SEED the ephemeral `claimed_by` map from every managed squad's SERIALIZED `objective_id`
         //    BEFORE the global solve. The claim map is never serialized (it self-heals) — but on the FIRST
@@ -2453,7 +2463,14 @@ impl<'a> System<'a> for SquadManagerSystem {
                 .filter_map(|m| {
                     let pos = m.position?;
                     let home = homes.iter().find(|h| h.name == pos.room_name())?;
-                    let ttl = data.creep_owner.get(m.entity).and_then(|co| co.owner.resolve()).and_then(|c| c.ticks_to_live())?;
+                    let creep = data.creep_owner.get(m.entity).and_then(|co| co.owner.resolve())?;
+                    // ADR 0041 P3 / ADR 0010 §5 — NEVER renew a boosted creep: the engine strips ALL
+                    // boosts on renew with zero refund (`renew-creep.js`). A member with any boosted
+                    // part is renew-ineligible; retiring boosted members recycle instead.
+                    if creep.body().iter().any(|p| p.boost().is_some()) {
+                        return None;
+                    }
+                    let ttl = creep.ticks_to_live()?;
                     let required = renew_required_ttl(room_distance(pos.room_name(), renew_target_room));
                     (ttl < required).then_some((home.entity, m.entity, ttl))
                 })
@@ -2462,6 +2479,56 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.spawn_queue.request_renew(room, member, ttl);
                 if debug {
                     log::info!("[Lifecycle] RENEW squad={:?} obj={:?} ttl={} (forming/holding — keep the roster alive)", squad_entity, obj_id, ttl);
+                }
+            }
+
+            // ── ADR 0041 P3 — the boost-demand PRODUCER (0010 §4: owners file demands). For every
+            // member whose slot was EV-sized at a tier and who is still AT A HOME with unboosted
+            // parts inside the age window, re-file its remaining compounds into the ephemeral
+            // BoostQueue (cleared each tick — self-healing). The room's LabsMission fulfils; the
+            // member's `AwaitBoost` job consumes. Feature-gated (the P3 activation switch); a
+            // departed / deadline-passed / fully-boosted member simply stops being filed. ──
+            if data.features.military.boost_military {
+                use screeps_combat_decision::bodies::{boosts::remaining_for_parts, BoostTier};
+                let slots = data
+                    .objective_queue
+                    .get(*obj_id)
+                    .and_then(|o| o.force.squads.first())
+                    .map(|c| c.slots.clone())
+                    .unwrap_or_default();
+                let members: Vec<_> = data
+                    .squad_contexts
+                    .get(*squad_entity)
+                    .map(|ctx| ctx.members.iter().map(|m| (m.entity, m.slot_index)).collect())
+                    .unwrap_or_default();
+                for (member_entity, slot_index) in members {
+                    let Some(slot) = slots.get(slot_index) else { continue };
+                    let screeps_combat_decision::composition::BodyType::Sized(spec) = &slot.body_type;
+                    if spec.boost == BoostTier::T0 {
+                        continue;
+                    }
+                    let Some(creep) = data.creep_owner.get(member_entity).and_then(|co| co.owner.resolve()) else {
+                        continue;
+                    };
+                    let pos = creep.pos();
+                    if !homes.iter().any(|h| h.name == pos.room_name()) {
+                        continue; // departed — the fight owns it now
+                    }
+                    let age = CREEP_LIFE_TIME.saturating_sub(creep.ticks_to_live().unwrap_or(CREEP_LIFE_TIME));
+                    if age > crate::jobs::squad_combat::AWAIT_BOOST_DEADLINE {
+                        continue; // the job fell through unboosted — stop demanding
+                    }
+                    let parts: Vec<(Part, bool)> = creep.body().iter().map(|p| (p.part(), p.boost().is_some())).collect();
+                    let remaining = remaining_for_parts(&parts, spec.boost);
+                    if remaining.is_empty() {
+                        continue;
+                    }
+                    data.boost_queue.request(crate::military::boostqueue::BoostRequest {
+                        creep: creep.name().to_string(),
+                        room: pos.room_name(),
+                        compounds: remaining,
+                        priority: crate::military::boostqueue::BoostPriority::High,
+                    });
                 }
             }
         }
@@ -2819,6 +2886,13 @@ fn queue_slot_spawn(
         );
     }
 
+    // ADR 0041 P3 — the slot spec's stamped tier rides to the spawn callback so a boosted member
+    // starts in `AwaitBoost` (apply at the home labs) instead of departing raw. T0 (the unboosted
+    // default) is byte-identical to the pre-0041 flow.
+    let slot_boost_tier = {
+        let screeps_combat_decision::composition::BodyType::Sized(spec) = &slot.body_type;
+        spec.boost
+    };
     let token = spawn_queue.token();
     for home in homes.iter().filter(|h| room_distance(h.name, target_room) <= MAX_SPAWN_DISTANCE) {
         let request = SpawnRequest::new(
@@ -2826,7 +2900,7 @@ fn queue_slot_spawn(
             &body,
             priority,
             Some(token),
-            create_spawn_callback(slot.role, slot_index, target_room, squad_entity),
+            create_spawn_callback(slot.role, slot_index, target_room, squad_entity, slot_boost_tier),
         );
         spawn_queue.request(home.entity, request);
     }

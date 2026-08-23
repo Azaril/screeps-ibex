@@ -8,6 +8,7 @@ use crate::military::squad::*;
 use crate::serialize::EntityOption;
 use crate::visualization::SummaryContent;
 use screeps::*;
+use log::{info, warn};
 use screeps_machine::*;
 use screeps_rover::*;
 use serde::*;
@@ -59,7 +60,16 @@ machine!(
         /// At the objective room, actively fighting.
         Engaged,
         /// Withdrawing from combat due to low HP or squad retreat signal.
-        Retreating
+        Retreating,
+        /// ADR 0041 P3 — bounded pre-deploy boost application: walk to the ready lab(s) the room's
+        /// `LabsMission` loaded for this creep and apply the carried tier's compounds (the sole
+        /// `boost_creep` site); fall through to `MoveToRoom` unboosted on the age deadline or once
+        /// fully boosted. The tier rides IN the variant (the state enum is plain serde — an
+        /// additive variant decodes old payloads unchanged; the ConvertSaveload context cannot
+        /// carry serde defaults). Appended LAST.
+        AwaitBoost {
+            tier: screeps_combat_decision::bodies::BoostTier
+        }
     }
 
     impl {
@@ -1033,6 +1043,87 @@ impl Engaged {
 
 // ─── Retreating ─────────────────────────────────────────────────────────────
 
+/// ADR 0041 P3 — max ticks of AGE a member may spend awaiting boosts before it departs unboosted
+/// (the bounded fall-through: a stock-out / hauling stall must never zombie the roster; the fight
+/// matters more than the multiplier). ~1/5 of a lifetime, comparable to a long form.
+pub(crate) const AWAIT_BOOST_DEADLINE: u32 = 300;
+
+impl AwaitBoost {
+    pub fn tick(&mut self, state_context: &mut SquadCombatJobContext, tick_context: &mut JobTickContext) -> Option<SquadCombatState> {
+        use screeps_combat_decision::bodies::{boosts::remaining_for_parts, BoostTier};
+        let creep = tick_context.runtime_data.owner;
+        let creep_pos = creep.pos();
+        let creep_entity = tick_context.runtime_data.creep_entity;
+
+        let _ = &state_context;
+        // Feature-gated + T0 members never wait (defensive: the spawn callback only routes boosted
+        // slots here, but a flag flip mid-wait must release the member immediately).
+        if !tick_context.system_data.features.military.boost_military || self.tier == BoostTier::T0 {
+            return Some(SquadCombatState::move_to_room());
+        }
+
+        // The remaining set, derived from the LIVE body each tick (no serialized progress): parts
+        // already boosted (by any compound) are done.
+        let parts: Vec<(Part, bool)> = creep.body().iter().map(|p| (p.part(), p.boost().is_some())).collect();
+        let remaining = remaining_for_parts(&parts, self.tier);
+        if remaining.is_empty() {
+            info!("[AwaitBoost] {} fully boosted at {:?} — departing", creep.name(), self.tier);
+            return Some(SquadCombatState::move_to_room());
+        }
+
+        // The bounded fall-through: past the age deadline, fight with whatever landed.
+        let age = CREEP_LIFE_TIME.saturating_sub(creep.ticks_to_live().unwrap_or(CREEP_LIFE_TIME));
+        if age > AWAIT_BOOST_DEADLINE {
+            warn!(
+                "[AwaitBoost] {} deadline ({} ticks) — departing with {} compound(s) unapplied",
+                creep.name(),
+                AWAIT_BOOST_DEADLINE,
+                remaining.len()
+            );
+            return Some(SquadCombatState::move_to_room());
+        }
+
+        // Consume a ready allocation: walk adjacent to the loaded lab and boost (the sole
+        // `boost_creep` site). One compound per visit; the body-derived remaining set advances as
+        // boosts land. The LabsMission marked these ready only when the lab holds the full
+        // 30/part + 20 energy/part for this creep's request.
+        let ready = tick_context.system_data.boost_queue.ready_for(&creep.name());
+        let target = remaining
+            .iter()
+            .find_map(|&(compound, _)| ready.iter().find(|a| a.compound == compound))
+            .and_then(|a| a.lab.resolve());
+        if let Some(lab) = target {
+            if creep_pos.get_range_to(lab.pos()) <= 1 {
+                match lab.boost_creep(creep, None) {
+                    Ok(()) => info!("[AwaitBoost] {} boosted {:?} at lab {}", creep.name(), lab.store().store_types(), lab.pos()),
+                    Err(e) => info!("[AwaitBoost] {} boost at {} failed: {:?} (retrying)", creep.name(), lab.pos(), e),
+                }
+            } else {
+                let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, lab.pos());
+                mr.range(1);
+                mr.priority(MovementPriority::High);
+            }
+            return None;
+        }
+
+        // Nothing ready yet — loiter clear of the spawns (the same loose leash the rally hold uses)
+        // while the labs load. The SquadManager re-files this member's request every tick.
+        let spawns = game::rooms()
+            .get(creep_pos.room_name())
+            .map(|room| room.find(find::MY_SPAWNS, None))
+            .unwrap_or_default();
+        let spawn_positions: Vec<Position> = spawns.iter().map(|s| s.pos()).collect();
+        if let Some(nearest) = spawn_positions.iter().min_by_key(|p| creep_pos.get_range_to(**p)).copied() {
+            let targets: Vec<FleeTarget> = spawn_positions.iter().map(|p| FleeTarget { pos: *p, range: 2 }).collect();
+            let mut mr = tick_context.runtime_data.movement.flee(creep_entity, targets);
+            mr.allow_shove(true);
+            mr.priority(MovementPriority::Low);
+            mr.anchor(AnchorConstraint { position: nearest, range: RALLY_LEASH_RANGE });
+        }
+        None
+    }
+}
+
 impl Retreating {
     pub fn tick(&mut self, state_context: &mut SquadCombatJobContext, tick_context: &mut JobTickContext) -> Option<SquadCombatState> {
         let creep = tick_context.runtime_data.owner;
@@ -1389,13 +1480,29 @@ impl SquadCombatJob {
     }
 
     pub fn new_with_squad(target_room: RoomName, squad_entity: Entity) -> SquadCombatJob {
+        Self::new_with_squad_boosted(target_room, squad_entity, Default::default())
+    }
+
+    /// ADR 0041 P3 — a squad member whose slot was EV-sized at a boost tier: starts in `AwaitBoost`
+    /// (apply the compounds at the home labs before departing) instead of `MoveToRoom`. `T0` is
+    /// byte-identical to [`Self::new_with_squad`].
+    pub fn new_with_squad_boosted(
+        target_room: RoomName,
+        squad_entity: Entity,
+        boost_tier: screeps_combat_decision::bodies::BoostTier,
+    ) -> SquadCombatJob {
+        let state = if boost_tier == screeps_combat_decision::bodies::BoostTier::T0 {
+            SquadCombatState::move_to_room()
+        } else {
+            SquadCombatState::await_boost(boost_tier)
+        };
         SquadCombatJob {
             context: SquadCombatJobContext {
                 target_room,
                 squad_entity: Some(squad_entity).into(),
                 combat_response_start: None,
             },
-            state: SquadCombatState::move_to_room(),
+            state,
         }
     }
 
