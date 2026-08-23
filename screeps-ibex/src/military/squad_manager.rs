@@ -205,10 +205,34 @@ impl SquadPhase {
 /// this-many ticks so a long-lived stuck squad keeps producing one greppable status line without flooding.
 const SQUAD_TRACE_HEARTBEAT: u32 = 25;
 
-/// Global cap on concurrently-fielded manager squads. Objectives above this
-/// compete by priority via `best_unclaimed_near`. (Per-objective-kind caps —
-/// e.g. SK `max_concurrent_farms` — are enforced by the producers.)
-const MAX_CONCURRENT_SQUADS: usize = 4;
+/// S5-CAP (review R7) — the global concurrent-squad cap scales with EMPIRE SIZE instead of the old
+/// flat 4: a one-room colony cannot afford 4 rosters' spawn pressure, and an 8-room empire fielding
+/// only 4 leaves EV-positive objectives (SK farms, expansions' escorts, raids) permanently unclaimed.
+/// Floor 2 (even a small colony may need a defender + one farm/offense), +1 per 2 owned spawn-capable
+/// rooms, ceiling 8 (beyond that the spawn lanes, not the cap, are the binding constraint).
+/// `owned_rooms` = the Phase-gather `homes` count (owned + spawn + capacity>0 — the real spawn base).
+const MIN_CONCURRENT_SQUADS: usize = 2;
+const MAX_CONCURRENT_SQUADS: usize = 8;
+fn max_concurrent_squads(owned_rooms: usize) -> usize {
+    (MIN_CONCURRENT_SQUADS + owned_rooms / 2).min(MAX_CONCURRENT_SQUADS)
+}
+
+/// S5-CAP defense surge: a DEFENSE claim may exceed the global cap by this many slots, so a full
+/// board of fielded OFFENSE squads can never block a base-under-attack defender from claiming
+/// (REC-008 exempted defense from the FORMING pace; this closes the same starvation at the ACTIVE
+/// cap). Bounded — defense objectives themselves are producer-capped, this is not unlimited.
+const DEFENSE_SURGE_SQUADS: usize = 2;
+
+/// The pure claim-admission decision for one ranked objective (S5-CAP): OFFENSE requires a free
+/// slot under the global cap AND the forming pace; DEFENSE requires only a slot within
+/// cap + surge (deploys immediately — never queued behind offense on either axis).
+fn claim_admission(active: usize, forming: usize, cap: usize, is_defense: bool) -> bool {
+    if is_defense {
+        active < cap + DEFENSE_SURGE_SQUADS
+    } else {
+        active < cap && forming < MAX_FORMING_SQUADS
+    }
+}
 
 /// Cap on squads still FORMING (incomplete roster) at once. A forming squad's slots spawn at HIGH (above
 /// the economy bulk — see `spawn_priority_for`), so letting many form together starves logistics AND
@@ -2559,14 +2583,15 @@ impl<'a> System<'a> for SquadManagerSystem {
             .collect();
         ranked_claims.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0 .0.cmp(&b.0 .0)));
 
-        // REC-008: DEFENSE claims must NOT queue behind the OFFENSE forming cap (and must not increment it).
-        // A base under direct attack while two offense rosters form was blocked from claiming its CRITICAL
-        // defender until an offense roster completed. Now only `active < MAX_CONCURRENT_SQUADS` gates a
-        // defense claim; `forming < MAX_FORMING_SQUADS` gates OFFENSE claims only, and `forming` increments
-        // only for offense. (The active cap still backstops total concurrency — defense preemption ABOVE it is
-        // a separate open decision, REC-023 note.)
+        // REC-008 + S5-CAP: DEFENSE claims must NOT queue behind OFFENSE on EITHER axis. REC-008 exempted
+        // defense from the forming pace; S5-CAP (review R7) closes the same starvation at the ACTIVE cap —
+        // a full board of fielded offense squads previously blocked a base-under-attack defender until an
+        // offense squad retired. Admission is now the pure `claim_admission` kernel (offense: under the
+        // empire-scaled cap AND the forming pace; defense: within cap + DEFENSE_SURGE_SQUADS), and the
+        // global cap itself scales with the spawn base (`max_concurrent_squads(homes.len())`).
+        let cap = max_concurrent_squads(homes.len());
         let mut claim_iter = ranked_claims.into_iter();
-        while active < MAX_CONCURRENT_SQUADS {
+        while active < cap + DEFENSE_SURGE_SQUADS {
             let Some((obj_id, _ev_q)) = claim_iter.next() else {
                 break; // ran out of EV-positive claimable objectives
             };
@@ -2586,9 +2611,9 @@ impl<'a> System<'a> for SquadManagerSystem {
                 None => break,
             };
 
-            // OFFENSE respects the forming pace; DEFENSE bypasses it (deploy immediately). A blocked OFFENSE
-            // claim is passed over — the loop keeps scanning for a defense claim (which may still fit).
-            if !is_defense && forming >= MAX_FORMING_SQUADS {
+            // S5-CAP admission (pure kernel): a blocked OFFENSE claim is passed over — the loop keeps
+            // scanning for a defense claim (which may still fit within cap + surge).
+            if !claim_admission(active, forming, cap, is_defense) {
                 continue;
             }
 
@@ -2636,9 +2661,6 @@ fn clear_member_trackers(fp: &mut SquadFormingProgress, obj_id: ObjectiveId) {
     fp.member_solo_stall.retain(|&(oid, _), _| oid != obj_id);
 }
 
-/// Queue one slot's spawn to every in-range home room, sharing a token so exactly
-/// one room fulfills it per tick.
-#[allow(clippy::too_many_arguments)]
 /// The per-squad threat picture the defender spawn-readiness verdict is judged against
 /// (`military::damage::defender_spawn_readiness`, WvC-1 wiring). Gathered by the Phase B
 /// caller (which owns the game/ECS reads); `None` for an offense squad.
@@ -2649,6 +2671,9 @@ struct DefenseUrgency {
     defender_alive: bool,
 }
 
+/// Queue one slot's spawn to every in-range home room, sharing a token so exactly
+/// one room fulfills it per tick.
+#[allow(clippy::too_many_arguments)]
 fn queue_slot_spawn(
     spawn_queue: &mut SpawnQueue,
     homes: &[HomeRoom],
@@ -4060,6 +4085,34 @@ fn apply_squad_decision(
 mod tests {
     use super::*;
     use crate::military::objective_queue::FarmKind;
+
+    /// S5-CAP (review R7): the concurrency cap scales with the spawn base — floor 2 for a small
+    /// colony, PARITY with the old flat 4 at four owned rooms, growth for a real empire, ceiling 8.
+    #[test]
+    fn concurrent_squad_cap_scales_with_empire_size() {
+        assert_eq!(max_concurrent_squads(1), 2); // floor: a colony can't afford 4 rosters
+        assert_eq!(max_concurrent_squads(4), 4); // parity with the pre-S5-CAP flat cap
+        assert_eq!(max_concurrent_squads(8), 6); // the live 8-room empire gains real concurrency
+        assert_eq!(max_concurrent_squads(20), 8); // ceiling: spawn lanes bind, not the cap
+    }
+
+    /// S5-CAP: a full board of fielded OFFENSE squads never blocks a DEFENSE claim — defense is
+    /// admitted within cap + DEFENSE_SURGE_SQUADS while offense is refused at the cap (and at the
+    /// forming pace). Beyond the surge even defense is bounded.
+    #[test]
+    fn defense_claims_surge_past_a_full_offense_board() {
+        let cap = 4;
+        // Board full of offense (active == cap): offense refused, defense admitted.
+        assert!(!claim_admission(cap, 0, cap, false));
+        assert!(claim_admission(cap, 0, cap, true));
+        // Defense is bounded too: past cap + surge, refused.
+        assert!(!claim_admission(cap + DEFENSE_SURGE_SQUADS, 0, cap, true));
+        // Offense under the cap still respects the forming pace (REC-008 unchanged).
+        assert!(claim_admission(0, MAX_FORMING_SQUADS - 1, cap, false));
+        assert!(!claim_admission(0, MAX_FORMING_SQUADS, cap, false));
+        // ...and the forming pace never applies to defense.
+        assert!(claim_admission(0, MAX_FORMING_SQUADS, cap, true));
+    }
 
     /// ADR 0033 slice 7 — the §D5.4 military bid lands in the (Normal, High) band by construction:
     /// `Normal_anchor + clamp(quantized R_O, 1, 999_999)`. Every point of the clamp is pinned: a
