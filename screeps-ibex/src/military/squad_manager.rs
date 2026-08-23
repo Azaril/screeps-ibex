@@ -1674,6 +1674,9 @@ struct HomeRoom {
     entity: Entity,
     name: RoomName,
     energy_capacity: u32,
+    /// Energy AVAILABLE right now (≤ capacity) — the budget the defender
+    /// spawn-readiness URGENT branch sizes against (WvC-1 wiring).
+    energy_available: u32,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -1699,14 +1702,17 @@ impl<'a> System<'a> for SquadManagerSystem {
                 if structures.spawns().iter().all(|s| !s.my()) {
                     return None;
                 }
-                let energy_capacity = game::rooms().get(rd.name).map(|r| r.energy_capacity_available()).unwrap_or(0);
+                let room = game::rooms().get(rd.name);
+                let energy_capacity = room.as_ref().map(|r| r.energy_capacity_available()).unwrap_or(0);
                 if energy_capacity == 0 {
                     return None;
                 }
+                let energy_available = room.as_ref().map(|r| r.energy_available()).unwrap_or(0);
                 Some(HomeRoom {
                     entity,
                     name: rd.name,
                     energy_capacity,
+                    energy_available,
                 })
             })
             .collect();
@@ -2277,23 +2283,60 @@ impl<'a> System<'a> for SquadManagerSystem {
             // Read the composition off the objective each tick (the producer owns it). ADR 0042: the
             // forming bid is priced on the objective's COMPLETED VALUE (p_win over the full roster), not
             // on wasted time — the objective's worth wins the spawn lane.
-            let (slots, target_room, spawn_priority) = match data.objective_queue.get(*obj_id) {
+            let (slots, target_room, spawn_priority, is_defense) = match data.objective_queue.get(*obj_id) {
                 Some(obj) => match obj.force.squads.first() {
                     Some(comp) => {
                         let r_o_completed_milli = forming_objective_rate_milli(&data, obj, &homes);
+                        let is_defense = is_defense_objective(&obj.kind, obj.owner);
                         (
                             comp.slots.clone(),
                             objective_target(&obj.kind).1,
-                            spawn_priority_for(
-                                obj.priority,
-                                is_defense_objective(&obj.kind, obj.owner),
-                                r_o_completed_milli,
-                            ),
+                            spawn_priority_for(obj.priority, is_defense, r_o_completed_milli),
+                            is_defense,
                         )
                     }
                     None => continue,
                 },
                 None => continue,
+            };
+
+            // WvC-1 — defender spawn-readiness wiring (`military::damage`): for a DEFENSE squad, judge
+            // spawn-now-vs-wait per slot. The URGENT case (real incoming DPS, no living member of this
+            // squad, no energized friendly tower in the defended room) downsizes the body to the energy
+            // AVAILABLE right now, so a room under attack with nothing holding the line fields a
+            // defender THIS tick instead of silently banking toward a full-capacity body while the base
+            // burns. Every other verdict keeps today's bank-to-capacity sizing. Inputs are gathered
+            // once per squad; `None` for offense (sizing unchanged).
+            let defense_urgency = if is_defense {
+                let target_entity = data.mapping.get_room(&target_room);
+                let incoming_dps = target_entity
+                    .and_then(|e| data.threat_data.get(e))
+                    .map(|t| t.estimated_attack_dps)
+                    .unwrap_or(0.0);
+                // A tower "buying time" must be OURS and able to actually fire (≥ one 10-energy shot).
+                let has_friendly_tower = target_entity
+                    .and_then(|e| data.room_data.get(e))
+                    .and_then(|rd| rd.get_structures())
+                    .map(|s| {
+                        s.towers()
+                            .iter()
+                            .any(|t| t.my() && t.store().get_used_capacity(Some(ResourceType::Energy)) >= 10)
+                    })
+                    .unwrap_or(false);
+                // Dead members are pruned from `members`, so any entry is a LIVING member holding
+                // (or about to hold) the line.
+                let defender_alive = data
+                    .squad_contexts
+                    .get(*squad_entity)
+                    .map(|ctx| ctx.filled_slot_count() > 0)
+                    .unwrap_or(false);
+                Some(DefenseUrgency {
+                    incoming_dps,
+                    has_friendly_tower,
+                    defender_alive,
+                })
+            } else {
+                None
             };
 
             // FIGHTER-FIRST spawn order (deep-reach fix — Break #1): attempt the FIGHTER slots
@@ -2322,6 +2365,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                     *squad_entity,
                     *obj_id,
                     spawn_priority,
+                    defense_urgency,
                     &mut data.forming_progress.build_body_warned,
                     debug,
                 );
@@ -2595,6 +2639,16 @@ fn clear_member_trackers(fp: &mut SquadFormingProgress, obj_id: ObjectiveId) {
 /// Queue one slot's spawn to every in-range home room, sharing a token so exactly
 /// one room fulfills it per tick.
 #[allow(clippy::too_many_arguments)]
+/// The per-squad threat picture the defender spawn-readiness verdict is judged against
+/// (`military::damage::defender_spawn_readiness`, WvC-1 wiring). Gathered by the Phase B
+/// caller (which owns the game/ECS reads); `None` for an offense squad.
+#[derive(Clone, Copy)]
+struct DefenseUrgency {
+    incoming_dps: f32,
+    has_friendly_tower: bool,
+    defender_alive: bool,
+}
+
 fn queue_slot_spawn(
     spawn_queue: &mut SpawnQueue,
     homes: &[HomeRoom],
@@ -2604,6 +2658,7 @@ fn queue_slot_spawn(
     squad_entity: Entity,
     obj_id: ObjectiveId,
     priority: u32,
+    defense_urgency: Option<DefenseUrgency>,
     build_body_warned: &mut std::collections::BTreeSet<(ObjectiveId, usize)>,
     debug: bool,
 ) {
@@ -2641,8 +2696,42 @@ fn queue_slot_spawn(
     // when sized_for defers) would otherwise scale to the strongest in-range home and spawn a ~5000e blob
     // that never banks at HIGH priority while CRITICAL economy drains the home (the live W5N2/W4N7 defense
     // squads that re-queued forever). Capping keeps every spawned member bankable.
-    let build_energy = best_capacity.min(screeps_combat_decision::composition::PREFERRED_MEMBER_ENERGY);
-    let body = match slot.body_type.build_body(build_energy, screeps_combat_decision::bodies::MoveProfile::Plains) {
+    let base_energy = best_capacity.min(screeps_combat_decision::composition::PREFERRED_MEMBER_ENERGY);
+    // WvC-1 — defender spawn-now-vs-wait (`military::damage`): a DEFENSE slot judges readiness against
+    // the in-range homes' aggregate energy state (max AVAILABLE vs best CAPACITY — the shared spawn
+    // token routes to whichever home affords the body, so "some in-range home can field it this tick"
+    // is the budget that matters). Only the URGENT verdict changes sizing (downsize to available);
+    // `Wait`/refilled/offense all collapse back to `base_energy` — the bank-to-capacity queue IS the wait.
+    let readiness = defense_urgency.map(|u| {
+        let max_available = homes
+            .iter()
+            .filter(|h| room_distance(h.name, target_room) <= MAX_SPAWN_DISTANCE)
+            .map(|h| h.energy_available)
+            .max()
+            .unwrap_or(0);
+        crate::military::damage::defender_spawn_readiness(
+            max_available,
+            best_capacity,
+            u.incoming_dps,
+            u.has_friendly_tower,
+            u.defender_alive,
+        )
+    });
+    let build_energy = crate::military::damage::slot_build_energy(base_energy, readiness);
+    let emergency_downsized = build_energy < base_energy;
+    let body = match slot
+        .body_type
+        .build_body(build_energy, screeps_combat_decision::bodies::MoveProfile::Plains)
+        // An URGENT budget too small for even the minimum body: fall back to the normal full-size
+        // bank-to-capacity queue (the room genuinely cannot field ANYTHING this tick) rather than
+        // tripping the CANNOT-BUILD roster-stall warn below for a transient energy dip.
+        .or_else(|| {
+            if emergency_downsized {
+                slot.body_type.build_body(base_energy, screeps_combat_decision::bodies::MoveProfile::Plains)
+            } else {
+                None
+            }
+        }) {
         Some(body) => body,
         // Even the strongest in-range home can't build it (template min OR the sized spec) — don't field
         // an undersized one. (A sized slot that doesn't fit was already vetoed upstream by sized_for.)
@@ -2675,7 +2764,7 @@ fn queue_slot_spawn(
         let cost: u32 = body.iter().map(|p| p.cost()).sum();
         let in_range = homes.iter().filter(|h| room_distance(h.name, target_room) <= MAX_SPAWN_DISTANCE).count();
         log::info!(
-            "[SpawnQueue] slot={} role={:?} target={} parts={} (rng={} heal={} atk={} work={} tough={} carry={} move={}) cost={} prio={} homes_in_range={} (best_cap={})",
+            "[SpawnQueue] slot={} role={:?} target={} parts={} (rng={} heal={} atk={} work={} tough={} carry={} move={}) cost={} prio={} homes_in_range={} (best_cap={} emergency={})",
             slot_index,
             slot.role,
             target_room,
@@ -2691,6 +2780,7 @@ fn queue_slot_spawn(
             priority,
             in_range,
             best_capacity,
+            emergency_downsized,
         );
     }
 

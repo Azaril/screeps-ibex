@@ -364,7 +364,6 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
 
             let mut hostile_creep_infos = Vec::new();
             let mut estimated_attack_dps: f32 = 0.0;
-            let mut estimated_heal: f32 = 0.0;
             let mut estimated_repair: u32 = 0;
 
             if let Some(creeps) = room_data.get_creeps() {
@@ -384,7 +383,7 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
             // T-HEAL-3a: sustain heal counts only heal that can REACH the fighting force —
             // the pure kernel replaces the old sum-everything fold (a healer parked across
             // the room no longer suppresses commit gates). See `reachable_estimated_heal`.
-            estimated_heal = reachable_estimated_heal(&hostile_creep_infos);
+            let estimated_heal = reachable_estimated_heal(&hostile_creep_infos);
 
             // Gather hostile tower positions + energy from structures (ADR 0020 §12.2: a drained tower
             // deals no damage, so the force oracle needs per-tower energy, not just positions).

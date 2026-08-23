@@ -28,19 +28,11 @@ pub fn total_tower_damage(tower_positions: &[Position], target_pos: Position) ->
         .sum()
 }
 
-/// Calculate net damage (tower damage minus enemy healing) for a target.
-/// Returns positive if towers can overcome healing, negative if not.
-#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
-pub fn net_tower_damage(tower_positions: &[Position], target_pos: Position, enemy_heal_per_tick: f32) -> f32 {
-    total_tower_damage(tower_positions, target_pos) - enemy_heal_per_tick
-}
-
-/// Determine if towers should fire at a target, considering the enemy's healing capability.
-/// Only fire if net damage is positive (we can actually hurt them).
-#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
-pub fn should_towers_fire(tower_positions: &[Position], target_pos: Position, enemy_heal_per_tick: f32) -> bool {
-    net_tower_damage(tower_positions, target_pos, enemy_heal_per_tick) > 0.0
-}
+// (WvC-1 triage: the once-planned `net_tower_damage`/`should_towers_fire`/`estimated_ticks_to_kill`
+// single-target helpers were DELETED as superseded — the U-TOWER `decide_towers` kernel
+// (`screeps_combat_decision::tower_fire`) already makes the heal-aware fire decision, and better:
+// it sizes the tower commit against `heal_reaching` per target and refuses out-healed dogpiles,
+// where the helpers only compared one target's flat heal total.)
 
 /// Check if a hostile creep at the room edge is likely performing a tower drain attack.
 /// Tower drain: hostile sits at max range (edge), heals through tower damage to waste energy.
@@ -60,29 +52,6 @@ pub fn is_likely_tower_drain(target_pos: Position, target_heal_per_tick: f32, to
     target_heal_per_tick >= total_damage
 }
 
-/// Estimate how many ticks it would take for towers to kill a creep,
-/// given the creep's total HP, healing, and the tower damage at its position.
-/// Returns `None` if towers cannot overcome healing.
-#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
-pub fn estimated_ticks_to_kill(
-    tower_positions: &[Position],
-    target_pos: Position,
-    target_hits: u32,
-    target_heal_per_tick: f32,
-) -> Option<u32> {
-    let net = net_tower_damage(tower_positions, target_pos, target_heal_per_tick);
-    if net <= 0.0 {
-        return None;
-    }
-    Some((target_hits as f32 / net).ceil() as u32)
-}
-
-/// Calculate the range between two positions, handling same-room only.
-#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
-pub fn range_between(a: Position, b: Position) -> u32 {
-    a.get_range_to(b)
-}
-
 // ── Defender spawn-readiness model ───────────────────────────────────────────
 //
 // The spawn-now-vs-wait decision for an emergency defender, given the room's
@@ -95,13 +64,11 @@ pub fn range_between(a: Position, b: Position) -> u32 {
 /// we size a defender to full capacity (rather than holding for refill). Keeps a
 /// capable room on a momentary energy dip from emitting an under-strength creep.
 /// Overridden by the urgent branch when nothing is holding the line.
-#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
 pub const WAIT_REFILL_FRACTION: f32 = 0.85;
 
 /// Outcome of the spawn-now-vs-wait decision. `SpawnNow(budget)` carries the
 /// energy budget to size the body against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
 pub enum SpawnReadiness {
     SpawnNow(u32),
     Wait,
@@ -118,7 +85,6 @@ pub enum SpawnReadiness {
 ///   a full-strength body sized to capacity.
 /// - **Otherwise** (a capable room on a momentary dip, or a tower is covering):
 ///   wait for refill rather than emit a runt.
-#[allow(dead_code)] // KEEP (ws-triage): built+tested defender/tower readiness tranche — wiring is a combat-wave decision, scheduled under 0008a
 pub fn defender_spawn_readiness(
     available: u32,
     capacity: u32,
@@ -133,6 +99,25 @@ pub fn defender_spawn_readiness(
         SpawnReadiness::SpawnNow(capacity)
     } else {
         SpawnReadiness::Wait
+    }
+}
+
+/// Map a readiness verdict onto the slot spawner's energy budget (WvC-1 wiring).
+///
+/// `base_energy` is the spawner's normal sizing budget (strongest in-range home's
+/// CAPACITY, capped at `PREFERRED_MEMBER_ENERGY`). The mapping:
+///
+/// - `SpawnNow(budget)` → `budget.min(base_energy)`: the URGENT branch carries the
+///   room's AVAILABLE energy, so the body downsizes to what can spawn THIS tick
+///   (a smaller defender now beats a perfect one too late); the refilled branch
+///   carries capacity, which the min collapses back to `base_energy` — unchanged.
+/// - `Wait` / `None` (not a defense slot) → `base_energy`: queueing the full-size
+///   body IS the wait — the spawn system banks energy until the body's cost is
+///   affordable, so a capable room on a dip refills rather than emitting a runt.
+pub fn slot_build_energy(base_energy: u32, readiness: Option<SpawnReadiness>) -> u32 {
+    match readiness {
+        Some(SpawnReadiness::SpawnNow(budget)) => budget.min(base_energy),
+        Some(SpawnReadiness::Wait) | None => base_energy,
     }
 }
 
@@ -159,6 +144,19 @@ mod readiness_tests {
         assert_eq!(defender_spawn_readiness(900, 5600, 120.0, false, true), SpawnReadiness::Wait);
         // A tower buying time also means we wait even with no defender yet.
         assert_eq!(defender_spawn_readiness(900, 5600, 120.0, true, false), SpawnReadiness::Wait);
+    }
+
+    #[test]
+    fn slot_energy_urgent_downsizes_wait_and_offense_keep_base() {
+        // URGENT carries available (250) ⇒ the body downsizes below the 5600 base.
+        assert_eq!(slot_build_energy(5600, Some(SpawnReadiness::SpawnNow(250))), 250);
+        // Refilled carries capacity ⇒ min collapses to base (unchanged sizing).
+        assert_eq!(slot_build_energy(5600, Some(SpawnReadiness::SpawnNow(5600))), 5600);
+        // Wait and non-defense (None) both keep the base bank-to-capacity queue.
+        assert_eq!(slot_build_energy(5600, Some(SpawnReadiness::Wait)), 5600);
+        assert_eq!(slot_build_energy(5600, None), 5600);
+        // A budget above base (capacity > PREFERRED cap) never inflates past base.
+        assert_eq!(slot_build_energy(2400, Some(SpawnReadiness::SpawnNow(5600))), 2400);
     }
 
     #[test]
