@@ -149,3 +149,24 @@ Readings (each a finding, not a bug in the corpus):
   takes `--server <name>` and resolves the token straight from `.screeps.yaml` into a
   `SecretString` (no shell-env export needed). Found work swept into tracker §3 Phase 4.5 +
   §6 (0010/0041/0025/0023 refreshed, §8 BoostQueue row closed).
+- 2026-08-24 (later) — **Phase 4.5 item 2 (border crossing): ACHIEVED** — decomposed live from the
+  operator's replay observation ("one creep enters and then everything outside the room stalls")
+  via the SQ_DEBUG driver trace + probe. Seven-defect chain, all fixed: (1) the sim driver's
+  travel arm trickled members across individually → bloc crossing gate (gather at the exit band,
+  release when clustered); (2) in-room-only member views (parity H5 — the REC-053 comment claimed
+  live parity; the audit refuted it) let the first entrant decide the squad's fate alone →
+  full-roster views with execution still room-scoped; (3) `plan_squad_ev` derived its tile room
+  from the CENTROID → a mid-crossing squad's goals were built in the staging room (V-1 aliasing) →
+  explicit fight-room param; (4) the mover's anti-scatter anchor pinned fight-room members to the
+  cross-room centroid → room-gated; (5) entrants camped the arrival tiles ("waiting for coverage")
+  and jammed the doorway their healers needed → exit-edge tiles priced as transitional (real-engine
+  fidelity: you cannot hold an exit tile); (6) `assess_engage` counted the target room's towers at
+  the 150 damage floor against a staging-room centroid (phantom threat — towers cannot fire
+  cross-room) → room-local; (7) Retreating latched across a full withdrawal → state decay, plus
+  rout-to-rally (withdraw the way you came; the drain runner deliberately keeps local-kite retreat).
+  Bonus: the full-roster view exposed a LATENT fixture bug (twin_room_siege's "target-room" core
+  was physically in the staging room). **Gauntlet: every rung that fields now KILLS** — L1 open
+  172 / choke 273 / choke-multi 590; border g1@T0 74, g1@T3 49, g2@T3 50 (bloc crossing, campers
+  wiped, zero losses). Pinned: `stronghold_floor_t0_defers_t3_kills_every_l1_rung`. g3/g4 defer at
+  sizing (capability item 8). Replay viewer (`write_stronghold_replays` → target/replays/stronghold/
+  index.html) regenerated + delivered.

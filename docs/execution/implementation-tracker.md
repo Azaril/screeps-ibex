@@ -52,7 +52,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: Phase 4.5 — the WS-VAL defect program (item 1 open-bar ACHIEVED 2026-08-24; next = choke trickle-in → border crossing)
+### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2 ACHIEVED 2026-08-24 — every fielding gauntlet rung KILLS; next = parity H0 → threat/traversal unification → boosted re-tune)
 See §3 Phase 4.5 for the ordered ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
 
 ### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
@@ -145,19 +145,27 @@ Plausibly closes 6–10 ADRs by amendment.*
 
 **Phase 4.5 — WS-VAL defect program (ACTIVE — operator 2026-08-23: "we'll work through the
 defects found from the broad review afterwards").** The instruments exist and are checked in; each
-item has an acceptance bar. Ordered: **(1) cohesion under focused fire — ✅ OPEN-LAYOUT BAR
-ACHIEVED 2026-08-24** (decision `be725c9`, deployed): the EV kernel now prices REAL heal delivery —
+item has an acceptance bar. Ordered: **(1) cohesion under focused fire — ✅ ACHIEVED 2026-08-24** (decision `be725c9`, deployed): the EV kernel now prices REAL heal delivery —
 deliverable-heal advance gating (no squad-total optimism, no catch-up slack), a risk-currency
 floor (g_us collapsed to ~0 in structure sieges — members priced their HP at nothing) with a ×4
 uncovered-net steepener, lockstep healer-tile advertising, and evidence-gated URGENT/BACKLOG heal
 triage (full-HP healers were self-pre-healing against field-stamped threat while the actually-
-focused member died in a part-loss spiral). L1-open@T3: **Killed, 151 ticks, ZERO losses** (pinned:
-`stronghold_floor_t0_defers_t3_kills_open`). REMAINING in item 1: the **chokepoint trickle-in
-commit window** — the corridor stretches the wedge so members arrive at the wall piecemeal and the
-tower eats the trickle (rung: Timeout, 5/8 survive after a failed wall camp; trace instrument
-`probe_rung` is aimed at it); **(2) border crossing under fire** (bar: border
-gauntlet g1–g2 → Killed, then g3+); **(3) lone-survivor policy** — wipe-or-retreat, no eternal
-stalemate (bar: no `Timeout` with a lone surviving member); **(4) parity H0** — live drops
+focused member died in a part-loss spiral). **(2) border crossing under fire — ✅ ACHIEVED
+2026-08-24** (decision `b0b7ea0` + agent `1fbff1b` + eval `8dab84d`, from the operator's live
+replay observation "one creep enters and everything outside the room stalls"): bloc
+border-crossing gate (gather at the exit band, cross together), full-roster member views (parity
+H5 — the in-room-only scoping was BOTH a live divergence and the crossing livelock root),
+fight-room kernel anchoring (`plan_squad_ev` room param — the centroid-room V-1 aliasing sent a
+mid-crossing squad's goals into the staging room), room-gated mover anchor, exit-edge tile pricing
+(edge tiles are transitional, never holdable — the doorway jam), room-local tower assessment (the
+150-floor made cross-room towers phantom threats), rout-to-rally, Retreating state decay. Also
+flushed out a LATENT fixture bug (twin_room_siege built its "target-room" core in the staging
+room). **Result: EVERY L1 rung @T3 Killed** — open 172 / choke 273 / choke-multi 590 (the full
+cross-border stronghold assault end-to-end) — **and border g1@T0 74 / g1@T3 49 / g2@T3 50, all
+with the bloc crossing together** (pinned: `stronghold_floor_t0_defers_t3_kills_every_l1_rung`).
+Remaining ladder: border g3/g4 (T2/T3 camper packs — sizing defers; capability item 8 territory);
+**(3) lone-survivor policy** — largely superseded by rout-to-rally, keep the bar (no `Timeout`
+with a lone surviving member) as a watch; **(4) parity H0** — live drops
 Attack/Dismantle vs NEUTRAL constructed walls (`get_hostile_structures` filter; sim executes them);
 **(5) threat/traversal unification** (parity H1/H2/H3 + M-cluster — live movement executes without
 the threat layer the sim validates against; one shared fold entry point); **(6) boosted kernel
@@ -388,6 +396,14 @@ Append one line per closed item. Newest first.
 
 - **2026-08-23** — **Wave B SHIPPED to live MMO** (hot swap `0d9524f2668f` per RULING-8; vm_starts 2749, missions persisted, 0 deser). RULING-8 recorded (deploy-to-live batched; B-1 demoted); ADR 0047 drafted (reset-tolerant serialization).
 
+- **2026-08-24 (later)** — **Phase 4.5 item 2: border crossing — ACHIEVED** (decision `b0b7ea0`,
+  agent `1fbff1b`, eval `8dab84d`; root-caused live from the operator's replay observation "one
+  creep enters and everything outside the room stalls"): bloc crossing gate + full-roster views
+  (parity H5) + fight-room kernel anchoring (the centroid-room V-1 aliasing) + room-gated mover
+  anchor + exit-edge pricing + room-local tower assessment + rout-to-rally + state decay + a
+  latent twin_room_siege fixture bug. **Every fielding gauntlet rung now KILLS** (L1
+  open/choke/choke-multi + border g1×2/g2 — pinned). Replay viewer regenerated + sent; 1537
+  workspace + fence + wasm green. Item 1's choke trickle-in tail closed by the same batch.
 - **2026-08-24** — **Phase 4.5 item 1: cohesion under focused fire — open-layout bar ACHIEVED**
   (decision `be725c9` + agent `e3660d8` + eval `17d2d74`): four composing EV-kernel fixes
   (deliverable heal, siege risk-currency floor + ×4 uncovered steepener, lockstep healer
