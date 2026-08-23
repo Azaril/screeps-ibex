@@ -1,11 +1,11 @@
 # Phase 2 triage — decide, don't build
 
-**Workstream:** Phase 2 · **Advances:** tracker §6/§8 closure · **Status:** active
+**Workstream:** Phase 2 · **Advances:** tracker §6/§8 closure · **Status:** near-complete — schedule-verdict sweep remains
 
 ## Resume point
 
 Working through the §6/§8 items; verdicts land here as they're made, ADR amendments ride with them.
-Order: §8 do-nows → UNOWNED-3 enforcement → amend-out ADR edits → schedule-verdicts in the tracker.
+DONE: §8 do-nows, UNOWNED-3, amend-outs (0030 Withdrawn, 0025a closed, 0039→harness, 0020 kept-scheduled by operator), search_radius retune. REMAINING: the final schedule-verdict sweep — confirm every §6 line names its phase, then close this doc.
 
 ## Target
 
@@ -39,3 +39,6 @@ annotations carry a reason + owner.
 ## Log
 
 - 2026-08-23 — Do-now tranche + UNOWNED-3 DONE: deleted ui.rs, gameview.rs (with its self-test), StructureIdentifier dead half, both issue_virtual_anchor leftovers, 4 unused constants, 5 unused helpers; crate-wide allow(dead_code) REMOVED — 115 warnings triaged to 0 (deletes + owner-tagged keeps + 11 file-level 0016-layer allows + TEST-PINNED restores for 3 items the wasm check missed). FOUND WORK: the SystemData unused-fetch class (7 systems fetch storages they never read — per-tick waste, tagged FOLLOW-UP). Next: the amend-out ADR edits (0030/0020/0026a/0039/0025a).
+- 2026-08-23 (later) — Operator ratified the amend-outs (0030/0025a/0039) and chose KEEP-scheduled
+  for 0020 S5–S7 (after Phase 4); 0047 pulled forward to Phase 2.5. search_radius 1→2 shipped +
+  live-reconciled. ADR edits landed (0030 banner, 0031 tempo line, 0025a closure section).
