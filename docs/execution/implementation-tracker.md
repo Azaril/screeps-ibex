@@ -52,20 +52,21 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: WvC-1 + WvC-2 · Military completion waves — BOTH CODE-COMPLETE + SHIPPED 2026-08-23; live-watch open
-→ [`../implementation/ws-wvc1-military-completion.md`](../implementation/ws-wvc1-military-completion.md) · [`../implementation/ws-wvc2-defensive-features.md`](../implementation/ws-wvc2-defensive-features.md)
+### NOW: the military program (Phases 3+4) — ALL SHIPPED 2026-08-23; live-watch open; NEXT = Phase 5 (boost)
+→ [`../implementation/ws-wvc1-military-completion.md`](../implementation/ws-wvc1-military-completion.md) · [`../implementation/ws-wvc2-defensive-features.md`](../implementation/ws-wvc2-defensive-features.md) · [`../implementation/ws-4-r19-retune.md`](../implementation/ws-4-r19-retune.md)
 
-**Operator reorder (2026-08-23): military peak effectiveness first** — boost (0010+0041) demoted
-behind the military waves + P4 re-tune. Both waves shipped same-day as hot swaps (WvC-1
-`e08162810921`, WvC-2 `1fb233b30416`; item details + SHAs in the ws docs; fence green ×3).
+**The operator's "peak effectiveness" program (reorder 2026-08-23) completed in one arc**: WvC-1
+(correctness + wiring, `e08162810921`), WvC-2 (defensive features, `1fb233b30416`), and the WS-4
+R19 re-tune (`9913ef980109`) all code-complete, tuned, and live as hot swaps; fence green ×5.
+Live validated post-ship (CPU 34/140, bucket full, 0 panics; 8th AND 9th rooms claimed mid-arc).
 **Live-watch is what remains**: the next real fight exercises the give-up clock, urgent-defender
-downsizing, S5-CAP surge, rampart cover-anchoring, predictive safe mode, and exit discipline.
-When it closes, both ws docs delete and **Phase 4 (R19 re-tune)** starts.
+downsizing, S5-CAP surge, rampart cover-anchoring, predictive safe mode, exit discipline, and the
+re-tuned open-combat profile. When it closes, the three ws docs delete; **Phase 5 (boost,
+0010→0041)** is next per the roadmap.
 
-Empire during the waves: **9 rooms** (W7N47 8th — the ADR 0046 far-sprawl target class working as
-designed; W5N48 9th), GCL 12, bucket full. WATCH: movement ~81 CPU/tick at 9 rooms (largest single
-cost line; sustainable); segment chars as plans rebuild; wasm 48.7% of code limit; transient
-foreman `InvalidTarget` placement warns (pre-existing).
+WATCH: movement CPU at 9 rooms (transient post-swap spikes ~81, steady ~34 — fine); segment chars;
+wasm 48.7%; foreman `InvalidTarget` transients; post-hot-swap one-tick `INTEGRITY` squad-ref
+scrubs (benign backstop, attribute if it recurs outside deploys).
 
 ---
 
@@ -110,7 +111,7 @@ Plausibly closes 6–10 ADRs by amendment.*
 
 **Phase 3 — the military completion waves (WvC-1/WvC-2, operator-prioritized 2026-08-23).** WvC-1 (correctness + wiring): T-HEAL-3a winnability inputs, the damage.rs readiness-tranche wiring, S5-CAP governor-dynamic squad cap, 0035 FU2 never-engages give-up, 0026 L8 observed-bodies coordination, 0034 rally-bias live-wire, 0028 K3/K4 wiring. WvC-2 (defensive features): T-DEF-1 rampart-anchored defenders, T-DEF-5 predictive safe-mode arm, T-POS-5 exit-tile cost, 0037 T3 candidate emission. Batched + shipped like Wave B (no WFV — and under 0047, even shape changes are cheap now).
 
-**Phase 4 — WS-4 · R19 chokepoint re-tune** (unchanged, directly military: the combat kernels' parameters proven on realistic terrain; closes 0019 S4-TUNE, 0024 FU#4, 0026 L6c, 0031a/b re-sweeps, 0032 value_e, 0033 kite retune).
+**Phase 4 — WS-4 · R19 chokepoint re-tune — DONE 2026-08-23** (same-day as Phase 3): chokepoint basket + maximin tournament built; `open_combat` re-tuned a1-i6-tight-s2 → a0-i3-d14-K3-s2 (the only cross-regime-positive config; the old profile measured NEGATIVE vs untuned default — R19 quantified) + SHIPPED (`9913ef980109`); 0031a/b re-swept at w_energy=1.0 (defaults confirmed, 0031b §5); 0019 S4-TUNE + 0024 FU#4-presets + 0033 kite-retune closed defaults-confirmed via `s4_weights_retune` (flat surface — the EV kernel owns engaged positioning); 0033 corpus-wide fence promoted (spread==0 over 21, H 0.9625). Re-tagged →P6: 0026 L6c (consumer-gated per its own rule), 0032 value_e (its ADR says "later"; no discriminating bed).
 
 **Phase 5 — Boost pipeline (ADR 0010 L0 → 0041)** — the military CAPSTONE, after the machinery it feeds is correct: 0041
 gates review risk R1 (enemy-boost blindness, the top MMO risk) and the whole boosted-assault
@@ -173,15 +174,15 @@ One line per item. **Phase tags** (sweep 2026-08-23): P3 boost · P4 R19-tuning 
 **Combat**
 - `0008` — S2 boost handoff **→P3**; S1 pre-spawn, W2 trim + W4 `WarDecl` **→P6**; O5 power-bank + heavy assault = deferred capabilities (activate by decision, not schedule).
 - `0008a` — T-HEAL-3 (widens into R1) **→P3** (T-HEAL-3a SHIPPED, WvC-1); T-DEF-1/T-DEF-5/T-POS-5 SHIPPED (WvC-2); Tier 3 **→P6** (after P3).
-- `0019` — S4-TUNE **→P4**; boosted-TOUGH **→P3** (blocked on 0041).
+- `0019` — boosted-TOUGH **→P3** (blocked on 0041). (S4-TUNE DONE, WS-4: presets confirmed flat — no adoption.)
 - `0020` — S5/S6/S7 (blob auction + R7 currency, adaptivity, adversarial room-gen): **operator-ratified scheduled end-state, sequenced AFTER Phase 4** (they want the R19-retuned kernels). S5-CAP SHIPPED (WvC-1): empire-scaled cap + defense surge, shared `claim_pacing` kernel.
-- `0026` — L6c **→P4** (L8 SHIPPED, WvC-1: observed-owner classifier).
+- `0026` — L6c **→P6** (re-tagged WS-4: its `DoctrineParams` consumers are the unbuilt rungs 2–3 — per L6c's own rule, a weight with no consumer has nothing to sweep). (L8 SHIPPED, WvC-1.)
 - `0026a` — modes activate as their signals land **→P6** (catalog; no standalone schedule).
 - `0027` — Farm producers (PowerBank needs its own ADR) + salvage-teardown migration **→P6**.
 - `0028` — `run_defended_lifecycle` closeout **→HARNESS** (K3/K4 RESOLVED, WvC-1: claim_admission is the shared kernel, `claims_allowed` harness-only; K3 adapters separate by design); multi-squad lane contention folded into that closeout (WvC-2 ruling: it is scenario-coverage beds 1+3, not bot work).
 
 - `0031` — Tier-2 archetype search + Tier-3 axes **→P4** (the 0031a sweep plan).
-- `0031a` / `0031b` — sweeps invalid (`w_energy` now 1.0, not the 0.001 the results assume); re-run + amend conclusions **→P4**.
+- `0031a` / `0031b` — re-sweep DONE (WS-4, 0031b §5): defaults CONFIRMED at w_energy=1.0; margin knobs inert under the binding cost term. Tier-2/3 archetype axes remain **→P6** (with 0031).
 - `0034` — convergence gates **→P4** (D6c renewable-rally bias SHIPPED, WvC-1).
 - `0035` — FU1 **→P6** (poll-until-fresh sufficiency undecided; FU2 CLOSED, WvC-1: terminator composition + stall-aware give-up clock).
 - `0036` — live raze confirmation **→HARNESS** (private-server world mechanics, B-1).
@@ -211,7 +212,7 @@ One line per item. **Phase tags** (sweep 2026-08-23): P3 boost · P4 R19-tuning 
 - `0013` / `0014` / `0015` / `0016` / `0045` — design-only. 0015 (testkit + seam registry) and 0016 (HUD) were marked "in scope" by the ultracode completion kickoff, a program that has driven nothing since 2026-07-02 (RULING-5) **→P6**.
 - `0023` / `0023a` — S5 border scenarios, cross-room `Flee`, MultiRoom generator **→HARNESS**.
 - `0025` — `action_oscillation_rate` metric **→P4** (rides the sweep instrumentation). (0025a residual closed 2026-08-23.)
-- `0033` — kite retune **→P4**; corpus-wide fence promotion **→P4**.
+- `0033` — BOTH P4 items DONE (WS-4): kite retune = defaults confirmed via `s4_weights_retune`; corpus-wide fence = `full_corpus_evaluation_is_deterministic` (spread==0 over 21, H 0.9625).
 - `0041` — entire P0–P3 **→P3** (blocked on 0010).
 
 ---
@@ -310,6 +311,7 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 
 Append one line per closed item. Newest first.
 
+- **2026-08-23 (late)** — **Phase 4 / WS-4 R19 re-tune DONE + shipped** (`9913ef980109`): `chokepoint_comp_basket` + maximin tournament (eval `940f739`); `open_combat` → a0-i3-d14-K3-s2 (decision `a7acb0b` — only cross-regime-positive config; old profile NEGATIVE vs untuned default, 0026a rejection reversed-with-reconciliation); 0031a/b re-swept at w_energy=1.0 → defaults confirmed, margin knobs inert (0031b §5); S4-TUNE/FU#4-presets/0033-kite-retune closed defaults-confirmed (`s4_weights_retune`, eval `bbc1184`); 0033 corpus-wide fence promoted (rover-eval `ab3e818`, spread==0/21, H 0.9625); L6c + value_e re-tagged →P6 (consumer/bed-gated). Process: run fences in RELEASE (18s vs 385s).
 - **2026-08-23 (late)** — **WvC-2 code-complete + shipped** (hot swap `1fb233b30416`): T-POS-5 exit-tile surcharge (decision `3d451ac`), T-DEF-1 rampart cover via `ThreatField::build_covered` (`47a163a` — TAKEN/EV-risk/survival-veto/traversal all inherit the redirect from one point), T-DEF-5 predictive safe-mode arm (`8502af9`); 0037-T3 emission closed by ruling (contradicts the ADR's no-new-aggression seam + D27), 0028 lane-contention re-routed to the harness closeout. Fence green ×2 this session.
 - **2026-08-23 (late)** — **WvC-1 code-complete, all 7 items**: T-HEAL-3a winnability inputs (`c5a06c8`), defender spawn-readiness wired + tower half deleted as U-TOWER-superseded (`81ee72f`), S5-CAP empire-scaled cap + defense surge (`7a87df5` → shared kernel `13112e6`), 0035 FU2 closed (veto attempt `4d044be` reverted `4d186d8` after 2 eval-bed regressions — the probe bounce is load-bearing; final = stall-aware give-up clock + engaged-gated stall streaks, agent `0c57c45`), 0026 L8 observed-owner coordination (`0455298`), 0034 D6c renewable-rally bias (`e6aa3ce`), 0028 K3/K4 resolved as-built (ADR rewritten). Ship + live-watch pending.
 - **2026-08-23** — **Operator reorder: military first.** Boost pipeline (largest NEW build) demoted behind the military completion waves (WvC-1 correctness+wiring, WvC-2 defensive features) and the P4 re-tune — finish partial machinery + kill the bug farm before feeding it boosts. WvC promoted out of the old Phase-6 into Phase 3; NOW = WvC-1.

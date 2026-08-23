@@ -30,9 +30,7 @@ re-run the kernel grid, adopt the cross-terrain winner, re-pin the EXP-* canarie
       SafeModeHold; breach/drain untouched; `default` stays as the 0-baseline fallback). ADR 0026a
       rejection REVERSED with full reconciliation (both eras' verdicts stand — the landscape moved).
       Canaries + 352/334/114 suites + fence (release, 18s) green. Ship with the next batch.
-- [ ] **Downstream (each gated on the adopted params)**: 0031a/b re-sweeps under `w_energy=1.0`
-      (`sweep_composition_params`), 0019 S4-TUNE, 0026 L6c weight sweeps, 0032 `value_e`,
-      0024 FU#4, 0033 kite retune. Sequence one at a time; amend each owning ADR's conclusions.
+- [x] **Downstream — ALL RESOLVED** (see close-out log entry): 0031a/b confirmed; S4-TUNE/FU#4/kite-retune confirmed-flat; 0033 fence promoted; L6c + value_e →P6 (gated by their own rules). Each owning ADR amended.
 
 ## Design deltas
 
@@ -48,3 +46,4 @@ any adoption ships; live-watch after ship.
 - 2026-08-23 — created after WvC-1/WvC-2 shipped + live-validated. Start: basket extension.
 - 2026-08-23 — R19 core re-tune DONE same-session: basket + pass (`940f739`), winner adopted (`a7acb0b`), 0026a reversed-with-reconciliation. Process note: run the fence in RELEASE (18s vs 385s debug). Next: ship, then the downstream sweeps (start 0031a/b under w_energy=1.0).
 - 2026-08-23 (ship) — R19 adoption deployed (hot swap `9913ef980109`). WATCH note: both post-deploy tails showed a one-tick burst of `INTEGRITY: dead squad ref scrubbed` (a squad retiring with living members right after the hot-swap reset — the REC-009b backstop handles it; members recall via job fallback). If it recurs on every deploy it is re-field churn per swap (ObjectiveGone/claim timing on the reload tick?) — attribute then.
+- 2026-08-23 (close-out) — downstream sweeps resolved same-session: 0031a/b re-sweep at w_energy=1.0 → defaults CONFIRMED (0031b §5; margin knobs inert under the binding cost term); S4-TUNE + FU#4-presets + 0033 kite-retune → defaults CONFIRMED via `s4_weights_retune` (flat surface — engage presets score exactly 0 post-ADR-0025); 0033 corpus-wide fence PROMOTED (`full_corpus_evaluation_is_deterministic`, spread==0 over 21 scenarios, H 0.9625 = the ADR baseline); L6c re-tagged →P6 (DoctrineParams consumers unbuilt — its own rule), 0032 value_e →P6 (ADR says "later", no discriminating bed). Phase 4 DONE. Doc deletes when the live-watch (shared with WvC-1/2) closes.

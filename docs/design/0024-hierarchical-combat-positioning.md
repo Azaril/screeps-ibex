@@ -202,7 +202,11 @@ The positioning skeleton above is the core; these are its refinements.
    additive penalty the sim uses, so live paths route around exposure. Inert when there are no threats.
 4. **EXP/tournament weight sweep** — `LAYOUT_DOABLE_BONUS`, `LAYOUT_SPACING_*`, `LAYOUT_DEAD_BAND`,
    `TARGET_FLOOD_OPS`, `THREAT_PATH_DIV/CAP` + the kite/engage presets are tunable seams; tune via the
-   self-play tournament once scenario diversity is sufficient.
+   self-play tournament once scenario diversity is sufficient. **Preset half DONE 2026-08-23
+   (WS-4 `s4_weights_retune` over the chokepoint basket): kite/engage presets confirmed — the
+   surface is flat/insensitive post-ADR-0025 (the kernel owns engaged positioning), no adoption.
+   The plumbing constants (`LAYOUT_*`, `TARGET_FLOOD_OPS`, `THREAT_PATH_*`) stay measure-first
+   seeds per this ADR's own doctrine — sweep only on an observed positioning defect.**
 5. **Terrain-advance rate.** The designed-2 swamp approach is an advance-*rate* problem, not a
    pile-up: the squad reaches the objective but can be too slow to destroy it inside the window
    (oscillation there is already low). Advance rate over high-cost terrain is the lever.
