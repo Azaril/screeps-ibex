@@ -37,7 +37,9 @@ boost (Phase 5) then feeds correct machinery.
       immortal in-room squad). `can_reengage` now vetoed by an active stalemate → Retreating is
       absorbing → REC-003/lease terminate. FU2 predicate CLOSED as a composition of per-phase
       terminators (recorded in ADR 0035 §2.1); RED-verified pin + determinism fence green (391s).
-- [ ] **0026 L8** — coordination DPS keyed on OBSERVED bodies, not `TargetSource`.
+- [x] **0026 L8** (`0455298`): `classify_coordination` reads scouted hostile OWNERS first (all-NPC ⇒
+      Individual, any player body ⇒ Coordinated); Q1 source prior only as unobserved fallback.
+      RED-verified pin. (ADR 0026 L8 note should drop its "until it is" caveat — done below.)
 - [ ] **0034 rally-bias live-wire** — renewable-rally bias exists sim-side (`lifecycle.rs:1423`),
       never wired live.
 - [ ] **0028 K3/K4 wiring** — `slots_to_spawn` into the spawn adapter; `claims_allowed` into claim
