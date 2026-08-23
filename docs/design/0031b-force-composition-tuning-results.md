@@ -84,3 +84,31 @@ The Tier-1 count × margin sweep is exhausted (the seeds are confirmed). The lev
 ---
 
 > **Provenance.** Sweeps run 2026-06-27 against `screeps-combat-eval` `harness::param_sweep` on the bit-deterministic sim, release profile, rayon-parallel. Per-regime raw outputs were written to scratchpad files during the runs (broad Tier-1 + narrow/floor coordinate-descent per regime). Methodology + knob set: ADR 0031a. Architecture: ADR 0031 §2c/D16/D17.
+
+---
+
+## 5. Re-sweep 2026-08-23 — `w_energy = 1.0` (WS-4 / Phase 4)
+
+The sections above were measured with the cost term at its pre-REC-011 non-binding seed
+(`w_energy = 0.001`); the shipped default became **1.0** (currency-consistent — the EV ladder stops
+climbing when `Δp_win · value < Δcost`), which repriced the whole surface. The Tier-1 grid was
+re-run under `SWEEP_W_ENERGY=1.0` (48 points, `regime=all`, 80 calibration scenarios/point).
+
+**Result: the shipped default is CONFIRMED; the margin knobs are now inert in-band.**
+
+- Every gated point with `member_energy ≥ 3000` is metric-identical on win (0.889) / fp (0.000) /
+  fn (0.0962); the entire spread across `hold ∈ 1.15–1.6` × `over ∈ 1.3–1.8` is a 0.3–1.3%
+  cost/win ripple (7 644 / 7 669 / 7 744 for over 1.3/1.5/1.8). With the cost term binding, the
+  optimizer stops the ladder at min-viable regardless of the margin knobs — the knobs' old effects
+  were artifacts of the non-binding cost era.
+- The boundaries SURVIVE the repricing: `member_energy = 2000` still degrades win (0.885) and
+  `1300` still trips the FP gate (0.0625) — the defended-Kill floor + FP cliff are real, not
+  cost-term artifacts.
+- `over = 1.3` is now the nominal #1 (−25 e/win vs default, same win rate) — NOT adopted: a 0.3%
+  saving is noise-level, and trimming the Coordinated square-law margin against live players for it
+  inverts the Q1 asymmetry (under-sizing loses creeps; over-sizing only spends).
+
+**This closes the 0031a/b re-tune obligation** (reconciliation note "0031b needs a re-tune under
+w_energy=1.0"): defaults stand, conclusions re-grounded. Ranked table:
+`sweep_0031_we1.txt` (session scratchpad; regenerate any time —
+`SWEEP_W_ENERGY=1.0 cargo test --release -p screeps-combat-eval --lib sweep_composition_params -- --ignored --nocapture`).
