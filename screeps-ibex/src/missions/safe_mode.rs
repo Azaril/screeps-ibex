@@ -38,6 +38,42 @@ fn safe_mode_should_arm(spawn_hits: &[(u32, u32)], hostile_dps: f32, dismantler_
     (critical_low && hostile_dps > 0.0) || (dismantler_adjacent_to_spawn && hostile_dps > SAFE_MODE_DPS_THRESHOLD)
 }
 
+/// T-DEF-5 (ADR 0008a) — once the innermost protective rampart drops below this, the predictive
+/// breach projection starts watching (above it there is time to spawn defenders instead).
+const BREACH_WATCH_FLOOR: u32 = 10_000;
+
+/// T-DEF-5 — the PREDICTIVE safe-mode arm: activate the tick BEFORE the last rampart protecting a
+/// spawn/storage breaks, not after the spawn is already chewed (the reactive floor
+/// [`safe_mode_should_arm`] stays underneath as the fallback for unrampartted bases). Pure.
+///
+/// - `protective_hits` — the INNERMOST protective layer: min hits over the ramparts on/adjacent to a
+///   spawn or storage. `None` ⇒ no protective rampart exists — the reactive floor owns the decision
+///   (there is no breach to project).
+/// - `breach_dps` — the hostiles' structure-applicable output (dismantle + melee + ranged).
+/// - `defense_dps_net` — our kill rate against the breachers (tower output at their range, net of
+///   their heal). ≤ 0 ⇒ the defense cannot kill them at all.
+/// - `hostile_hits_pool` — the breachers' summed hit pool (what the defense must chew through).
+///
+/// Arms iff the layer is below [`BREACH_WATCH_FLOOR`], the enemy is actually breaching
+/// (`breach_dps > 0`), and the projected ticks-to-breach (`hits / breach_dps`) is shorter than the
+/// defense's projected ticks-to-kill-them-all (`pool / net`) — i.e. the rampart dies before the
+/// defense can win. The caller's downstream `upgrade_blocked == 0` / charge / cooldown checks gate
+/// the actual activation (T-DEF-4 keeps `upgrade_blocked` at 0 by priority-killing CLAIM creeps).
+fn predictive_breach_arm(protective_hits: Option<u32>, breach_dps: f32, defense_dps_net: f32, hostile_hits_pool: u32) -> bool {
+    let Some(hits) = protective_hits else {
+        return false; // no protective rampart — the reactive floor owns it
+    };
+    if hits >= BREACH_WATCH_FLOOR || breach_dps <= 0.0 {
+        return false;
+    }
+    if defense_dps_net <= 0.0 {
+        return true; // the defense can never kill the breachers — only the timing question remains, and it is lost
+    }
+    let ticks_to_breach = hits as f32 / breach_dps;
+    let defense_kill_time = hostile_hits_pool as f32 / defense_dps_net;
+    ticks_to_breach < defense_kill_time
+}
+
 /// Mission to evaluate and activate safe mode as a last resort defense.
 ///
 /// Safe mode prevents hostile creeps from performing any actions in the room
@@ -216,7 +252,51 @@ impl Mission for SafeModeMission {
             }
         }
 
-        if !safe_mode_should_arm(&spawn_hits, total_hostile_dps, dismantler_adjacent_to_spawn) {
+        // ── T-DEF-5: the PREDICTIVE breach arm's inputs (the decision is the pure kernel above). ──
+        // Innermost protective layer: min hits over ramparts on/adjacent to a spawn or storage.
+        let protected_tiles: Vec<Position> = structures
+            .spawns()
+            .iter()
+            .map(|s| s.pos())
+            .chain(structures.storages().iter().map(|s| s.pos()))
+            .collect();
+        let protective_hits: Option<u32> = structures
+            .ramparts()
+            .iter()
+            .filter(|r| r.my() && protected_tiles.iter().any(|p| r.pos().get_range_to(*p) <= 1))
+            .map(|r| r.hits())
+            .min();
+        // Our kill rate against the breachers: each energized tower's output at its CLOSEST hostile,
+        // net of the hostiles' total heal (the sustain the defense must out-damage).
+        let mut tower_dps: f32 = 0.0;
+        for t in structures.towers() {
+            if !t.my() || t.store().get_used_capacity(Some(ResourceType::Energy)) < 10 {
+                continue;
+            }
+            if let Some(r) = hostiles.iter().map(|h| t.pos().get_range_to(h.pos())).min() {
+                tower_dps += screeps_combat_decision::damage::tower_attack_damage_at_range(r) as f32;
+            }
+        }
+        let hostile_heal: f32 = hostiles
+            .iter()
+            .flat_map(|h| h.body())
+            .filter(|p| p.hits() > 0 && p.part() == Part::Heal)
+            .map(|p| 12.0 * if p.boost().is_some() { 4.0 } else { 1.0 })
+            .sum();
+        let hostile_hits_pool: u32 = hostiles.iter().map(|h| h.hits()).sum();
+        let predictive = predictive_breach_arm(protective_hits, total_hostile_dps, tower_dps - hostile_heal, hostile_hits_pool);
+        if predictive {
+            warn!(
+                "[SafeMode] PREDICTIVE breach arm in {}: protective rampart {:?} hits, breach dps {:.0}, net defense dps {:.0}, pool {}",
+                room_data.name,
+                protective_hits,
+                total_hostile_dps,
+                tower_dps - hostile_heal,
+                hostile_hits_pool
+            );
+        }
+
+        if !(safe_mode_should_arm(&spawn_hits, total_hostile_dps, dismantler_adjacent_to_spawn) || predictive) {
             return Ok(MissionResult::Running);
         }
 
@@ -313,6 +393,27 @@ mod tests {
     fn dismantler_burst_arms_at_full_hp() {
         assert!(safe_mode_should_arm(&[(5000, 5000)], 350.0, true));
         assert!(!safe_mode_should_arm(&[(5000, 5000)], 250.0, true));
+    }
+
+    /// T-DEF-5 pins — the predictive arm fires only for a real, losing breach race:
+    /// a low protective rampart + the defense projected too slow ⇒ arm (spawn still at full HP —
+    /// the whole point); the SAME breach with a fast-enough defense ⇒ no arm (the false-positive
+    /// guard); a maintained rampart, a toothless enemy, or no protective rampart at all ⇒ never.
+    #[test]
+    fn predictive_arm_fires_only_for_a_losing_breach_race() {
+        // 8k rampart under 500 breach dps ⇒ 16 ticks to breach. Defense: 40k pool at 600 net dps
+        // ⇒ ~67 ticks to kill — the rampart dies first ⇒ ARM (with the spawn untouched).
+        assert!(predictive_breach_arm(Some(8_000), 500.0, 600.0, 40_000));
+        // Same breach, overwhelming defense (10k net dps ⇒ 4 ticks to kill < 16 to breach) ⇒ HOLD.
+        assert!(!predictive_breach_arm(Some(8_000), 500.0, 10_000.0, 40_000));
+        // Defense cannot kill them at ALL (out-healed) ⇒ the race is lost by definition ⇒ ARM.
+        assert!(predictive_breach_arm(Some(8_000), 500.0, 0.0, 40_000));
+        // Rampart above the watch floor ⇒ there is time to defend instead ⇒ HOLD.
+        assert!(!predictive_breach_arm(Some(BREACH_WATCH_FLOOR), 500.0, 0.0, 40_000));
+        // Toothless enemy (no structure damage) ⇒ nothing is breaching ⇒ HOLD.
+        assert!(!predictive_breach_arm(Some(8_000), 0.0, 0.0, 40_000));
+        // No protective rampart ⇒ the reactive floor owns the decision ⇒ HOLD here.
+        assert!(!predictive_breach_arm(None, 500.0, 0.0, 40_000));
     }
 
     /// The floor is 2/5 of max hits (2000 for a 5000-hit spawn) — strictly below
