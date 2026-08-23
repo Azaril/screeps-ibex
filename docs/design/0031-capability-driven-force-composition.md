@@ -64,6 +64,7 @@ This is the marginal-capability-per-energy fill specialized to the current 1:1 r
 - **`tough_parts` / `tough_fraction` (EHP armor)** — currently hardwired 0; ~10–12% of a body unboosted (Overmind 1 TOUGH:3 dmg:4 MOVE), required to survive a towered engage, coupled to heal (broken-TOUGH/tick must be refillable).
 - **`commit_mode` (Siege vs Drain)** — leverage the EXISTING `AssaultMode::Drain` (`force_sizing.rs`): unboosted v1 cannot out-heal towers point-blank (~50 HEAL parts for ONE tower), so drain (tank + heal at tower-falloff range, out-spend the tower refill) is the only viable path vs multi-tower rooms.
 - **Deferred to Tier-3 (0031a §4):** `engage_range`/`kite_range` (stand-off → tower-falloff DPS), within-member `attack_to_heal_mix` (~0.75), `reengage_threshold` hysteresis, and the v2 `boost_tier` axis. The full tiered sweep plan + grounded ranges live in 0031a.
+- **Deferred (absorbed from the withdrawn ADR 0030, 2026-08-23):** the **engagement-TEMPO axis** — wave-vs-sustain pacing as a composition/deploy parameter (one big wave amortizing travel vs sustained replacement flow; 0030's `EngagementTempo` concept). Never built; preserved here as a future param-axis candidate so the withdrawal loses no design.
 
 ### 2(d) The doctrine — pure classifier + `plan_engagement` (D15)
 

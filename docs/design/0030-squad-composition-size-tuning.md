@@ -1,9 +1,15 @@
 # ADR 0030 — Squad composition & size tuning (the lifetime/wave axis)
 
-- **Status:** Decided
+- **Status:** Withdrawn
 - **Date:** 2026-06-27
 - **Extends:** [0029](0029-generalized-force-composition.md) (the one-oracle force composition), [0026 §9](0026-*.md) (the doctrine registry), [0020 §12](0020-ev-adaptive-blob-combat.md) (the force-sizing oracle + the deferred part-auction), [0028](0028-lifecycle-harness.md) (the lifecycle/rally harness that proves it)
 - **Supersedes:** ADR 0029 D9 (the OFFENSE-only / "defenders deploy immediately" rally short-circuit, FIX A) — replaced by the lifetime-aware, winnability-validated deploy gate (§6)
+
+> **Withdrawn (operator triage, 2026-08-23).** The ADR's central mechanism — the `EngagementTempo`
+> policy struct and its §9 wiring — was never built (zero code), and ADR 0031 superseded most of the
+> rest of this document's sizing model. What survived into code (§9 step 1, the §10 cleanup) landed
+> long ago and is owned by 0031. The lifetime/wave *tempo axis* itself is preserved as a deferred
+> parameter in 0031's design so the idea is not lost. Retained as a design record.
 
 ## 1. The question (operator, 2026-06-27)
 

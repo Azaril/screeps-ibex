@@ -102,3 +102,10 @@ cargo run --release -p screeps-prospector -- --config .screeps.yaml --server-nam
 ```
 Writes `{rooms:[{room, terrain, objects}]}` (same shape as the dump). Diff terrain/objects + test the
 decode convention. (Auth token auto-loads from the root `.screeps.yaml`; read-only.)
+
+## Closure of the residual chase (operator triage, 2026-08-23)
+
+The candidate-explanation chase above is **closed as documented-mitigated**: `snap_to_open` masks the
+anomaly on every consumer path, no live harm has been observed since June, and the candidates left are
+source-data forensics with no decision riding on the answer. Re-open only if a combat/pathing decision
+is ever traced back to a mis-read object tile — the description above is the starting point.
