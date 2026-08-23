@@ -71,9 +71,11 @@ feature on the board; the military column holds the densest partial work incl. b
 machinery, and the 2026-07-09 review remainder is the standing bug farm. Boost moves behind the
 military waves + P4 re-tune (it completes peak-vs-BOOSTED-opponents last).
 
-**2026-08-23: ALL 7 WvC-1 items CODE-COMPLETE** (T-HEAL-3a, readiness wiring, S5-CAP, FU2, L8,
-D6c rally bias, K3/K4 shared-kernel resolution — details + SHAs in the ws doc). Remaining:
-batch-ship (hot swap, no WFV) + live-watch, then the doc deletes and WvC-2 starts.
+**2026-08-23: ALL 7 WvC-1 items CODE-COMPLETE and SHIPPED to MMO** (hot swap `e08162810921`,
+world persisted, 0 panics; details + SHAs in the ws doc). The empire claimed its **9th room
+(W5N48)** during the wave. Remaining: live-watch (next real fight exercises the give-up clock,
+urgent-defender downsizing, S5-CAP surge), then the doc deletes and WvC-2 starts. NEW WATCH:
+movement ~81 CPU/tick at 9 rooms (bucket full — sustainable, but the largest single cost line).
 
 WS-6 shipped 2026-08-23 (msgpack WFV 29 live — additive shape changes now reset-free). WATCH:
 segment chars as plans rebuild; wasm 48.5% of code limit; Wave B behaviors on the next real fight.

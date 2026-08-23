@@ -55,7 +55,12 @@ boost (Phase 5) then feeds correct machinery.
       `PREFERRED_MEMBER_ENERGY` (already decision-crate); `slots_to_spawn` is the harness adapter,
       `queue_slot_spawn` the live one (latches + readiness downsize) — separate by design.
       ADR 0028 K3/K4 rows rewritten to as-built.
-- [ ] Batch-ship + live-watch (drain signatures, engage/retreat sanity on the next real fight)
+- [x] Batch-shipped to MMO 2026-08-23 (hot swap, wasm `e08162810921`, 48.63% code limit; world
+      persisted, 0 panics/deser; bucket 10000 full, CPU 101/140, 83 creeps / 178 missions —
+      **9 rooms: W5N48 newly claimed**). Live-watch OPEN: drain signatures, engage/retreat sanity
+      + give-up-clock GaveUps on the next real fight, urgent-defender downsizing on the next base
+      attack. WATCH: movement ~81 CPU/tick at 9 rooms (bucket full, sustainable — but the biggest
+      single line; candidates: remote-build traffic + plan rebuilds).
 
 ## Design deltas
 
@@ -73,3 +78,4 @@ offense-soak (B-1) validates the wave end-to-end when the operator is home.
 - 2026-08-23 — created on the operator's military-first reorder; T-HEAL-3a first.
 - 2026-08-23 — readiness tranche wired (`81ee72f`); tower half deleted as superseded. Next: S5-CAP.
 - 2026-08-23 (cont.) — S5-CAP (`7a87df5`), L8 (`0455298`), FU2 (veto→revert→clock, decision `4d186d8` + agent `0c57c45`), D6c rally bias (decision `e6aa3ce`) all landed. Remaining: 0028 K3/K4 wiring, batch-ship + live-watch.
+- 2026-08-23 (ship) — batch deployed to MMO (hot swap `e08162810921`); 9 rooms (W5N48 new), bucket full, clean tail. Live-watch open; WvC-2 next.
