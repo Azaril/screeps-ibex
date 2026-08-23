@@ -52,7 +52,23 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: the military program (Phases 3+4) — ALL SHIPPED 2026-08-23; live-watch open; NEXT = Phase 5 (boost)
+### NOW: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED; tactical follow-ups queued
+→ [`../implementation/ws-val-combat-validation-corpus.md`](../implementation/ws-val-combat-validation-corpus.md) · parity report [`../reviews/live-sim-parity-audit-2026-08-23.md`](../reviews/live-sim-parity-audit-2026-08-23.md)
+
+**Landed 2026-08-23**: the engine-exact stronghold corpus (bunker1–5, real boosted defender
+populations, chokepoint + multi-room layouts, focusClosest/focusMax tower AI), the border gauntlet
+(crossing under camper fire, grades 1–4), the boosted self-play lane (tier-mirror basket +
+T3-vs-T0 twin pin), the **boost-blind seam fix on BOTH sides** (live DTOs/member views + sim
+adapters now price boosts via one shared `effective_output`; live heal_power un-latched — parity
+H4/H7/M15/M16/M19), and the ultracode live↔sim parity audit (43 confirmed findings; backlog ranked
+in the report, H0 neutral-wall intent drop on top). **Honest baseline**: T0 defers ALL strongholds
+(quantified heal ceiling — why live only ever killed towerless cores); L1@T3 fields but loses
+tactically (members picked off strung-out — heal-adjacency collapse); border g1 (2 unboosted
+campers!) stalls; boosted meta reshuffles (default tactics lose at T2/T3). **Follow-up queue (in
+the ws doc)**: cohesion under focused fire → border crossing → lone-survivor policy → parity H0 →
+boosted re-tune. Acceptance bar for the tactical work: `stronghold_gauntlet` L1@T3 → Killed.
+
+### Prior arc: the military program (Phases 3+4) — ALL SHIPPED 2026-08-23; live-watch open
 → [`../implementation/ws-wvc1-military-completion.md`](../implementation/ws-wvc1-military-completion.md) · [`../implementation/ws-wvc2-defensive-features.md`](../implementation/ws-wvc2-defensive-features.md) · [`../implementation/ws-4-r19-retune.md`](../implementation/ws-4-r19-retune.md)
 
 **The operator's "peak effectiveness" program (reorder 2026-08-23) completed in one arc**: WvC-1
@@ -337,6 +353,13 @@ Append one line per closed item. Newest first.
 
 - **2026-08-23** — **Wave B SHIPPED to live MMO** (hot swap `0d9524f2668f` per RULING-8; vm_starts 2749, missions persisted, 0 deser). RULING-8 recorded (deploy-to-live batched; B-1 demoted); ADR 0047 drafted (reset-tolerant serialization).
 
+- **2026-08-23 (late)** — **WS-VAL corpus landed**: engine-exact stronghold gauntlet + border
+  gauntlet + boosted self-play lane; boost-blind seam fixed live+sim (shared `effective_output`,
+  heal_power un-latched); ultracode parity audit (43 findings; H4/H7/M15/M16/M19 fixed, rest
+  triaged in `docs/reviews/live-sim-parity-audit-2026-08-23.md`); pre-existing `screeps-prospector`
+  breakage fixed (`Plan.build_order` → `compute_build_order`). 1536 workspace tests + fence + wasm
+  green. Honest baseline tables in the ws doc; tactical follow-ups queued (cohesion under fire is
+  the binding defect).
 - **2026-08-23** — **Wave B CODE-COMPLETE**: D9/D10 landed (`1a85a57` + rover `850a06b` — shared engaged ladder now ONE implementation in rover, wired live; flee uses partial paths); T1/T2 ruled retained-by-design. 15 pins total. The 2026-07-09 review Tier −1 work list is closed; soak pending B-1. World checks 1–3 healthy.
 
 - **2026-08-22 (late)** — Wave B 6/8: D2/D3 safe-mode (`8fa0c60`), D4/D5/D6 roster churn (`be5ce24`), D28 vacuous clear (`b26eba4` + decision/eval submodules). 13 RED-verified pins; fence green; ADR 0027 amended. D9/D10 + 0037 decision remain. WS-1 observation healthy through 3 checks (claim pipeline live, C2 signature absent).

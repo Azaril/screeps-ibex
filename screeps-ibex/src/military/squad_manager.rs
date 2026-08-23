@@ -3123,22 +3123,37 @@ fn compute_squad_orders(
                         .get(m.entity)
                         .and_then(|co| co.owner.resolve())
                         .map(|c| {
-                            let (mut atk, mut rng, mut work, mut claim) = (0u32, 0u32, 0u32, 0u32);
+                            // WS-VAL boost-blind-seam fix: EFFECTIVE (boost-multiplied) part sums, so
+                            // the kernels price our boosted members at real output — matching the sim
+                            // adapter (`rng` counts stay raw for the has_ranged classification).
+                            let (mut atk, mut rng_count, mut atk_eff, mut rng_eff, mut work_eff, mut claim) =
+                                (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
                             for p in c.body().iter().filter(|p| p.hits() > 0) {
+                                let mult = p
+                                    .boost()
+                                    .map(screeps_combat_decision::bodies::boosts::output_multiplier_for)
+                                    .unwrap_or(1) as u32;
                                 match p.part() {
-                                    Part::Attack => atk += 1,
-                                    Part::RangedAttack => rng += 1,
-                                    Part::Work => work += 1,
+                                    Part::Attack => {
+                                        atk += 1;
+                                        atk_eff += mult;
+                                    }
+                                    Part::RangedAttack => {
+                                        rng_count += 1;
+                                        rng_eff += mult;
+                                    }
+                                    Part::Work => work_eff += mult,
                                     Part::Claim => claim += 1,
                                     _ => {}
                                 }
                             }
+                            let _ = atk;
                             (
                                 c.try_raw_id(),
-                                rng > 0,
-                                atk * screeps::constants::ATTACK_POWER,
-                                rng * screeps::constants::RANGED_ATTACK_POWER,
-                                work * screeps::constants::DISMANTLE_POWER,
+                                rng_count > 0,
+                                atk_eff * screeps::constants::ATTACK_POWER,
+                                rng_eff * screeps::constants::RANGED_ATTACK_POWER,
+                                work_eff * screeps::constants::DISMANTLE_POWER,
                                 claim * 300, // CONTROLLER_ATTACK_PER_PART (engine const; declaim is deferred in v1)
                             )
                         })

@@ -801,9 +801,22 @@ impl<'a> System<'a> for PreRunSquadUpdateSystem {
                         member.damage_taken_last_tick = 0;
                     }
 
-                    if member.heal_power == 0 {
-                        member.heal_power = creep.body().iter().filter(|p| p.part() == Part::Heal && p.hits() > 0).count() as u32;
-                    }
+                    // WS-VAL parity fixes (audit H4/M16 + the boost-blind seam): recompute EVERY
+                    // tick (the old `== 0` latch kept DESTROYED heal parts counting at full
+                    // strength for the rest of the creep's life — the engage balance and the heal
+                    // triage both read a phantom sustain), and count EFFECTIVE (boost-multiplied)
+                    // parts so a boosted healer's real ×2/3/4 output reaches the shared kernels —
+                    // matching the sim adapter exactly.
+                    member.heal_power = creep
+                        .body()
+                        .iter()
+                        .filter(|p| p.part() == Part::Heal && p.hits() > 0)
+                        .map(|p| {
+                            p.boost()
+                                .map(screeps_combat_decision::bodies::boosts::output_multiplier_for)
+                                .unwrap_or(1) as u32
+                        })
+                        .sum();
                 }
             }
         }

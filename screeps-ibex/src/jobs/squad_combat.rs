@@ -179,7 +179,15 @@ pub(crate) fn creep_to_dto(c: &Creep) -> crate::combat::CombatCreepDto {
         body: c
             .body()
             .iter()
-            .map(|p| crate::combat::CombatBodyPart { part: p.part(), hits: p.hits() })
+            .map(|p| {
+                // WS-VAL boost-blind-seam fix: carry the part's REAL boost output multiplier so the
+                // shared kernels price boosted bodies (enemy AND ours) at true strength.
+                let mult = p
+                    .boost()
+                    .map(screeps_combat_decision::bodies::boosts::output_multiplier_for)
+                    .unwrap_or(1);
+                crate::combat::CombatBodyPart::boosted(p.part(), p.hits(), mult)
+            })
             .collect(),
     }
 }
