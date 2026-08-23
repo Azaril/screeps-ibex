@@ -1423,6 +1423,26 @@ impl WarOperation {
             .filter(|o| o.owner == ObjectiveOwner::Attack)
             .count() as u32;
 
+        // ── ADR 0041 P1 (D2, O5 offense-first) — the OFFENSE boost supply clamp: the best single
+        // home's fully-suppliable tier (per-home, not empire-pooled — compounds scattered across
+        // homes can't uniformly boost one body; the terminal network converges stock over time).
+        // GATED on `features.military.boost_military` (default OFF): sizing to a tier before the P3
+        // apply path exists would field quarter-size forces whose ×4 output never materializes —
+        // this flag is the P3 activation switch. While OFF (or unstocked) the tier is T0 and the
+        // optimizer is byte-identical to the unboosted bot. Defense stays T0-immediate (O5).
+        let offense_boost_tier = if features.military.boost_military {
+            use screeps_combat_decision::bodies::boosts::{max_supplied_tier, MIN_BOOST_STOCK};
+            system_data
+                .economy
+                .rooms
+                .values()
+                .map(|r| max_supplied_tier(|c| r.available_boosts.get(&c).copied().unwrap_or(0), MIN_BOOST_STOCK))
+                .max()
+                .unwrap_or_default()
+        } else {
+            screeps_combat_decision::bodies::BoostTier::T0
+        };
+
         for candidate in candidates {
             // ── ADR 0035 D5 (the A4 fix — the MISSING producer-side backoff consumer). The abandon latch
             //    (`mark_unwinnable`, set by the SquadManager when a reached squad retreats from an unwinnable
@@ -1604,11 +1624,23 @@ impl WarOperation {
                         let ctx = EngagementContext {
                             member_energy,
                             onsite_window,
-                            params: CompositionParams { member_energy, ..Default::default() },
+                            params: CompositionParams {
+                                member_energy,
+                                // ADR 0041 P1: the offense supply clamp (T0 unless `boost_military`
+                                // is on AND a home is fully stocked — see the scan-head derivation).
+                                boost_max_tier: offense_boost_tier,
+                                ..Default::default()
+                            },
                             ..base_ctx.clone()
                         };
                         let plan = plan_engagement(doctrine, &ctx, None);
-                        if doctrine.honor_verdict() && !plan.winnable() {
+                        // ADR 0041 P1 — the boosted-verdict override: `plan.assessment` is the driver's
+                        // T0-budget verdict, but the optimizer re-assesses PER SUPPLIED TIER (D3), so a
+                        // gated doctrine that FIELDED a composition (`Some` ⇒ some suppliable tier was
+                        // winnable AND its EV cleared the commit gate) must not be skipped by the
+                        // unboosted verdict. Inert while `boost_max_tier` is T0 (the optimizer then
+                        // defers exactly when the T0 verdict says unwinnable — pre-0041 behavior).
+                        if doctrine.honor_verdict() && !plan.winnable() && plan.composition.is_none() {
                             info!(
                                 "[War]   Skip {} -- force oracle: not winnable for one squad ({})",
                                 candidate.room, plan.assessment.reason

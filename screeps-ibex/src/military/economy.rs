@@ -192,8 +192,34 @@ impl<'a> System<'a> for EconomyAssessmentSystem {
             let mut stored_energy: u32 = 0;
             let mut spawn_count: u32 = 0;
             let mut free_spawns: u32 = 0;
+            // ADR 0041 P1 — the room's military boost stock (labs + storage + terminal), the input
+            // the D2 supply clamp (`bodies::boosts::max_supplied_tier`) reads. Populating the
+            // previously-hollow field is pure observability until `features.military.boosts` flips
+            // (the P3 activation switch — sizing to a tier before the apply path exists would field
+            // quarter-size forces whose ×4 output never materializes).
+            let mut available_boosts: HashMap<ResourceType, u32> = HashMap::new();
 
             if let Some(structures) = room.get_structures() {
+                {
+                    use screeps_combat_decision::bodies::{boosts::tier_compounds, BoostTier};
+                    for tier in [BoostTier::T1, BoostTier::T2, BoostTier::T3] {
+                        for compound in tier_compounds(tier).into_iter().flatten() {
+                            let mut total: u32 = 0;
+                            if let Some(storage) = structures.storages().first() {
+                                total += storage.store().get_used_capacity(Some(compound));
+                            }
+                            if let Some(terminal) = structures.terminals().first() {
+                                total += terminal.store().get_used_capacity(Some(compound));
+                            }
+                            for lab in structures.labs() {
+                                total += lab.store().get_used_capacity(Some(compound));
+                            }
+                            if total > 0 {
+                                available_boosts.insert(compound, total);
+                            }
+                        }
+                    }
+                }
                 if let Some(storage) = structures.storages().first() {
                     stored_energy += storage.store().get_used_capacity(Some(ResourceType::Energy));
                 }
@@ -228,7 +254,7 @@ impl<'a> System<'a> for EconomyAssessmentSystem {
                 free_spawns,
                 prev_tick_queue_depth,
                 military_spawns_claimed: 0,
-                available_boosts: HashMap::new(),
+                available_boosts,
             };
 
             // Aggregate totals.
