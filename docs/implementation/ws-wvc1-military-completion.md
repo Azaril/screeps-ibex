@@ -17,7 +17,7 @@ boost (Phase 5) then feeds correct machinery.
 
 ## Plan (ranked by effectiveness-per-risk)
 
-- [ ] **T-HEAL-3a — winnability-gate inputs** (0008a Tier 0 #1, unboosted half; the boost
+- [x] **T-HEAL-3a — winnability-gate inputs** (SHIPPED-ready; first 0047-tolerant field — no WFV) (0008a Tier 0 #1, unboosted half; the boost
       multipliers land with 0041): (a) `project_enemy` (`squad_manager.rs:~876`) derives enemy
       `hits` from the body instead of hard-coding `0`; (b) `estimated_heal` (`threatmap.rs:~315`)
       gated on REACHABLE healers (adjacent-12 / ranged-3 relative to the focus), mirroring
