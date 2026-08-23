@@ -63,3 +63,15 @@ This ADR's pieces are None-breaking and land at parity, alongside ADR 0004:
 **Stable seam.** The frozen boundary is the `run_systems` entrypoint and the post-pass (`cleanup_memory` → `repair_entity_integrity` → `serialize_world`): the scheduler is introduced behind `run_systems` and the containment boundary wraps it, so the post-pass contract (serialize always runs) is the verifiable invariant at each step.
 
 **Breaking-change & state-drop notes.** This ADR introduces **no intentional state drop** (the one-time resets in the sequencing plan belong to ADR 0002 / 0001). Behavioral changes (shedding, panic boundary) must never break the running bot mid-increment: ship the scheduler at no-shed parity first, enable shedding only after replay parity is green.
+
+## Containment boundary — as-ratified (triage, 2026-08-23)
+
+The `catch_unwind`-so-serialize-always-runs goal above shipped in a DIFFERENT, simpler form and the
+shipped form is hereby ratified as the design: an aborted tick **loses its serialize** — state rolls
+back one tick — and the rollback is **loudly accounted** (the abort is visible, `vm_starts`
+increments, the next tick's decode proceeds from the prior good state). Rationale: months of live
+aborts have exercised this path without a corruption incident; a one-tick rollback is strictly
+cheaper than the risks of running serialization inside an abort handler over possibly-inconsistent
+world state; and ADR 0047's direction makes serialized-state loss progressively cheaper still. The
+`catch_unwind` wrapper remains a rejected-for-now alternative, re-openable if multi-tick abort
+storms are ever observed.

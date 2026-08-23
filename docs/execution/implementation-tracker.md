@@ -63,9 +63,10 @@ retries (attempts 1–2 + `retry_after` + fresh-sighting clears) — **L2 (poiso
 OBVIATED BY CONSTRUCTION**: the 0046 machinery *is* the self-heal; L2 targeted the old permanent
 103-room list, which no longer exists as a class. WS-1 doc deleted per the impl-doc lifecycle.
 
-### NOW: close out Phase 2 (ws-triage final sweep) → WS-6 · ADR 0047 experiments
-→ [`../implementation/ws-triage.md`](../implementation/ws-triage.md). Wave B live-watch continues
-informally (drain signatures, safe-mode behavior on the next real fight).
+### NOW: WS-6 · ADR 0047 encoding experiments → [`../implementation/ws-6-serialization-bench.md`](../implementation/ws-6-serialization-bench.md)
+
+Phase 2 closed 2026-08-23 (every §6 line phase-tagged; ws-triage doc deleted per lifecycle). Wave B
+live-watch continues informally (drain signatures, safe-mode behavior on the next real fight).
 
 ---
 
@@ -97,7 +98,7 @@ expansion program; collects the 0018 "has an SK farm ever run" evidence for free
 ADR 0027 amended. **SHIPPED to live 2026-08-23** (hot swap `0d9524f2668f`, world persisted — missions carried through, 0 deser errors). Live-watch, then the WS-2 doc deletes.
 *Closes: 0037's decision item and the 2026-07-09 review's Tier −1 as a live work list.*
 
-**Phase 2 — the triage pass: decide, don't build** (one session; create its impl doc — the
+**Phase 2 — the triage pass — DONE 2026-08-23** (verdicts in git: `f3c822b`, `29072c3`, the sweep). Original brief: **decide, don't build** (one session; create its impl doc — the
 verdicts must land as ADR amendments via `Design deltas`). Every §6/§8 item gets one of three
 verdicts: **schedule** (into Phases 3–6), **amend out** (shrink the ADR's end state — candidates:
 0030 `EngagementTempo` → Withdraw/fold into 0031; 0020 S5/S6/S7 keep-or-cut; 0026a's six deferred
@@ -123,7 +124,7 @@ C1–C7), 0042 `opportunity_floor` + R1–R4, 0044/0044a P3 all-sinks activation
 0040 §D8 reserve retirement. Mechanical batch work against a shipped market.
 *Closes: 0007, 0040, 0042, 0043, 0044, 0044a.*
 
-**Phase 6 — remaining designs, only what survives Phase 2.** WS-5 (0045 power creeps), 0020 S5–S7 (after Phase 4, ratified), plus
+**Phase 6 — remaining designs + WvC.** **WvC** = the post-P4 combat wave (the §6 WvC-tagged live combat fixes, batched + shipped like Wave B). Then WS-5 (0045 power creeps), 0020 S5–S7 (after Phase 4, ratified), plus
 whichever of 0011/0012/0013/0014/0015/0016 the triage keeps (0013's spending half is already
 delegated to 0045; 0014 may reduce to the W4 `WarDecl` hook owned by 0008). New builds, so last
 by policy.
@@ -153,9 +154,9 @@ GCL 12, bucket 10000, W7N47 under remote-build.
 56 ADRs. States: **Live** (in `ab692bd`) · **Host-only** (offline tooling, never in the wasm
 bundle) · **On master** (merged, undeployed) · **Partial** · **Design-only** · **Closed**.
 
-**Closed — no open work. Detail in the ADR; do not re-track.** `0001`, `0009c`, `0038`
+**Closed — no open work. Detail in the ADR; do not re-track.** `0001`, `0005` (containment ratified as-shipped 2026-08-23), `0009c`, `0038`
 
-**Live** — `0002 0004 0005 0008 0017 0019 0024 0025 0027 0029 0031 0031b 0032 0034 0035 0036 0040 0042 0044 0044a 0046`
+**Live** — `0002 0004 0008 0017 0019 0024 0025 0027 0029 0031 0031b 0032 0034 0035 0036 0040 0042 0044 0044a 0046`
 **Host-only** — `0006 0023 0023a 0025a 0026 0026a 0033`
 
 **Partial** — `0003 0007 0008a 0009 0009a 0009b 0011 0012 0018 0020 0021 0028 0031a 0037 0039 0043`
@@ -169,53 +170,52 @@ Open work for these is in §6 and §7. An ADR absent from both is Closed.
 
 ## 6. Open work by owning ADR
 
-One line per item.
+One line per item. **Phase tags** (sweep 2026-08-23): P3 boost · P4 R19-tuning · P5 economy · P6 remaining designs · **WvC** = the post-P4 combat wave (small live combat fixes batched like Wave B) · HARNESS = B-1 lane · WATCH = live observation.
 
 **Combat**
-- `0008` — S1/S2 synchronized spawning unbuilt; W2 supervisor trim + W4 `WarDecl` posture outstanding; O5 power-bank + heavy multi-squad assault deferred.
-- `0008a` — Tier 0 T-HEAL-3 unbuilt (`project_enemy` hard-codes `hits: 0`); T-DEF-1 cover term, T-DEF-5 predictive safe-mode, T-POS-5 exit-tile cost all unbuilt; Tier 3 untouched.
-- `0019` — S4-TUNE weight sweep flat on melee beds; boosted-TOUGH conversion blocked on 0041.
+- `0008` — S2 boost handoff **→P3**; S1 pre-spawn, W2 trim + W4 `WarDecl` **→P6**; O5 power-bank + heavy assault = deferred capabilities (activate by decision, not schedule).
+- `0008a` — T-HEAL-3 (widens into R1) **→P3**; T-DEF-1/T-DEF-5/T-POS-5 + the damage.rs readiness tranche **→WvC**; Tier 3 **→P6** (after P3).
+- `0019` — S4-TUNE **→P4**; boosted-TOUGH **→P3** (blocked on 0041).
 - `0020` — S5/S6/S7 (blob auction + R7 currency, adaptivity, adversarial room-gen): **operator-ratified scheduled end-state, sequenced AFTER Phase 4** (they want the R19-retuned kernels). **S5-CAP: `MAX_CONCURRENT_SQUADS` still hardcoded 4** (`squad_manager.rs:211`).
-- `0026` — L6c doctrine weights untuned; L8 coordination keyed on `TargetSource` not observed bodies.
-- `0026a` — six deferred modes unbuilt; the nine activator signals still uncomputed.
-- `0027` — `Farm{Core}` and `Farm{PowerBank}` inert, no producer; salvage teardown still mission-owned.
-- `0028` — wire `slots_to_spawn` (K3) and `claims_allowed` (K4) into the bot; record a `run_defended_lifecycle` closeout; multi-squad lane contention in `run_forming` (owns 0029's duplicate).
+- `0026` — L6c **→P4**; L8 observed-bodies coordination **→WvC**.
+- `0026a` — modes activate as their signals land **→P6** (catalog; no standalone schedule).
+- `0027` — Farm producers (PowerBank needs its own ADR) + salvage-teardown migration **→P6**.
+- `0028` — K3/K4 bot wiring + `run_defended_lifecycle` closeout **→HARNESS**; multi-squad lane contention **→WvC**.
 
-- `0031` — Tier-2 weapon archetype still doctrine-chosen, not searched; Tier-3 param axes absent.
-- `0031a` / `0031b` — sweeps invalid until re-run: **`w_energy` default is now `1.0`, not the `0.001` the results assume.** Re-run, then amend the conclusion.
-- `0034` — no convergence gates in `param_sweep.rs`; renewable-rally bias sim-only, never live-wired.
-- `0035` — FU1 scout-first request/await pipeline; FU2 give-up for a committed squad that never engages.
-- `0036` — live raze confirmation blocked on private-server world mechanics (B-1).
-- `0037` — ~~T1/T2 orphan decision~~ **RULED 2026-08-23: retained by design** (war.rs:550 documents it; owned-path `tower_danger: 0.0` is the neighbour-only-signal design). Remaining: T3 seam adds no candidate and only logs under `war_debug`.
-- `0039` — P2–P4 **folded into the harness lane** (2026-08-23): re-activate with H5 (shared Docker dependency + sim-fidelity goal).
+- `0031` — Tier-2 archetype search + Tier-3 axes **→P4** (the 0031a sweep plan).
+- `0031a` / `0031b` — sweeps invalid (`w_energy` now 1.0, not the 0.001 the results assume); re-run + amend conclusions **→P4**.
+- `0034` — convergence gates **→P4**; renewable-rally live-wire **→WvC**.
+- `0035` — FU1 + FU2 **→WvC**.
+- `0036` — live raze confirmation **→HARNESS** (private-server world mechanics, B-1).
+- `0037` — ~~T1/T2 orphan decision~~ **RULED 2026-08-23: retained by design** (war.rs:550 documents it; owned-path `tower_danger: 0.0` is the neighbour-only-signal design). Remaining: T3 seam candidate emission **→WvC**.
+- `0039` — P2–P4 **folded into the harness lane** (2026-08-23): re-activate with H5 **→HARNESS**.
 
 **Economy**
-- `0007` — item 4: size haulers from ADR 0038 route distance, not Manhattan; shared predicted storage capacity.
-- `0010` — L0 populate `available_boosts`, per-tick `BoostQueue::clear`, chain math; L1–L4 planner/labs/factory. **Nothing in the bot calls `boostCreep`.** Blocks 0041.
-- `0012` — M2 `MarketSnapshot`/`TradePlanner` absent; M3 governor/graylist/kill-switch absent; `market.buy_minerals` off.
-- `0040` — §D8 #2: the 20% military reserve (`economy.rs:87`) was never retired post-soak. Owns review R15.
-- `0042` — `opportunity_floor` still hardcoded `0` (`squad_manager.rs:1868`, gated on 0043 A2); R1–R4 refinements.
-- `0043` — A2/A4/A7/A9/A10 band lerps still live in `spawn_policy.rs`; A11 importance margin; A12 exponential backoff; C1–C7 vetoes.
-- `0044` / `0044a` — P3 all-sinks only partially activated (build/repair bids are admission gates, not EV-priced haul registrations); per-lane road awareness; Phase-3 verification never recorded.
+- `0007` — item 4 (route-distance hauler sizing + shared predicted capacity) **→P5**.
+- `0010` — L0 populate `available_boosts`, per-tick `BoostQueue::clear`, chain math; L1–L4 planner/labs/factory. **Nothing in the bot calls `boostCreep`.** Blocks 0041 **→P3**.
+- `0012` — M2/M3 **→P6**.
+- `0040` — §D8 #2: the 20% military reserve (`economy.rs:87`) was never retired post-soak. Owns review R15 **→P5**.
+- `0042` — `opportunity_floor` still hardcoded `0` (`squad_manager.rs:1868`, gated on 0043 A2); R1–R4 refinements **→P5**.
+- `0043` — A2/A4/A7/A9/A10 band lerps still live in `spawn_policy.rs`; A11 importance margin; A12 exponential backoff; C1–C7 vetoes **→P5**.
+- `0044` / `0044a` — P3 all-sinks only partially activated (build/repair bids are admission gates, not EV-priced haul registrations); per-lane road awareness; Phase-3 verification never recorded **→P5**.
 
 **Rooms, expansion, infrastructure**
-- `0003` — `MissionResult::Wait/Idle` + park-don't-teardown for economy missions.
-- `0009` / `0009a` / `0009b` — planner: D3 RoomGraph + inter-room road layer unbuilt; Q8 cap-lift unwired; **0009b §7 ground-truth bench evaluator gates the whole scoring/RCL revamp**.
-- `0011` — D5 cross-room spawn assist and G3 incubation: zero code; no empire spawn-budget orchestrator.
-- `0017` — M5b securing escort never built (deferred to 0008); abort thresholds untuned against live attackers.
-- `0018` — K4 SK mineral mining unbuilt; **no live evidence an SK farm has ever actually run**, yet `farming` is default-ON.
-- `0021` — follow-ups #1/#2 absorbed by 0046 (now LIVE); #5/#6 unimplemented.
-- `0046` — staleness-bucket quantization tune rides live observation (low priority; C1–C5 all passed).
+- `0003` — `MissionResult::Wait/Idle` park-don't-teardown **→P6**.
+- `0009` / `0009a` / `0009b` — planner revamp (bench evaluator gates it) **→P6**.
+- `0011` — D5 assist, G3 incubation, empire spawn-budget orchestrator **→P6**.
+- `0017` — M5b escort (owned by 0008 **→P6**); abort-threshold tune **→WATCH** (needs live attacker evidence).
+- `0018` — K4 mineral + K-RECONCILE (incl. `HoldModel::Suppress` unification) **→P6**; SK-farm live evidence **→WATCH**.
+- `0021` — follow-ups #5/#6 **→P6** (#1/#2 absorbed by 0046, live).
+- `0046` — staleness-bucket quantization tune rides live observation (low priority; C1–C5 all passed) **→WATCH**.
 
 **Platform / tooling**
-- `0004` — governor thresholds still flagged INITIAL, pending pressure-scenario calibration.
-- `0005` — an aborted tick loses its serialize and rolls back one tick (divergence from the ADR's goal; loudly accounted, not fixed).
-- `0006` — server-harness combat scenarios absent (`Fault` enum is only CpuBurn/GlobalReset/PanicOnce); **H5 sim-vs-server parity oracle** (golden vectors + nightly gate — reassigned here from 0008/0028, see UNOWNED-2; blocked on B-1).
-- `0013` / `0014` / `0015` / `0016` / `0045` — design-only. 0015 (testkit + seam registry) and 0016 (HUD) were marked "in scope" by the ultracode completion kickoff, a program that has driven nothing since 2026-07-02 (see RULING-5).
-- `0023` / `0023a` — S5 border scenarios deferred; cross-room `Flee` still single-room; no MultiRoom generator.
-- `0025` — `action_oscillation_rate` metric never implemented. (0025a residual: **closed as documented-mitigated**, 2026-08-23.)
-- `0033` — kite-weight retune never done; determinism fence not promoted corpus-wide.
-- `0041` — entire P0–P3. Blocked on 0010.
+- `0004` — governor pressure-scenario calibration **→HARNESS**.
+- `0006` — server-harness combat scenarios absent (`Fault` enum is only CpuBurn/GlobalReset/PanicOnce); **H5 sim-vs-server parity oracle** (golden vectors + nightly gate — reassigned here from 0008/0028, see UNOWNED-2; blocked on B-1) **→HARNESS**.
+- `0013` / `0014` / `0015` / `0016` / `0045` — design-only. 0015 (testkit + seam registry) and 0016 (HUD) were marked "in scope" by the ultracode completion kickoff, a program that has driven nothing since 2026-07-02 (RULING-5) **→P6**.
+- `0023` / `0023a` — S5 border scenarios, cross-room `Flee`, MultiRoom generator **→HARNESS**.
+- `0025` — `action_oscillation_rate` metric **→P4** (rides the sweep instrumentation). (0025a residual closed 2026-08-23.)
+- `0033` — kite retune **→P4**; corpus-wide fence promotion **→P4**.
+- `0041` — entire P0–P3 **→P3** (blocked on 0010).
 
 ---
 
@@ -313,6 +313,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-23** — **Phase 2 (triage) CLOSED**: final sweep phase-tagged every §6 line (P3/P4/P5/P6/WvC/HARNESS/WATCH); 0005 containment ratified as-shipped → Closed; ws-triage doc deleted. WS-6 (0047 benches) is NOW.
 
 - **2026-08-23** — **WS-1 CLOSED: C1–C5 ALL PASS.** The pipeline claimed **W7N47** (dist 4, above-ring, score 0.835) — 8 rooms; RemoteBuildMission constructing. L2 ruled OBVIATED by 0046's bounded-retry machinery. 0046→Live, 0038→Closed. WS-1 doc deleted per lifecycle.
 
