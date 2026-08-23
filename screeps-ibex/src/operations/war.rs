@@ -1497,13 +1497,18 @@ impl WarOperation {
                 continue;
             };
 
-            // `coordination` records the Q1-confirmed prior (Coordinated unless a positive NPC signal).
+            // `coordination`: L8 — the OBSERVED bodies (scouted hostile owners) win; the Q1 source
+            // prior (Coordinated unless a positive NPC signal) is the unobserved fallback.
             // `enemy_force` carries the room's scouted creep force (dps/heal) — the `PlayerRaid` doctrine
             // (ClearCreeps) sizes the raid from it (L4-activate); the structure arms (NpcCore/SiegeBreach)
             // ignore it and size from `defense`. `member_energy` is filled from the chosen home below.
+            let observed_threat = threat_rooms
+                .iter()
+                .find(|(_, name, _)| *name == candidate.room)
+                .map(|(_, _, td)| td);
             let base_ctx = EngagementContext {
                 objective: doc_obj,
-                coordination: classify_coordination(&candidate),
+                coordination: classify_coordination(&candidate, observed_threat),
                 defense: candidate.defense.clone().unwrap_or_default(),
                 enemy_force: Some(EnemyForce {
                     dps: candidate.estimated_enemy_dps,
@@ -2015,11 +2020,35 @@ fn towered_neighbour_offense_reason(has_invader_core: bool, room_owner_hostile: 
     None
 }
 
-/// Classify the enemy's coordination for the doctrine sizing math (ADR 0026 §9.4, Q1 confirmed
-/// 2026-06-26): `Coordinated` UNLESS a positive NPC signal — the safe over-spend default, since
-/// under-sizing a real player loses creeps while over-sizing an NPC only spends. Rung-1 doctrines are all
-/// `Individual` so this is forward context; the richer owner/body classification is rungs 2–3.
-fn classify_coordination(candidate: &AttackCandidate) -> EnemyCoordination {
+/// ADR 0026 L8 — coordination read from the OBSERVED bodies (§9.3's own principle): the scouted
+/// hostile creeps' OWNERS decide. Every observed hostile NPC-owned (Invader / Source Keeper) ⇒
+/// `Individual`; ANY player-owned hostile ⇒ `Coordinated` (the Q1 asymmetry: under-sizing a player
+/// loses creeps, over-sizing an NPC only spends — so one player body flips the whole room). `None`
+/// when there is nothing observed (no threat intel, or a creepless room) — the caller falls back to
+/// the Q1 source prior. Pure over the scan snapshot.
+fn coordination_from_observed(creeps: &[crate::military::threatmap::HostileCreepInfo]) -> Option<EnemyCoordination> {
+    if creeps.is_empty() {
+        return None;
+    }
+    if creeps.iter().all(|c| crate::military::is_npc_owner(&c.owner)) {
+        Some(EnemyCoordination::Individual)
+    } else {
+        Some(EnemyCoordination::Coordinated)
+    }
+}
+
+/// Classify the enemy's coordination for the doctrine sizing math (ADR 0026 §9.4). L8: the OBSERVED
+/// bodies win when the room has scouted hostiles ([`coordination_from_observed`]); otherwise the
+/// Q1-confirmed prior (2026-06-26) holds — `Coordinated` UNLESS a positive NPC *source* signal, the
+/// safe over-spend default, since under-sizing a real player loses creeps while over-sizing an NPC
+/// only spends.
+fn classify_coordination(
+    candidate: &AttackCandidate,
+    observed: Option<&crate::military::threatmap::RoomThreatData>,
+) -> EnemyCoordination {
+    if let Some(from_bodies) = observed.and_then(|t| coordination_from_observed(&t.hostile_creeps)) {
+        return from_bodies;
+    }
     match candidate.source {
         TargetSource::InvaderCore { .. } | TargetSource::InvaderCreeps | TargetSource::PowerBank { .. } => EnemyCoordination::Individual,
         _ => EnemyCoordination::Coordinated,
@@ -2260,6 +2289,27 @@ mod tests {
             work_parts,
             boosted,
         }
+    }
+
+    /// ADR 0026 L8 — coordination from OBSERVED bodies: owners decide. All-NPC ⇒ Individual; ONE
+    /// player body among invaders flips the room Coordinated (the Q1 asymmetry — under-sizing a
+    /// player loses creeps); nothing observed ⇒ None (the caller falls back to the Q1 source prior).
+    #[test]
+    fn coordination_reads_observed_owners_one_player_flips_the_room() {
+        let owned = |owner: &str| {
+            let mut i = info(30.0, 0.0, 0.0, 1_000, 0, false);
+            i.owner = owner.to_string();
+            i
+        };
+        let npc_only = [owned(crate::military::NPC_INVADER), owned(crate::military::NPC_SOURCE_KEEPER)];
+        assert_eq!(coordination_from_observed(&npc_only), Some(EnemyCoordination::Individual));
+        let mixed = [owned(crate::military::NPC_INVADER), owned("somePlayer")];
+        assert_eq!(
+            coordination_from_observed(&mixed),
+            Some(EnemyCoordination::Coordinated),
+            "one player body among NPCs sizes the whole room Coordinated"
+        );
+        assert_eq!(coordination_from_observed(&[]), None, "no observation -> the Q1 source prior decides");
     }
 
     /// REC-013 PIN (operator directive 2026-07-01) — the channel split: a 25-WORK dismantler contributes
