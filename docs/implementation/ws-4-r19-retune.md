@@ -47,3 +47,4 @@ any adoption ships; live-watch after ship.
 
 - 2026-08-23 — created after WvC-1/WvC-2 shipped + live-validated. Start: basket extension.
 - 2026-08-23 — R19 core re-tune DONE same-session: basket + pass (`940f739`), winner adopted (`a7acb0b`), 0026a reversed-with-reconciliation. Process note: run the fence in RELEASE (18s vs 385s debug). Next: ship, then the downstream sweeps (start 0031a/b under w_energy=1.0).
+- 2026-08-23 (ship) — R19 adoption deployed (hot swap `9913ef980109`). WATCH note: both post-deploy tails showed a one-tick burst of `INTEGRITY: dead squad ref scrubbed` (a squad retiring with living members right after the hot-swap reset — the REC-009b backstop handles it; members recall via job fallback). If it recurs on every deploy it is re-field churn per swap (ObjectiveGone/claim timing on the reload tick?) — attribute then.
