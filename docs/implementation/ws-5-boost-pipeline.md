@@ -27,15 +27,9 @@ boosted-TOUGH, 0020-TOUGH, 0008a Tier 3, 0008 S2.
       (`boost_max_tier` default T0 ⇒ DARK, byte-identical). Pins: existing calibration gates
       unchanged; the T-TOWER-3 proof (synthetic T3 makes a T0-deferred towered target
       fieldable+committable); determinism; tie-break.
-- [ ] **P0b — seam generalization** (with P1): `defender_heal_parts_for_dps` bool→tier,
-      `parts_for_rate`/`capabilities`/`single_role_cap` take the tier (D3); TOUGH-reduction into
-      p_survive (feeds 0019 boosted-TOUGH).
-- [ ] **P1 — supply + pricing live**: populate `EconomySnapshot.available_boosts` (economy.rs
-      hollow field) from lab+storage+terminal stock (shared ADR 0010 L0 prerequisite);
-      `BoostSupply` clamp per fielding home + reservation (D2); the O4 `mineral_value_e`
-      trust-gated valuation kernel (market → production floor → constant).
-- [ ] **P2 — persisted `CombatBodySpec.boost`** (`#[serde(default)]` = T0 — NO reset under 0047)
-      + spawn-callback attach; `required_boosts()` gets its first caller.
+- [~] **P0b — seam generalization** RE-SCOPED: the optimizer-internal per-tier emit (P0a) already covers D3's winnability effect; the remaining seam-signature churn (bool→tier) waits for a consumer, and TOUGH-reduction is the 0019 boosted-TOUGH item (post-0041 by schedule). Nothing blocks P3.
+- [x] **P1 — supply machinery** (decision `d217a3d`, super `5b29c9a`): `available_boosts` populated (labs+storage+terminal, 18 compounds); `max_supplied_tier` pure clamp (fully-suppliable per family, RED-verified); offense wiring GATED on `features.military.boost_military` (default OFF — the P3 activation switch; sizing before the apply path exists would field ¼-size forces); boosted-verdict override at the war.rs skip. FOLLOW-UPS (before/with activation): the O4 market-fed `mineral_value_e` resolver (constants govern till then — over-pricing is the safe direction); reservation vs concurrent requests (physical only at P3).
+- [x] **P2 — persisted tier** (decision, this commit): `CombatBodySpec.boost` serde-default T0 (old payloads tolerant — pinned); optimizer stamps the winning rung per slot; `required_boosts()` real (30×parts per family incl. derived MOVE). Spawn-side attach deferred INTO P3 (the job re-derives from its slot's spec — no extra field needed).
 - [ ] **P3 — apply**: bounded `AwaitBoost` job state → ADR 0010 boost station → `boostCreep`;
       falls through unboosted on deadline/stock-loss. BoostQueue keyed by DemandId (EP-1.7).
 - [ ] **P4 — sweep**: which rungs EV-win per bed (the O3 full-ladder validation) + the O4
@@ -57,3 +51,4 @@ against whatever the autonomous labs already stock.
 
 - 2026-08-23 — created; Phases 3+4 shipped same day. Start: P0a.
 - 2026-08-23 — P0a landed (decision `04cc020`): tier axis + per-tier ceiling assessment + real-body boost cost; 3 RED-verified pins (T-TOWER-3 proof green); 355/334/114 + fence green. DARK (T0 default) — byte-identical live, so NOT separately deployed; rides with the P0b/P1 batch. NOTE for P1: the CALLER-side winnability gate (`plan.winnable()` in doctrine/choose_fielded_comp paths) still reads the T0 assessment — the optimizer unlocks boosted fielding, but the caller's defer must learn the boosted verdict when supply goes live (wire at P1).
+- 2026-08-23 — P1 (`d217a3d`+`5b29c9a`) and P2 (`78e70b8`) landed; P0b re-scoped (optimizer-internal emit covers D3's winnability; TOUGH → 0019). All dark behind `boost_military=false`. Next: P3 — the AwaitBoost apply path (read ADR 0010 §4 for the boost-station/queue discipline first).
