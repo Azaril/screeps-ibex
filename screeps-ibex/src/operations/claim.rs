@@ -2647,12 +2647,104 @@ mod live_world_decode {
         }
     }
 
+    /// Per-store section sizes: serialize each of the 12 stores ALONE, under bincode
+    /// and msgpack-named — the data for the sectioned-vs-whole-stream decision and
+    /// the empire-scaling model (which stores actually grow).
+    struct PerStoreBench {
+        results: std::cell::RefCell<Vec<(&'static str, usize, usize)>>, // (store, bincode, msgpack-named)
+    }
+
+    impl<'a> System<'a> for PerStoreBench {
+        type SystemData = EncodeBenchData<'a>;
+
+        fn run(&mut self, data: Self::SystemData) {
+            macro_rules! store_size {
+                ($name:expr, $st:expr) => {{
+                    let mut bin = Vec::<u8>::new();
+                    {
+                        let mut ser = bincode::Serializer::new(&mut bin, DefaultOptions::new());
+                        SerializeComponents::<std::convert::Infallible, SerializeMarker>::serialize(
+                            &(&$st,),
+                            &data.entities,
+                            &data.markers,
+                            &mut ser,
+                        )
+                        .map(|_| ())
+                        .expect($name);
+                    }
+                    let mut named = Vec::<u8>::new();
+                    {
+                        let mut ser = rmp_serde::Serializer::new(&mut named).with_struct_map();
+                        SerializeComponents::<std::convert::Infallible, SerializeMarker>::serialize(
+                            &(&$st,),
+                            &data.entities,
+                            &data.markers,
+                            &mut ser,
+                        )
+                        .map(|_| ())
+                        .expect($name);
+                    }
+                    self.results.borrow_mut().push(($name, bin.len(), named.len()));
+                }};
+            }
+            store_size!("CreepSpawning", data.creep_spawnings);
+            store_size!("CreepOwner", data.creep_owners);
+            store_size!("CreepRoverData", data.creep_movement_data);
+            store_size!("RoomData", data.room_data);
+            store_size!("RoomPlanData", data.room_plan_data);
+            store_size!("JobData", data.job_data);
+            store_size!("OperationData", data.operation_data);
+            store_size!("MissionData", data.mission_data);
+            store_size!("SquadContext", data.squad_context);
+            store_size!("VisibilityQueueData", data.visibility_queue_data);
+            store_size!("CombatObjectiveData", data.combat_objective_data);
+            store_size!("RoomThreatData", data.room_threat_data);
+        }
+    }
+
+    /// The tolerance mechanics demo (the actual payoff): a V1 payload decodes into a V2
+    /// shape via regular serde — field ADDED with `#[serde(default)]`, field REMOVED
+    /// (unknown key ignored) — under msgpack struct-map. Positional bincode fails the
+    /// same migration, which is the entire point of ADR 0047.
+    #[test]
+    fn named_encoding_tolerates_field_add_and_remove() {
+        #[derive(serde::Serialize)]
+        struct V1 {
+            kept: u32,
+            removed_later: String,
+        }
+        #[derive(serde::Deserialize, Debug)]
+        struct V2 {
+            kept: u32,
+            #[serde(default)]
+            added_later: Option<f32>,
+        }
+
+        let v1 = V1 { kept: 7, removed_later: "obsolete".into() };
+
+        // msgpack struct-map: V1 bytes decode as V2 — the removed field is ignored,
+        // the added field defaults.
+        let mut named = Vec::new();
+        v1.serialize(&mut rmp_serde::Serializer::new(&mut named).with_struct_map()).unwrap();
+        let migrated: V2 = rmp_serde::from_slice(&named).expect("named decode tolerates add+remove");
+        assert_eq!(migrated.kept, 7);
+        assert_eq!(migrated.added_later, None);
+
+        // The same migration under positional bincode FAILS (or mis-reads) — the baseline
+        // really does force the reset.
+        let bin = bincode::DefaultOptions::new();
+        use bincode::Options as _;
+        let positional = bin.serialize(&v1).unwrap();
+        assert!(
+            bin.deserialize::<V2>(&positional).is_err(),
+            "positional bincode must NOT survive the same shape change"
+        );
+    }
+
     #[test]
     #[ignore]
     fn encoding_bench() {
-        use flate2::write::DeflateEncoder;
-        use flate2::Compression;
-        use std::io::Write as _;
+        use crate::serialize::encode_buffer_to_string;
 
         let Ok(path) = std::env::var("IBEX_WORLD_PAYLOAD") else {
             eprintln!("IBEX_WORLD_PAYLOAD not set; skipping");
@@ -2679,18 +2771,99 @@ mod live_world_decode {
         let mut b = bench;
         b.run_now(&world);
 
-        let deflated = |bytes: &[u8]| -> usize {
-            let mut enc = DeflateEncoder::new(Vec::new(), Compression::new(6));
-            enc.write_all(bytes).unwrap();
-            enc.finish().unwrap().len()
-        };
+        const SEGMENT_BUDGET_CHARS: usize = 4 * 100 * 1024; // COMPONENT_SEGMENTS 50–53
 
-        println!("=== ADR 0047 encoding bench (real payload, native --release; ROUNDS=5, best-of) ===");
+        println!("=== ADR 0047 encoding bench round 2 (real payload, native --release; ROUNDS=5, best-of) ===");
         println!("input: {} raw bincode bytes (live stream, WFV {})", decoded.len() - 4, version);
         println!("bincode DECODE baseline: {bincode_decode_ms:.2} ms");
-        println!("{:<32} {:>10} {:>10} {:>12}", "scheme", "raw", "deflate", "encode ms");
-        for (name, bytes, ms) in b.results.borrow().iter() {
-            println!("{:<32} {:>10} {:>10} {:>12.2}", name, bytes.len(), deflated(bytes), ms);
+        println!(
+            "{:<32} {:>9} {:>9} {:>10} {:>8} {:>11} {:>9}",
+            "scheme", "raw", "enc ms", "seg chars", "% budget", "gzip+b64 ms", "total ms"
+        );
+        for (name, bytes, enc_ms) in b.results.borrow().iter() {
+            // The LIVE pipeline tail, timed: gzip(default) + base64 = the per-tick cost
+            // round 1 missed, and the output is the number the 400KB budget meters.
+            let t0 = std::time::Instant::now();
+            let seg = encode_buffer_to_string(bytes).expect("gzip+base64");
+            let gz_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            println!(
+                "{:<32} {:>9} {:>9.2} {:>10} {:>7.1}% {:>11.2} {:>9.2}",
+                name,
+                bytes.len(),
+                enc_ms,
+                seg.len(),
+                100.0 * seg.len() as f64 / SEGMENT_BUDGET_CHARS as f64,
+                gz_ms,
+                enc_ms + gz_ms
+            );
         }
+
+        // Named DECODE timing (decode also runs every tick): round-trip the msgpack-named
+        // bytes into a FRESH world and time the DeserializeComponents pass.
+        {
+            let named_bytes = b
+                .results
+                .borrow()
+                .iter()
+                .find(|(n, _, _)| n.starts_with("msgpack NAMED"))
+                .map(|(_, bytes, _)| bytes.clone())
+                .expect("named result");
+            struct DecodeNamed<'p> {
+                payload: &'p [u8],
+                elapsed: std::cell::Cell<f64>,
+            }
+            impl<'a, 'p> System<'a> for DecodeNamed<'p> {
+                type SystemData = DecodeSystemData<'a>;
+                fn run(&mut self, mut data: Self::SystemData) {
+                    let t0 = std::time::Instant::now();
+                    let mut deserializer = rmp_serde::Deserializer::new(self.payload);
+                    DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
+                        &mut (
+                            &mut data.creep_spawnings,
+                            &mut data.creep_owners,
+                            &mut data.creep_movement_data,
+                            &mut data.room_data,
+                            &mut data.room_plan_data,
+                            &mut data.job_data,
+                            &mut data.operation_data,
+                            &mut data.mission_data,
+                            &mut data.squad_context,
+                            &mut data.visibility_queue_data,
+                            &mut data.combat_objective_data,
+                            &mut data.room_threat_data,
+                        ),
+                        &data.entities,
+                        &mut data.markers,
+                        &mut data.marker_alloc,
+                        &mut deserializer,
+                    )
+                    .map(|_| ())
+                    .expect("named round-trip decode");
+                    self.elapsed.set(t0.elapsed().as_secs_f64() * 1000.0);
+                }
+            }
+            let fresh = register_bench_world();
+            let mut dn = DecodeNamed {
+                payload: &named_bytes,
+                elapsed: std::cell::Cell::new(0.0),
+            };
+            dn.run_now(&fresh);
+            println!("msgpack-named DECODE (fresh world round-trip): {:.2} ms  [bincode baseline {bincode_decode_ms:.2} ms]", dn.elapsed.get());
+        }
+
+        println!("\n=== per-store section sizes (bincode vs msgpack-named, raw bytes) ===");
+        let ps = PerStoreBench {
+            results: std::cell::RefCell::new(Vec::new()),
+        };
+        let mut p = ps;
+        p.run_now(&world);
+        println!("{:<24} {:>10} {:>10} {:>8}", "store", "bincode", "named", "×");
+        let mut tot = (0usize, 0usize);
+        for (name, bin, named) in p.results.borrow().iter() {
+            tot.0 += bin;
+            tot.1 += named;
+            println!("{:<24} {:>10} {:>10} {:>8.2}", name, bin, named, *named as f64 / (*bin).max(1) as f64);
+        }
+        println!("{:<24} {:>10} {:>10}", "TOTAL (sum of sections)", tot.0, tot.1);
     }
 }

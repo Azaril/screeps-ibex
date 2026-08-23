@@ -107,7 +107,7 @@ wire-or-delete one-liners, then **UNOWNED-3: remove `#![allow(dead_code)]`** so 
 enforces the register). *Exit criterion: every remaining §6 line is inside a scheduled phase.
 Plausibly closes 6–10 ADRs by amendment.*
 
-**Phase 2.5 — WS-6 · ADR 0047 experiments** (operator pulled forward 2026-08-23): the offline encoding bench matrix (real payload, native + wasm, sizes post-deflate) per 0047 §Experiments; promote the ADR to Decided with numbers. Every future WFV change gets cheaper the sooner this lands.
+**Phase 2.5 — WS-6 · ADR 0047 — DECIDED 2026-08-23** (whole-stream msgpack named; benches done). **Remaining: the implementation** — the game_loop serializer swap, one transition WFV bump, ships batched per RULING-8 with the next WFV-bumping work (or alone if none arrives).
 
 **Phase 3 — WS-3 · Boost pipeline (ADR 0010 L0 → 0041).** The biggest completion unlock: 0041
 gates review risk R1 (enemy-boost blindness, the top MMO risk) and the whole boosted-assault
@@ -313,6 +313,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-23** — **ADR 0047 → DECIDED**: whole-stream msgpack struct-map, ONE encoding (operator simplicity steer, confirmed by round-2 data: 30.4% of the real 400KB segment budget; RoomPlanData=86% of bytes and shape-stable; real-world named round-trip works; sectioning rejected as unnecessary). WS-6 remaining: the game_loop swap (one WFV bump, batched).
 
 - **2026-08-23** — **Phase 2 (triage) CLOSED**: final sweep phase-tagged every §6 line (P3/P4/P5/P6/WvC/HARNESS/WATCH); 0005 containment ratified as-shipped → Closed; ws-triage doc deleted. WS-6 (0047 benches) is NOW.
 

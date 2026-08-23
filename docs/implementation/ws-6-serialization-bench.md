@@ -16,9 +16,9 @@ Real numbers in ADR 0047's experiment matrix → promote it to Decided with a ch
 ## Plan
 
 - [x] Bench harness over the real payload — round-1 numbers in ADR 0047 (named tolerance = +33% deflated; CPU fine; selective-tolerance hybrid emerging)
-- [ ] Round 2: per-store size breakdown; **two-pass sectioned prototype** (envelope + shared-allocator round-trip on the real payload); **full-pipeline timing incl. deflate**; migration simulation
-- [ ] wasm-side timing (the number that matters) — needs a wasm bench lane; native first
-- [ ] Write results into 0047; decide granularity (field vs per-section hybrid); promote to Decided
+- [x] Round 2: full-pipeline timing (gzip via the live codec, vs the real 400KB budget), per-store breakdown (RoomPlanData = 86% of bytes), tolerance pin + REAL-world named round-trip. Sectioned prototype SKIPPED — the data made it moot (rejected as unnecessary complexity in the ADR decision).
+- [ ] IMPLEMENT: swap the serializer/deserializer in game_loop.rs to rmp-serde struct-map (one WFV transition bump, ships batched per RULING-8); then watch live serialize CPU + segment chars — the wasm-side confirmation happens on the real thing
+- [x] Results + DECISION in 0047 (whole-stream msgpack named; sectioning rejected as unnecessary); **promoted to Decided**
 
 ## Design deltas
 
@@ -36,3 +36,8 @@ Bench runs on a same-tick real payload; sizes reported post-deflate (the segment
   in specs source) is the viable mechanism and also delivers 0002 Stage-2 isolation. Round-1 gap
   found: deflate time (scales with RAW bytes) was never measured — full-named is worse than the
   table suggests. ADR updated.
+- 2026-08-23 (round 2) — Full pipeline + per-store data landed the decision the operator's
+  simplicity steer pointed at: ONE encoding (msgpack struct-map) everywhere. Segment budget not
+  binding (30.4% today, RoomPlanData-dominated growth); tolerance proven on the REAL world
+  round-trip; ConvertSaveload attr propagation verified in specs-derive source. 0047 → Decided.
+  Next: the game_loop swap (one WFV bump, batched per RULING-8).

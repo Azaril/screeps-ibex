@@ -1,6 +1,6 @@
 # 0047 — Reset-tolerant world serialization (tagged encoding)
 
-- **Status:** Draft
+- **Status:** Decided
 - **Date:** 2026-08-23
 - **Deciders:** William Archbell (motivation + direction stated; encoding choice awaits experiments)
 - **Related:** [0002](0002-serialization.md) (the serialization design of record — this ADR would
@@ -131,3 +131,51 @@ top of the +33% segment cost, so whole-stream named is worse than the round-1 ta
 Sectioned encoding also wins this axis (raw stays near baseline). **Round 2 additions:** bench the
 full pipeline (encode + deflate), prototype the two-pass split (measure envelope overhead + verify
 the shared-allocator round-trip on the real payload), and the per-store size breakdown.
+
+## Round 2 (2026-08-23): full pipeline, per-store breakdown, tolerance proof — and the decision
+
+Operator steer for this round: *prefer paying for ONE encoding everywhere over pushing multiple
+encodings through the code — if the segment budget allows.* The measurements say it does.
+
+**Full pipeline** (encode + the live `encode_buffer_to_string` gzip+base64; native `--release`;
+segment budget = COMPONENT_SEGMENTS 50–53 = 400KB chars, all 10 segments already allocated):
+
+| Scheme | Raw | Seg chars | % budget | Encode+gzip ms | Decode ms |
+|---|---|---|---|---|---|
+| bincode (live) | 286,116 | 93,568 | 22.8% | 4.29 | 1.96 |
+| **msgpack NAMED** | 682,437 | **124,600** | **30.4%** | 6.28 | 2.84 |
+| CBOR named | 682,140 | 123,880 | 30.2% | 6.04 | — |
+| JSON | 1,040,463 | 162,348 | 39.6% | 10.67 | — |
+
+**Per-store breakdown** (the scaling model): **`RoomPlanData` is 86% of all bytes** (252,606 of
+293,849 bincode) and is the most shape-stable store in the corpus; every shape-churny store
+(missions/operations/squads/jobs/queues) is 1–7KB. Named's per-store multiplier is large on the
+small stores (4–8×) but their absolute cost is trivial; gzip crushes the repeated keys (raw ×2.4 →
+segment chars only ×1.33).
+
+**Tolerance proven twice**: (a) the mechanics pin `named_encoding_tolerates_field_add_and_remove`
+— a V1 payload decodes into a V2 shape (field added with `#[serde(default)]`, field removed →
+ignored) under struct-map, and the identical migration **errors under positional bincode**; (b) the
+**real live world round-trips through msgpack-named** end-to-end (all `ConvertSaveload` types +
+markers) with no code changes beyond the serializer swap. The `ConvertSaveload` derive **clones
+field attributes verbatim** into its generated `SaveloadData` structs (verified in specs-derive
+0.4.1 source), so `#[serde(default)]` discipline on new fields is the entire ongoing cost.
+
+### Decision
+
+**Whole-stream msgpack struct-map (rmp-serde named mode) — ONE encoding, no sectioning.**
+
+- **Segment budget is not binding**: 30.4% today at 8 rooms; growth is `RoomPlanData`-dominated
+  (∝ planned rooms), projecting ~60–65% at ~2.5× empire scale — comfortable, and monitorable.
+- **CPU cost is bounded and known**: +46% on the serialize pipeline slice (+2.0ms encode+gzip,
+  +0.9ms decode, native). The wasm-side absolute is the one residual to confirm live.
+- **Complexity is minimal**: a two-line serializer/deserializer swap in `game_loop.rs` (+ the
+  decoder test), ONE transition WFV bump, and `#[serde(default)]` on new fields thereafter. The
+  sectioned-envelope design (previous section) is **rejected as unnecessary complexity** at these
+  numbers — it survives in this document as the escape hatch if segment pressure ever
+  materializes, alongside the second lever: moving `RoomPlanData` (86% of bytes, regenerable by
+  the planner) out of the tolerant stream.
+- WFV remains the outer fingerprint for genuine semantic breaks; `reset.*` stays the escape hatch.
+
+**Post-adoption watch item**: live serialize CPU (wasm) and segment chars per tick; both are
+directly observable and each has a documented lever if it trends wrong.
