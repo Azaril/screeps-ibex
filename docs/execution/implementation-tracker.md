@@ -63,12 +63,16 @@ retries (attempts 1–2 + `retry_after` + fresh-sighting clears) — **L2 (poiso
 OBVIATED BY CONSTRUCTION**: the 0046 machinery *is* the self-heal; L2 targeted the old permanent
 103-room list, which no longer exists as a class. WS-1 doc deleted per the impl-doc lifecycle.
 
-### NOW: WS-3 · Boost pipeline (ADR 0010 L0 → 0041) — next up, not yet started
+### NOW: WvC-1 · Military completion wave → [`../implementation/ws-wvc1-military-completion.md`](../implementation/ws-wvc1-military-completion.md)
 
-WS-6 SHIPPED and closed 2026-08-23: the msgpack world stream (WFV 29) + the Plan shrink are LIVE —
-from here, additive shape changes need NO reset (serde-default discipline only). Live world at
-2.8% of segment budget mid-rebuild; watch it settle as plans re-plan. Wave B live-watch continues
-informally.
+**Operator reorder (2026-08-23): military peak effectiveness first — finish partial machinery
+before the boost build.** The boost pipeline (0010+0041, both zero-code) is the largest NEW
+feature on the board; the military column holds the densest partial work incl. built-but-unwired
+machinery, and the 2026-07-09 review remainder is the standing bug farm. Boost moves behind the
+military waves + P4 re-tune (it completes peak-vs-BOOSTED-opponents last).
+
+WS-6 shipped 2026-08-23 (msgpack WFV 29 live — additive shape changes now reset-free). WATCH:
+segment chars as plans rebuild; wasm 48.5% of code limit; Wave B behaviors on the next real fight.
 
 ---
 
@@ -111,28 +115,27 @@ Plausibly closes 6–10 ADRs by amendment.*
 
 **Phase 2.5 — WS-6 · ADR 0047 — SHIPPED 2026-08-23** (msgpack world stream + Plan shrink, WFV 29 live; the LAST format-transition reset). WATCH: segment chars once plans rebuild (projected 12–14% of budget); wasm binary 48.5% of code limit.
 
-**Phase 3 — WS-3 · Boost pipeline (ADR 0010 L0 → 0041).** The biggest completion unlock: 0041
+**Phase 3 — the military completion waves (WvC-1/WvC-2, operator-prioritized 2026-08-23).** WvC-1 (correctness + wiring): T-HEAL-3a winnability inputs, the damage.rs readiness-tranche wiring, S5-CAP governor-dynamic squad cap, 0035 FU2 never-engages give-up, 0026 L8 observed-bodies coordination, 0034 rally-bias live-wire, 0028 K3/K4 wiring. WvC-2 (defensive features): T-DEF-1 rampart-anchored defenders, T-DEF-5 predictive safe-mode arm, T-POS-5 exit-tile cost, 0037 T3 candidate emission. Batched + shipped like Wave B (no WFV — and under 0047, even shape changes are cheap now).
+
+**Phase 4 — WS-4 · R19 chokepoint re-tune** (unchanged, directly military: the combat kernels' parameters proven on realistic terrain; closes 0019 S4-TUNE, 0024 FU#4, 0026 L6c, 0031a/b re-sweeps, 0032 value_e, 0033 kite retune).
+
+**Phase 5 — Boost pipeline (ADR 0010 L0 → 0041)** — the military CAPSTONE, after the machinery it feeds is correct: 0041
 gates review risk R1 (enemy-boost blindness, the top MMO risk) and the whole boosted-assault
 frontier, but is **blocked on 0010** — nothing calls `boostCreep`; `BoostQueue` is a dead pipe.
 *Closes: 0010, 0041; unblocks 0019 boosted-TOUGH, 0020-TOUGH, 0008a Tier 3, 0008 S2.*
 
-**Phase 4 — WS-4 · R19 chokepoint re-tune.** One tournament pass on realistic terrain (entry point
-already committed: rover-eval `c4b3d17`). *Closes six tuning tails as a batch — 0019 S4-TUNE,
-0024 FU#4, 0026 L6c, 0031a/0031b's invalidated sweeps, 0032 `value_e`, 0033 kite retune — which is
-why RULING-6 held them.*
-
-**Phase 5 — economy completion.** The 0043 band→EV conversions (A2/A4/A7/A9/A10, A11, A12,
+**Phase 6 — economy completion.** The 0043 band→EV conversions (A2/A4/A7/A9/A10, A11, A12,
 C1–C7), 0042 `opportunity_floor` + R1–R4, 0044/0044a P3 all-sinks activation, 0007 item 4,
 0040 §D8 reserve retirement. Mechanical batch work against a shipped market.
 *Closes: 0007, 0040, 0042, 0043, 0044, 0044a.*
 
-**Phase 6 — remaining designs + WvC.** **WvC** = the post-P4 combat wave (the §6 WvC-tagged live combat fixes, batched + shipped like Wave B). Then WS-5 (0045 power creeps), 0020 S5–S7 (after Phase 4, ratified), plus
+**Phase 7 — remaining designs.** WS-5 (0045 power creeps), 0020 S5–S7 (after Phase 4, ratified), plus
 whichever of 0011/0012/0013/0014/0015/0016 the triage keeps (0013's spending half is already
 delegated to 0045; 0014 may reduce to the W4 `WarDecl` hook owned by 0008). New builds, so last
 by policy.
 
 *Convergence: Phases 0–2 ≈ a week of sessions, taking the corpus from 2 Closed to ~15–20 Closed;
-Phases 3–5 are the three real build programs; Phase 6 is a choice, not a debt.*
+Phases 3–5 are the military program (waves → re-tune → boost capstone); Phase 6 economy; Phase 7 is a choice, not a debt.*
 
 ---
 
@@ -315,6 +318,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-23** — **Operator reorder: military first.** Boost pipeline (largest NEW build) demoted behind the military completion waves (WvC-1 correctness+wiring, WvC-2 defensive features) and the P4 re-tune — finish partial machinery + kill the bug farm before feeding it boosts. WvC promoted out of the old Phase-6 into Phase 3; NOW = WvC-1.
 
 - **2026-08-23** — **WS-6 SHIPPED + CLOSED: ADR 0047 live at WFV 29** (msgpack struct-map stream + foreman Plan shrink `5c89f30` — road_network deleted, build_order on-demand; plans ~70% smaller). The LAST format-transition reset paid; additive changes are now reset-free. Live: 2.8% of segment budget mid-rebuild (proj. 12–14% full), named decode FASTER than old bincode. Costs recorded: wasm +71% (48.5% of code limit). Operator constraint recorded: plans are durable state, never recompute-after-reset. ws-6 doc deleted.
 
