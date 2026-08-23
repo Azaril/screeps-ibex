@@ -44,7 +44,7 @@ their candidate feed.
       multi-squad claim pacing), part of the `run_defended_lifecycle` closeout already gated on
       B-1. Nothing bot-side to build; the shared `claim_pacing` kernel (WvC-1) is what those beds
       will exercise. Tracker 0028 row updated.
-- [ ] Batch-ship per RULING-8 + live-watch.
+- [x] Batch-shipped to MMO 2026-08-23 (hot swap `1fb233b30416`). Live-watch OPEN: cover-anchoring + predictive safe-mode on the next owned-room defense; exit discipline on any kite fight.
 
 ## Design deltas
 
@@ -60,3 +60,4 @@ what the offline harness supports now, the private-soak versions when B-1 unbloc
 
 - 2026-08-23 — created; WvC-1 shipped same day. Start: T-POS-5.
 - 2026-08-23 — T-POS-5 (`3d451ac`), T-DEF-1 (`47a163a`+eval `47f9d0b`), T-DEF-5 (`8502af9`) landed; 0037-T3 + lane-contention closed by ruling. Fence + batch-ship next.
+- 2026-08-23 (ship) — batch deployed to MMO (hot swap `1fb233b30416`, 48.69% code limit); tail clean (no panics/deser; known transient foreman placement warns only). Live-watch open: next owned-room defense exercises cover-anchoring + predictive safe mode; any kite fight exercises exit discipline.

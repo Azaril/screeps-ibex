@@ -52,33 +52,20 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### ~~WS-1 · Ship WFV 28~~ **CLOSED 2026-08-23 — C1–C5 ALL PASS; the empire claimed its 8th room.**
+### NOW: WvC-1 + WvC-2 · Military completion waves — BOTH CODE-COMPLETE + SHIPPED 2026-08-23; live-watch open
+→ [`../implementation/ws-wvc1-military-completion.md`](../implementation/ws-wvc1-military-completion.md) · [`../implementation/ws-wvc2-defensive-features.md`](../implementation/ws-wvc2-defensive-features.md)
 
-The full arc: deployed to MMO 2026-08-22 (loud reset, clean), features reconciled to compiled
-defaults, observed through 6+ checks (0 panics, 0 drain signatures throughout), and the claim
-pipeline **committed W7N47** — a dist-4, above-ring, score-0.835 candidate, the exact far-sprawl
-target class the 2026-08-11 diagnosis → ADR 0046 program was built to reach. A
-`RemoteBuildMission` is constructing it now (8 rooms). The unreachable list holds only bounded
-retries (attempts 1–2 + `retry_after` + fresh-sighting clears) — **L2 (poison-list self-heal) is
-OBVIATED BY CONSTRUCTION**: the 0046 machinery *is* the self-heal; L2 targeted the old permanent
-103-room list, which no longer exists as a class. WS-1 doc deleted per the impl-doc lifecycle.
+**Operator reorder (2026-08-23): military peak effectiveness first** — boost (0010+0041) demoted
+behind the military waves + P4 re-tune. Both waves shipped same-day as hot swaps (WvC-1
+`e08162810921`, WvC-2 `1fb233b30416`; item details + SHAs in the ws docs; fence green ×3).
+**Live-watch is what remains**: the next real fight exercises the give-up clock, urgent-defender
+downsizing, S5-CAP surge, rampart cover-anchoring, predictive safe mode, and exit discipline.
+When it closes, both ws docs delete and **Phase 4 (R19 re-tune)** starts.
 
-### NOW: WvC-1 · Military completion wave → [`../implementation/ws-wvc1-military-completion.md`](../implementation/ws-wvc1-military-completion.md)
-
-**Operator reorder (2026-08-23): military peak effectiveness first — finish partial machinery
-before the boost build.** The boost pipeline (0010+0041, both zero-code) is the largest NEW
-feature on the board; the military column holds the densest partial work incl. built-but-unwired
-machinery, and the 2026-07-09 review remainder is the standing bug farm. Boost moves behind the
-military waves + P4 re-tune (it completes peak-vs-BOOSTED-opponents last).
-
-**2026-08-23: ALL 7 WvC-1 items CODE-COMPLETE and SHIPPED to MMO** (hot swap `e08162810921`,
-world persisted, 0 panics; details + SHAs in the ws doc). The empire claimed its **9th room
-(W5N48)** during the wave. Remaining: live-watch (next real fight exercises the give-up clock,
-urgent-defender downsizing, S5-CAP surge), then the doc deletes and WvC-2 starts. NEW WATCH:
-movement ~81 CPU/tick at 9 rooms (bucket full — sustainable, but the largest single cost line).
-
-WS-6 shipped 2026-08-23 (msgpack WFV 29 live — additive shape changes now reset-free). WATCH:
-segment chars as plans rebuild; wasm 48.5% of code limit; Wave B behaviors on the next real fight.
+Empire during the waves: **9 rooms** (W7N47 8th — the ADR 0046 far-sprawl target class working as
+designed; W5N48 9th), GCL 12, bucket full. WATCH: movement ~81 CPU/tick at 9 rooms (largest single
+cost line; sustainable); segment chars as plans rebuild; wasm 48.7% of code limit; transient
+foreman `InvalidTarget` placement warns (pre-existing).
 
 ---
 
@@ -165,12 +152,12 @@ GCL 12, bucket 10000, W7N47 under remote-build.
 56 ADRs. States: **Live** (in `ab692bd`) · **Host-only** (offline tooling, never in the wasm
 bundle) · **On master** (merged, undeployed) · **Partial** · **Design-only** · **Closed**.
 
-**Closed — no open work. Detail in the ADR; do not re-track.** `0001`, `0005` (containment ratified as-shipped 2026-08-23), `0009c`, `0038`
+**Closed — no open work. Detail in the ADR; do not re-track.** `0001`, `0005` (containment ratified as-shipped 2026-08-23), `0009c`, `0037` (T1-T3 landed; emission closed by ruling 2026-08-23), `0038`
 
 **Live** — `0002 0004 0008 0047 0017 0019 0024 0025 0027 0029 0031 0031b 0032 0034 0035 0036 0040 0042 0044 0044a 0046`
 **Host-only** — `0006 0023 0023a 0025a 0026 0026a 0033`
 
-**Partial** — `0003 0007 0008a 0009 0009a 0009b 0011 0012 0018 0020 0021 0028 0031a 0037 0039 0043`
+**Partial** — `0003 0007 0008a 0009 0009a 0009b 0011 0012 0018 0020 0021 0028 0031a 0039 0043`
 **Withdrawn** — `0030` (2026-08-23; tempo axis preserved in 0031 — no open work)
 **Superseded** — `0022` (by 0027; its P-AUCTION residue is owned by 0020/0031, and its P-OBJ asks were superseded by 0027's observed-success model — no open work of its own)
 **Design-only, zero code** — `0010 0013 0014 0015 0016 0041 0045`
@@ -185,7 +172,7 @@ One line per item. **Phase tags** (sweep 2026-08-23): P3 boost · P4 R19-tuning 
 
 **Combat**
 - `0008` — S2 boost handoff **→P3**; S1 pre-spawn, W2 trim + W4 `WarDecl` **→P6**; O5 power-bank + heavy assault = deferred capabilities (activate by decision, not schedule).
-- `0008a` — T-HEAL-3 (widens into R1) **→P3** (T-HEAL-3a SHIPPED, WvC-1); T-DEF-1/T-DEF-5/T-POS-5 **→WvC-2** (readiness tranche wired/pruned, WvC-1); Tier 3 **→P6** (after P3).
+- `0008a` — T-HEAL-3 (widens into R1) **→P3** (T-HEAL-3a SHIPPED, WvC-1); T-DEF-1/T-DEF-5/T-POS-5 SHIPPED (WvC-2); Tier 3 **→P6** (after P3).
 - `0019` — S4-TUNE **→P4**; boosted-TOUGH **→P3** (blocked on 0041).
 - `0020` — S5/S6/S7 (blob auction + R7 currency, adaptivity, adversarial room-gen): **operator-ratified scheduled end-state, sequenced AFTER Phase 4** (they want the R19-retuned kernels). S5-CAP SHIPPED (WvC-1): empire-scaled cap + defense surge, shared `claim_pacing` kernel.
 - `0026` — L6c **→P4** (L8 SHIPPED, WvC-1: observed-owner classifier).
@@ -323,6 +310,7 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 
 Append one line per closed item. Newest first.
 
+- **2026-08-23 (late)** — **WvC-2 code-complete + shipped** (hot swap `1fb233b30416`): T-POS-5 exit-tile surcharge (decision `3d451ac`), T-DEF-1 rampart cover via `ThreatField::build_covered` (`47a163a` — TAKEN/EV-risk/survival-veto/traversal all inherit the redirect from one point), T-DEF-5 predictive safe-mode arm (`8502af9`); 0037-T3 emission closed by ruling (contradicts the ADR's no-new-aggression seam + D27), 0028 lane-contention re-routed to the harness closeout. Fence green ×2 this session.
 - **2026-08-23 (late)** — **WvC-1 code-complete, all 7 items**: T-HEAL-3a winnability inputs (`c5a06c8`), defender spawn-readiness wired + tower half deleted as U-TOWER-superseded (`81ee72f`), S5-CAP empire-scaled cap + defense surge (`7a87df5` → shared kernel `13112e6`), 0035 FU2 closed (veto attempt `4d044be` reverted `4d186d8` after 2 eval-bed regressions — the probe bounce is load-bearing; final = stall-aware give-up clock + engaged-gated stall streaks, agent `0c57c45`), 0026 L8 observed-owner coordination (`0455298`), 0034 D6c renewable-rally bias (`e6aa3ce`), 0028 K3/K4 resolved as-built (ADR rewritten). Ship + live-watch pending.
 - **2026-08-23** — **Operator reorder: military first.** Boost pipeline (largest NEW build) demoted behind the military completion waves (WvC-1 correctness+wiring, WvC-2 defensive features) and the P4 re-tune — finish partial machinery + kill the bug farm before feeding it boosts. WvC promoted out of the old Phase-6 into Phase 3; NOW = WvC-1.
 
