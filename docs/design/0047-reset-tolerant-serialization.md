@@ -104,3 +104,30 @@ Input: the live WFV-28 world (8 rooms, 286,116 raw bincode bytes). Bincode decod
 
 Harness: `encoding_bench` in `operations/claim.rs::live_world_decode` (host-only dev-deps
 `rmp-serde`/`serde_cbor`; run like `decode_live_world`).
+
+## Viability of selective tolerance under the single-pass constraint (operator question, 2026-08-23)
+
+**The constraint is real:** the live serialize is ONE `SerializeComponents` call driving ONE
+serializer type across the whole 12-store tuple — serde cannot switch encoders per tuple element,
+so mixed encodings *inside* the existing single pass are not implementable. Selective tolerance
+survives through two mechanisms:
+
+- **A — sectioned passes (preferred).** Split the tuple into a stable-bulk group (bincode) and a
+  shape-churny group (msgpack-named), one `SerializeComponents` call each, concatenated behind a
+  tiny envelope (section tag + length + per-section version byte). Deserialize is N passes sharing
+  the marker allocator — **verified against specs 0.20 source**: `MarkerAllocator::retrieve_entity`
+  returns the existing entity for a known marker id, so pass 2 attaches components to pass 1's
+  entities by construction. Bonus: this IS ADR 0002's deferred Stage-2 (per-section isolation — a
+  bad section resets alone), and the envelope version byte gives the bincode sections coarse
+  hand-migration as a middle tier. Pass-count CPU is noise: total bytes dominate, and the extra
+  cost is one walk over ~250 marked entities against a 0.38 ms full encode.
+- **B — nested blobs (rejected-unless-A-fails).** One pass, churny components serde-emit a byte
+  blob containing their own named encoding. Works, but double-buffers every wrapped component and
+  buries encoding policy inside component impls.
+
+**Round-1 gap this question exposed:** the bench did not time DEFLATE, which runs every tick and
+scales with RAW bytes — full-named is 682KB raw vs 286KB (≈2.4× the per-tick compression work) on
+top of the +33% segment cost, so whole-stream named is worse than the round-1 table suggests.
+Sectioned encoding also wins this axis (raw stays near baseline). **Round 2 additions:** bench the
+full pipeline (encode + deflate), prototype the two-pass split (measure envelope overhead + verify
+the shared-allocator round-trip on the real payload), and the per-store size breakdown.
