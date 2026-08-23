@@ -23,9 +23,11 @@ boost (Phase 5) then feeds correct machinery.
       gated on REACHABLE healers (adjacent-12 / ranged-3 relative to the focus), mirroring
       `heal_reaching`, instead of summing all hostile heal. Every engage/abandon/sizing decision
       reads these.
-- [ ] **damage.rs readiness tranche — wire it** (built + tested + uncalled): route the emergency
-      defender spawn path through `defender_spawn_readiness` (spawn-now-vs-wait) and evaluate
-      wiring `should_towers_fire`/`net_tower_damage` at the tower decision seam (review O3).
+- [x] **damage.rs readiness tranche — wired** (`81ee72f`): `defender_spawn_readiness` live at the
+      slot spawner (Phase B `DefenseUrgency` → `queue_slot_spawn`); only the URGENT verdict changes
+      behavior (downsize to available energy when nothing holds the line); tower half
+      (`should_towers_fire`/`net_tower_damage`) DELETED as superseded by U-TOWER `decide_towers`
+      (review O3 answered: already heal-aware, and better).
 - [ ] **S5-CAP** — `MAX_CONCURRENT_SQUADS` (hardcoded 4, `squad_manager.rs:211`) becomes
       governor/empire-size-aware (review R7: 4 offense squads can starve base defense).
 - [ ] **0035 FU2** — give-up for a COMMITTED squad that reaches the room but never engages (the
@@ -40,7 +42,9 @@ boost (Phase 5) then feeds correct machinery.
 
 ## Design deltas
 
-- (running)
+- Review O3's "wire `should_towers_fire` at the tower seam" is MOOT: U-TOWER's `decide_towers`
+  already makes the heal-aware fire decision (per-target `heal_reaching`, out-healed dogpile
+  refusal) — the tranche's single-target tower helpers were deleted, not wired.
 
 ## Verification
 
@@ -50,3 +54,4 @@ offense-soak (B-1) validates the wave end-to-end when the operator is home.
 ## Log
 
 - 2026-08-23 — created on the operator's military-first reorder; T-HEAL-3a first.
+- 2026-08-23 — readiness tranche wired (`81ee72f`); tower half deleted as superseded. Next: S5-CAP.
