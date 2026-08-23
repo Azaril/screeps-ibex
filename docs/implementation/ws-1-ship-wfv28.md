@@ -42,8 +42,7 @@ expansion program.
 - [x] `reset.features` one-shot flag (`77dc9cc`) — the UNOWNED-7 fix, pattern for future retunes
 - [x] **MMO deploy** (loud reset WFV 27→28) + first-tick health gate — clean
 - [x] Reconcile `Memory._features` to compiled defaults — verified on live
-- [ ] Observe one discover cycle; judge C1–C5 (C1 unreachable list stays clean · C2 stale-intel
-      skip gone from Select · C3 scouts tour, fleet tracks demand · C4 no self-pin · C5 a claim fires)
+- [ ] Observe one discover cycle; judge C1–C5 — **interim @ tick 4,878,785 (world decoder): C1 PASS (unreachable=1, attempts=1, vs 103 pre-redesign) · C2 PASS (skip absent from the captured Select) · C3 PASS (visibility queue all age-0, unknowns 23 and falling, opportunistic explore active) · C4 PASS (all-age-0 queue = scouts moving, not welded) · C5 pending (0 claim missions; 15 scored candidates, 4 plan-VALID — prefetch working; Select imminent)**
 - [ ] Watch-items while offense is freshly re-enabled: `[Lifecycle] RETIRE reason=GaveUp` clusters,
       spawn-queue combat churn, CPU/bucket trend (Wave A's fixes are in this artifact — the July
       drain signature should NOT reappear; if it does, `Memory._features.military.offense = false`
@@ -76,6 +75,8 @@ expansion program.
 | Baseline to beat | 7 rooms, GCL 12 (pre-deploy 2026-08-22); old stall signature: 11 candidates, 0 missions |
 
 ## Log
+
+- 2026-08-23 (cron #5) — world-decoder read @ 4,878,785: C1/C2/C3/C4 interim PASS, C5 pending (candidates scored + plans prefetched, no commit yet). Checks 1–5 all clean: 0 panics, 0 drain signatures, bucket pinned 10000.
 
 - 2026-08-22 (late) — **Deployed WFV 28 to MMO** (operator inverted soak order; Docker blocked).
   Health clean. `reset.features` built, shipped, fired, verified — live config at compiled-default
