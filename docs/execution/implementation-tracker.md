@@ -52,23 +52,20 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### WS-1 · Get WFV 28 verified and live → [`../implementation/ws-1-ship-wfv28.md`](../implementation/ws-1-ship-wfv28.md)
+### ~~WS-1 · Ship WFV 28~~ **CLOSED 2026-08-23 — C1–C5 ALL PASS; the empire claimed its 8th room.**
 
-**State: ACTIVE — deployed straight to MMO 2026-08-22 (operator decision), observing.**
+The full arc: deployed to MMO 2026-08-22 (loud reset, clean), features reconciled to compiled
+defaults, observed through 6+ checks (0 panics, 0 drain signatures throughout), and the claim
+pipeline **committed W7N47** — a dist-4, above-ring, score-0.835 candidate, the exact far-sprawl
+target class the 2026-08-11 diagnosis → ADR 0046 program was built to reach. A
+`RemoteBuildMission` is constructing it now (8 rooms). The unreachable list holds only bounded
+retries (attempts 1–2 + `retry_after` + fresh-sighting clears) — **L2 (poison-list self-heal) is
+OBVIATED BY CONSTRUCTION**: the 0046 machinery *is* the self-heal; L2 targeted the old permanent
+103-room list, which no longer exists as a class. WS-1 doc deleted per the impl-doc lifecycle.
 
-B-1 blocked the private lane, so the operator inverted the order: MMO directly (pre-authorized
-2026-08-11), with the soak plan's C1–C5 criteria judged against live. Full record: the WS-1 doc.
-
-| Step | State |
-|---|---|
-| MMO deploy (loud reset WFV 27→28) | **done 2026-08-22** — see WS-1 doc for verification |
-| One-shot `reset.features` fired — `Memory._features` reconciled to compiled defaults (`77dc9cc`) | done — note: this turns `military.offense` back ON (compiled default; had been manually off since the July drain era — Wave A's fixes are in this artifact) |
-| Observe one discover cycle, judge C1–C5 live | in progress — **healthy through 3 checks** (CPU 14–36/140, bucket pinned 10000, 0 panics, 0 drain signatures). The claim pipeline is live and holding its L3 Select window; C2's failure signature (stale-intel skip) is ABSENT; below-ring candidates correctly deferred on ring patience while the post-reset frontier re-scouts. C3/C5 verdicts pending frontier coverage. |
-| L2 poison-list self-heal — ships **last** of the expansion program | pending live evidence |
-| Private soak (when B-1 clears) — now for the harness lane, not this deploy | deferred |
-
-> WS-2 runs concurrently: WS-1's remaining work is passive wall-clock observation (a 30-min review
-> cadence), so the one-workstream policy treats the pair as one active lane.
+### NOW: close out Phase 2 (ws-triage final sweep) → WS-6 · ADR 0047 experiments
+→ [`../implementation/ws-triage.md`](../implementation/ws-triage.md). Wave B live-watch continues
+informally (drain signatures, safe-mode behavior on the next real fight).
 
 ---
 
@@ -140,14 +137,14 @@ Phases 3–5 are the three real build programs; Phase 6 is a choice, not a debt.
 
 | Where | Artifact | WFV | Date |
 |---|---|---|---|
-| Live MMO (shardX) | `77dc9cc` (wasm `d9b748497e4a`) | **28** | 2026-08-22 |
+| Live MMO (shardX) | wasm `bd6eebcc0f56` (Wave B + retune hot swaps) | **28** | 2026-08-23 |
 | Docker private | `ab692bd` (stale — refresh when B-1 clears) | 27 | 2026-07-28 |
 | `master` | HEAD (WFV-anchored; do not pin a SHA here — it drifts every commit) | 28 — **live on MMO** | since 2026-08-22 |
 
 **The deployed-artifact test point is now `77dc9cc`** (2026-08-22); anything after it is undeployed. Use this as the test when an ADR claims a
 deploy — pre-split ADRs claimed deploy dates predating the only real one (fixed by the doc split).
-`wfv27-deployable-e857c76` is the last no-reset point. Live MMO baseline 2026-08-22: 7 rooms,
-GCL 12, CPU 18.5/140, bucket 10000 flat.
+`wfv27-deployable-e857c76` is the historical WFV-27 point. Live MMO baseline 2026-08-23: **8 rooms**,
+GCL 12, bucket 10000, W7N47 under remote-build.
 
 ---
 
@@ -156,11 +153,11 @@ GCL 12, CPU 18.5/140, bucket 10000 flat.
 56 ADRs. States: **Live** (in `ab692bd`) · **Host-only** (offline tooling, never in the wasm
 bundle) · **On master** (merged, undeployed) · **Partial** · **Design-only** · **Closed**.
 
-**Closed — no open work. Detail in the ADR; do not re-track.** `0001`, `0009c`
+**Closed — no open work. Detail in the ADR; do not re-track.** `0001`, `0009c`, `0038`
 
-**Live** — `0002 0004 0005 0008 0017 0019 0024 0025 0027 0029 0031 0031b 0032 0034 0035 0036 0038 0040 0042 0044 0044a`
+**Live** — `0002 0004 0005 0008 0017 0019 0024 0025 0027 0029 0031 0031b 0032 0034 0035 0036 0040 0042 0044 0044a 0046`
 **Host-only** — `0006 0023 0023a 0025a 0026 0026a 0033`
-**On master, undeployed** — `0046`
+
 **Partial** — `0003 0007 0008a 0009 0009a 0009b 0011 0012 0018 0020 0021 0028 0031a 0037 0039 0043`
 **Withdrawn** — `0030` (2026-08-23; tempo axis preserved in 0031 — no open work)
 **Superseded** — `0022` (by 0027; its P-AUCTION residue is owned by 0020/0031, and its P-OBJ asks were superseded by 0027's observed-success model — no open work of its own)
@@ -205,11 +202,10 @@ One line per item.
 - `0003` — `MissionResult::Wait/Idle` + park-don't-teardown for economy missions.
 - `0009` / `0009a` / `0009b` — planner: D3 RoomGraph + inter-room road layer unbuilt; Q8 cap-lift unwired; **0009b §7 ground-truth bench evaluator gates the whole scoring/RCL revamp**.
 - `0011` — D5 cross-room spawn assist and G3 incubation: zero code; no empire spawn-budget orchestrator.
-- `0017` — M5b securing escort never built; abort thresholds untuned against live attackers.
+- `0017` — M5b securing escort never built (deferred to 0008); abort thresholds untuned against live attackers.
 - `0018` — K4 SK mineral mining unbuilt; **no live evidence an SK farm has ever actually run**, yet `farming` is default-ON.
-- `0021` — follow-ups #1/#2 absorbed by 0046 (undeployed); #5/#6 unimplemented. Re-head once 0046 ships.
-- `0038` — post-`ab692bd` claim.rs work (`09c36db`, `e857c76`, `527e9e8`) undeployed → WS-1.
-- `0046` — see WS-1. Staleness bucket quantization still to tune in soak.
+- `0021` — follow-ups #1/#2 absorbed by 0046 (now LIVE); #5/#6 unimplemented.
+- `0046` — staleness-bucket quantization tune rides live observation (low priority; C1–C5 all passed).
 
 **Platform / tooling**
 - `0004` — governor thresholds still flagged INITIAL, pending pressure-scenario calibration.
@@ -317,6 +313,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-23** — **WS-1 CLOSED: C1–C5 ALL PASS.** The pipeline claimed **W7N47** (dist 4, above-ring, score 0.835) — 8 rooms; RemoteBuildMission constructing. L2 ruled OBVIATED by 0046's bounded-retry machinery. 0046→Live, 0038→Closed. WS-1 doc deleted per lifecycle.
 
 - **2026-08-23** — Triage decisions ratified (operator): 0030 Withdrawn (tempo→0031), 0025a residual documented-mitigated, 0039 P2–P4→harness lane, 0020 S5–S7 kept-scheduled (after Phase 4); **0047 pulled forward as Phase 2.5 (WS-6)**. `search_radius` 1→2 shipped + live-reconciled (wasm `bd6eebcc0f56`, hot swap, pattern proven twice). UNOWNED-4 closed.
 

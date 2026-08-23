@@ -4,7 +4,6 @@ use specs::saveload::*;
 use specs::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::iter::Iterator;
 
 pub struct SerializeMarkerTag;
