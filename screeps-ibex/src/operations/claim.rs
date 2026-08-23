@@ -2508,4 +2508,189 @@ mod live_world_decode {
         };
         sys.run_now(&world);
     }
+
+    // ─── ADR 0047: encoding-scheme bench (host-only; dev-deps) ──────────────────
+    //
+    // Re-serializes the REAL live world through each candidate encoding and measures
+    // encode/decode wall time plus raw + deflated size (deflate = the segment-relevant
+    // number). Run exactly like `decode_live_world`:
+    //   IBEX_WORLD_PAYLOAD=<file> cargo test -p screeps-ibex encoding_bench --release -- --ignored --nocapture
+
+    fn register_bench_world() -> World {
+        let mut world = World::new();
+        world.register::<SerializeMarker>();
+        world.register::<CreepSpawning>();
+        world.register::<CreepOwner>();
+        world.register::<CreepRoverData>();
+        world.register::<RoomData>();
+        world.register::<RoomPlanData>();
+        world.register::<JobData>();
+        world.register::<OperationData>();
+        world.register::<MissionData>();
+        world.register::<SquadContext>();
+        world.register::<VisibilityQueueData>();
+        world.register::<CombatObjectiveData>();
+        world.register::<RoomThreatData>();
+        world.insert(SerializeMarkerAllocator::new());
+        world
+    }
+
+    /// Decode-only (no dump): fills the world from a WFV-stripped payload.
+    struct DecodeOnly<'p> {
+        payload: &'p [u8],
+        elapsed: std::cell::Cell<f64>,
+    }
+
+    impl<'a, 'p> System<'a> for DecodeOnly<'p> {
+        type SystemData = DecodeSystemData<'a>;
+
+        fn run(&mut self, mut data: Self::SystemData) {
+            let t0 = std::time::Instant::now();
+            let mut deserializer = bincode::Deserializer::from_slice(self.payload, DefaultOptions::new());
+            DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
+                &mut (
+                    &mut data.creep_spawnings,
+                    &mut data.creep_owners,
+                    &mut data.creep_movement_data,
+                    &mut data.room_data,
+                    &mut data.room_plan_data,
+                    &mut data.job_data,
+                    &mut data.operation_data,
+                    &mut data.mission_data,
+                    &mut data.squad_context,
+                    &mut data.visibility_queue_data,
+                    &mut data.combat_objective_data,
+                    &mut data.room_threat_data,
+                ),
+                &data.entities,
+                &mut data.markers,
+                &mut data.marker_alloc,
+                &mut deserializer,
+            )
+            .map(|_| ())
+            .expect("bincode decode");
+            self.elapsed.set(t0.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+
+    #[derive(SystemData)]
+    struct EncodeBenchData<'a> {
+        entities: Entities<'a>,
+        markers: ReadStorage<'a, SerializeMarker>,
+        creep_spawnings: ReadStorage<'a, CreepSpawning>,
+        creep_owners: ReadStorage<'a, CreepOwner>,
+        creep_movement_data: ReadStorage<'a, CreepRoverData>,
+        room_data: ReadStorage<'a, RoomData>,
+        room_plan_data: ReadStorage<'a, RoomPlanData>,
+        job_data: ReadStorage<'a, JobData>,
+        operation_data: ReadStorage<'a, OperationData>,
+        mission_data: ReadStorage<'a, MissionData>,
+        squad_context: ReadStorage<'a, SquadContext>,
+        visibility_queue_data: ReadStorage<'a, VisibilityQueueData>,
+        combat_objective_data: ReadStorage<'a, CombatObjectiveData>,
+        room_threat_data: ReadStorage<'a, RoomThreatData>,
+    }
+
+    /// (scheme, bytes, best-encode-ms)
+    struct EncodeBench {
+        results: std::cell::RefCell<Vec<(&'static str, Vec<u8>, f64)>>,
+    }
+
+    impl<'a> System<'a> for EncodeBench {
+        type SystemData = EncodeBenchData<'a>;
+
+        fn run(&mut self, data: Self::SystemData) {
+            const ROUNDS: usize = 5;
+            macro_rules! bench_scheme {
+                ($name:expr, |$buf:ident| $mk:expr) => {{
+                    let mut best_ms = f64::MAX;
+                    let mut bytes: Vec<u8> = Vec::new();
+                    for _ in 0..ROUNDS {
+                        let mut $buf = Vec::<u8>::with_capacity(256 * 1024);
+                        let t0 = std::time::Instant::now();
+                        {
+                            let mut ser = $mk;
+                            SerializeComponents::<std::convert::Infallible, SerializeMarker>::serialize(
+                                &(
+                                    &data.creep_spawnings,
+                                    &data.creep_owners,
+                                    &data.creep_movement_data,
+                                    &data.room_data,
+                                    &data.room_plan_data,
+                                    &data.job_data,
+                                    &data.operation_data,
+                                    &data.mission_data,
+                                    &data.squad_context,
+                                    &data.visibility_queue_data,
+                                    &data.combat_objective_data,
+                                    &data.room_threat_data,
+                                ),
+                                &data.entities,
+                                &data.markers,
+                                &mut ser,
+                            )
+                            .map(|_| ())
+                            .expect($name);
+                        }
+                        best_ms = best_ms.min(t0.elapsed().as_secs_f64() * 1000.0);
+                        bytes = $buf;
+                    }
+                    self.results.borrow_mut().push(($name, bytes, best_ms));
+                }};
+            }
+
+            bench_scheme!("bincode (live baseline)", |buf| bincode::Serializer::new(&mut buf, DefaultOptions::new()));
+            bench_scheme!("msgpack compact (positional)", |buf| rmp_serde::Serializer::new(&mut buf));
+            bench_scheme!("msgpack NAMED (struct-map)", |buf| rmp_serde::Serializer::new(&mut buf).with_struct_map());
+            bench_scheme!("CBOR (named maps)", |buf| serde_cbor::Serializer::new(serde_cbor::ser::IoWrite::new(&mut buf)));
+            bench_scheme!("JSON (named ceiling)", |buf| serde_json::Serializer::new(&mut buf));
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn encoding_bench() {
+        use flate2::write::DeflateEncoder;
+        use flate2::Compression;
+        use std::io::Write as _;
+
+        let Ok(path) = std::env::var("IBEX_WORLD_PAYLOAD") else {
+            eprintln!("IBEX_WORLD_PAYLOAD not set; skipping");
+            return;
+        };
+        let encoded = std::fs::read_to_string(&path).expect("read payload file");
+        let decoded = decode_buffer_from_string(encoded.trim()).expect("base64+gzip decode");
+        let version = u32::from_le_bytes(decoded[..4].try_into().unwrap());
+        assert_eq!(version, EXPECTED_WORLD_FORMAT_VERSION);
+
+        // Load the real world once (bincode; also yields the decode-time baseline).
+        let world = register_bench_world();
+        let decode_only = DecodeOnly {
+            payload: &decoded[4..],
+            elapsed: std::cell::Cell::new(0.0),
+        };
+        let mut d = decode_only;
+        d.run_now(&world);
+        let bincode_decode_ms = d.elapsed.get();
+
+        let bench = EncodeBench {
+            results: std::cell::RefCell::new(Vec::new()),
+        };
+        let mut b = bench;
+        b.run_now(&world);
+
+        let deflated = |bytes: &[u8]| -> usize {
+            let mut enc = DeflateEncoder::new(Vec::new(), Compression::new(6));
+            enc.write_all(bytes).unwrap();
+            enc.finish().unwrap().len()
+        };
+
+        println!("=== ADR 0047 encoding bench (real payload, native --release; ROUNDS=5, best-of) ===");
+        println!("input: {} raw bincode bytes (live stream, WFV {})", decoded.len() - 4, version);
+        println!("bincode DECODE baseline: {bincode_decode_ms:.2} ms");
+        println!("{:<32} {:>10} {:>10} {:>12}", "scheme", "raw", "deflate", "encode ms");
+        for (name, bytes, ms) in b.results.borrow().iter() {
+            println!("{:<32} {:>10} {:>10} {:>12.2}", name, bytes.len(), deflated(bytes), ms);
+        }
+    }
 }

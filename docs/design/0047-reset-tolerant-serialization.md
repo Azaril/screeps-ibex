@@ -74,3 +74,33 @@ tolerance proves too expensive.
   must verify round-trip through the chosen scheme.
 - Serialized-shape discipline (the "batch WFV bumps" convention) relaxes to "batch semantic
   breaks"; the tracker's deploy calculus changes accordingly.
+
+## Experiment results — round 1 (2026-08-23, real live payload, native `--release`, best-of-5)
+
+Input: the live WFV-28 world (8 rooms, 286,116 raw bincode bytes). Bincode decode baseline 1.83 ms.
+
+| Scheme | Raw bytes | Deflated | Encode ms | vs baseline (deflated / encode) |
+|---|---|---|---|---|
+| bincode (live baseline) | 286,116 | 70,156 | 0.38 | — |
+| msgpack compact (positional) | 355,900 | 76,744 | 0.56 | +9% / +47% — no tolerance gained |
+| **msgpack NAMED (struct-map)** | 682,437 | **93,432** | 0.75 | **+33% / +97%** |
+| CBOR (named maps) | 682,140 | 92,890 | 0.62 | +32% / +63% |
+| JSON (named ceiling) | 1,040,463 | 121,743 | 1.10 | +74% / +189% |
+
+**Findings.**
+
+1. **Deflate does NOT absorb field-name tags**: full field-level tolerance (msgpack-named / CBOR)
+   costs ~+33% deflated — the segment-relevant number. At 8 rooms that is 93KB vs 70KB deflated
+   (≈125KB vs ≈94KB after base64) against the 10×100KB segment budget; the tax scales with the
+   empire exactly when headroom matters most.
+2. **CPU is acceptable** for every candidate: worst named encode 0.75 ms native ⇒ plausibly 2–4 ms
+   on wasm — real but affordable. Size, not CPU, is the binding constraint.
+3. **The emerging recommendation is SELECTIVE tolerance**: the byte-dominant stores (`RoomData`,
+   `RoomPlanData`) are the most shape-stable, while the stores that churn shape (missions,
+   operations, squad state) are small. Encoding only the churny stores named — bincode for the
+   bulk — should buy most of the migration value for a fraction of the +33%. **Round 2 must
+   produce the per-store size breakdown** to confirm, plus the migration simulation (field
+   add/remove per scheme) and a wasm-side timing.
+
+Harness: `encoding_bench` in `operations/claim.rs::live_world_decode` (host-only dev-deps
+`rmp-serde`/`serde_cbor`; run like `decode_live_world`).

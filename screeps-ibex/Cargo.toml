@@ -63,3 +63,7 @@ wasm-opt = ["--signext-lowering"]
 # --signext-lowering - removes opcodes that the screeps servers can't load (see
 # https://github.com/rustyscreeps/screeps-game-api/issues/391)
 wasm-opt = ["-O4", "-g", "--signext-lowering"]
+[dev-dependencies]
+# ADR 0047 encoding-bench candidates (host-only; never in the wasm build)
+rmp-serde = "1.3"
+serde_cbor = "0.11"
