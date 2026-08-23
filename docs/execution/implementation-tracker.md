@@ -52,7 +52,10 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED; tactical follow-ups queued
+### NOW: Phase 4.5 — the WS-VAL defect program (item 1 open-bar ACHIEVED 2026-08-24; next = choke trickle-in → border crossing)
+See §3 Phase 4.5 for the ordered ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
+
+### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
 → [`../implementation/ws-val-combat-validation-corpus.md`](../implementation/ws-val-combat-validation-corpus.md) · parity report [`../reviews/live-sim-parity-audit-2026-08-23.md`](../reviews/live-sim-parity-audit-2026-08-23.md)
 
 **Landed 2026-08-23**: the engine-exact stronghold corpus (bunker1–5, real boosted defender
@@ -141,11 +144,19 @@ Plausibly closes 6–10 ADRs by amendment.*
 
 **Phase 4 — WS-4 · R19 chokepoint re-tune — DONE 2026-08-23** (same-day as Phase 3): chokepoint basket + maximin tournament built; `open_combat` re-tuned a1-i6-tight-s2 → a0-i3-d14-K3-s2 (the only cross-regime-positive config; the old profile measured NEGATIVE vs untuned default — R19 quantified) + SHIPPED (`9913ef980109`); 0031a/b re-swept at w_energy=1.0 (defaults confirmed, 0031b §5); 0019 S4-TUNE + 0024 FU#4-presets + 0033 kite-retune closed defaults-confirmed via `s4_weights_retune` (flat surface — the EV kernel owns engaged positioning); 0033 corpus-wide fence promoted (spread==0 over 21, H 0.9625). Re-tagged →P6: 0026 L6c (consumer-gated per its own rule), 0032 value_e (its ADR says "later"; no discriminating bed).
 
-**Phase 4.5 — WS-VAL defect program (QUEUED NEXT — operator 2026-08-23: "we'll work through the
+**Phase 4.5 — WS-VAL defect program (ACTIVE — operator 2026-08-23: "we'll work through the
 defects found from the broad review afterwards").** The instruments exist and are checked in; each
-item has an acceptance bar. Ordered: **(1) cohesion under focused fire** — approach must keep
-healers at heal-range 1 of the focused member or gate the advance on heal-delivery geometry
-(bar: `stronghold_gauntlet` L1@T3 → Killed); **(2) border crossing under fire** (bar: border
+item has an acceptance bar. Ordered: **(1) cohesion under focused fire — ✅ OPEN-LAYOUT BAR
+ACHIEVED 2026-08-24** (decision `be725c9`, deployed): the EV kernel now prices REAL heal delivery —
+deliverable-heal advance gating (no squad-total optimism, no catch-up slack), a risk-currency
+floor (g_us collapsed to ~0 in structure sieges — members priced their HP at nothing) with a ×4
+uncovered-net steepener, lockstep healer-tile advertising, and evidence-gated URGENT/BACKLOG heal
+triage (full-HP healers were self-pre-healing against field-stamped threat while the actually-
+focused member died in a part-loss spiral). L1-open@T3: **Killed, 151 ticks, ZERO losses** (pinned:
+`stronghold_floor_t0_defers_t3_kills_open`). REMAINING in item 1: the **chokepoint trickle-in
+commit window** — the corridor stretches the wedge so members arrive at the wall piecemeal and the
+tower eats the trickle (rung: Timeout, 5/8 survive after a failed wall camp; trace instrument
+`probe_rung` is aimed at it); **(2) border crossing under fire** (bar: border
 gauntlet g1–g2 → Killed, then g3+); **(3) lone-survivor policy** — wipe-or-retreat, no eternal
 stalemate (bar: no `Timeout` with a lone surviving member); **(4) parity H0** — live drops
 Attack/Dismantle vs NEUTRAL constructed walls (`get_hostile_structures` filter; sim executes them);
@@ -378,6 +389,13 @@ Append one line per closed item. Newest first.
 
 - **2026-08-23** — **Wave B SHIPPED to live MMO** (hot swap `0d9524f2668f` per RULING-8; vm_starts 2749, missions persisted, 0 deser). RULING-8 recorded (deploy-to-live batched; B-1 demoted); ADR 0047 drafted (reset-tolerant serialization).
 
+- **2026-08-24** — **Phase 4.5 item 1: cohesion under focused fire — open-layout bar ACHIEVED**
+  (decision `be725c9` + agent `e3660d8` + eval `17d2d74`): four composing EV-kernel fixes
+  (deliverable heal, siege risk-currency floor + ×4 uncovered steepener, lockstep healer
+  advertising, evidence-gated urgent heal triage). L1-open@T3 → Killed/151 ticks/zero losses
+  (was timeout-freeze → 611-tick kill with 5 deaths). Floor pin upgraded; permanent `probe_rung`
+  trace instrument; healers-first-sort attempt reverted on the oscillation gate (documented in
+  kernel.rs). 1537 workspace + fence + wasm green. Remaining item-1 tail: choke trickle-in.
 - **2026-08-23 (later)** — **WS-VAL phase closed out**: MMO hot swap tail-verified clean (new
   `tail.rs --server` reads `.screeps.yaml` directly — no more env-token dance); found work swept
   into §3 **Phase 4.5** (the defect program, queued next per operator), §6 refreshed

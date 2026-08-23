@@ -129,6 +129,19 @@ Readings (each a finding, not a bug in the corpus):
 
 - 2026-08-23 — corpus + boosted lane + boost-blind seam fix + parity audit landed (this batch).
   Gauntlet + dashboards produced the baseline tables above.
+- 2026-08-24 — **Phase 4.5 item 1 (cohesion under fire): open-layout bar ACHIEVED** (decision
+  `be725c9`). The corpus's trace probe root-caused a four-defect chain in the EV kernel: squad-total
+  heal optimism in the risk term; the risk currency collapsing in structure sieges (g_us ≈ 0 with
+  no killable creeps); no lockstep model (a member priced coverage against its healer's stale
+  tile); and heal triage misdelivery (the field stamps the enemy's full output on everyone →
+  full-HP healers self-pre-healed while the actually-focused member died in a part-loss spiral,
+  −78→−318/tick, watched tick-by-tick). All four fixed per-tick-optimally. **L1-open@T3 → Killed,
+  151 ticks, zero losses** (floor pin upgraded). New precise findings: (a) chokepoint TRICKLE-IN —
+  the corridor stretches the wedge, members reach the wall piecemeal, tower eats the trickle
+  (choke rung → Timeout with 5/8 surviving a failed wall camp); (b) rout direction is still the
+  local anti-threat gradient — survivors corner themselves NW instead of exiting east (items 2/3);
+  (c) a healers-first commit-sort drove designed#0 oscillation 3%→44% and was reverted — ordering
+  interacts with contention tuning; the oscillation gate must ride every kernel-order change.
 - 2026-08-23 (late) — MMO hot swap (wasm `039c587dc1c6`) **tail-verified live**: 0 panics/deser/
   INTEGRITY over the watch window; war threat pricing visibly flowing through `effective_output`
   (`heal=12` per unboosted heal part). Movement CPU in the known post-swap transient band (~85),
