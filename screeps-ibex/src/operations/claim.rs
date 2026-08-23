@@ -2309,7 +2309,7 @@ mod live_world_decode {
     use specs::saveload::DeserializeComponents;
 
     /// Mirrors game_loop::WORLD_FORMAT_VERSION (private there). The assert below fails loudly on drift.
-    const EXPECTED_WORLD_FORMAT_VERSION: u32 = 28;
+    const EXPECTED_WORLD_FORMAT_VERSION: u32 = 29;
 
     struct DecodeAndDump<'p> {
         payload: &'p [u8],
@@ -2339,7 +2339,7 @@ mod live_world_decode {
         type SystemData = DecodeSystemData<'a>;
 
         fn run(&mut self, mut data: Self::SystemData) {
-            let mut deserializer = bincode::Deserializer::from_slice(self.payload, DefaultOptions::new());
+            let mut deserializer = rmp_serde::Deserializer::new(self.payload); // matches the live ADR 0047 stream
             DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
                 &mut (
                     &mut data.creep_spawnings,
@@ -2546,7 +2546,7 @@ mod live_world_decode {
 
         fn run(&mut self, mut data: Self::SystemData) {
             let t0 = std::time::Instant::now();
-            let mut deserializer = bincode::Deserializer::from_slice(self.payload, DefaultOptions::new());
+            let mut deserializer = rmp_serde::Deserializer::new(self.payload); // matches the live ADR 0047 stream
             DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
                 &mut (
                     &mut data.creep_spawnings,
@@ -2739,6 +2739,68 @@ mod live_world_decode {
             bin.deserialize::<V2>(&positional).is_err(),
             "positional bincode must NOT survive the same shape change"
         );
+    }
+
+    /// ADR 0047 follow-up (operator, 2026-08-23): RoomPlanData is 86% of world bytes —
+    /// break ONE real plan into per-field bincode sizes to find the actual bloat, and
+    /// show how `StructureType` encodes (string vs numeric decides a big multiplier).
+    #[test]
+    #[ignore]
+    fn plan_size_breakdown() {
+        use bincode::Options as _;
+        let Ok(path) = std::env::var("IBEX_WORLD_PAYLOAD") else {
+            eprintln!("IBEX_WORLD_PAYLOAD not set; skipping");
+            return;
+        };
+        let encoded = std::fs::read_to_string(&path).expect("read payload file");
+        let decoded = decode_buffer_from_string(encoded.trim()).expect("base64+gzip decode");
+        let world = register_bench_world();
+        let mut d = DecodeOnly {
+            payload: &decoded[4..],
+            elapsed: std::cell::Cell::new(0.0),
+        };
+        d.run_now(&world);
+
+        let bin = bincode::DefaultOptions::new();
+
+        let plans = world.read_storage::<RoomPlanData>();
+        use specs::Join;
+        let mut dumped = 0usize;
+        for pd in (&plans).join() {
+            let Some(plan) = pd.plan() else { continue };
+            let total = bin.serialize(plan).unwrap().len();
+            let structures = bin.serialize(&plan.structures).unwrap().len();
+            let n_locs = plan.structures.len();
+            let n_items: usize = plan.structures.values().map(|v| v.len()).sum();
+            let computed_build_order = screeps_foreman::plan::compute_build_order(&plan.structures, plan.hub_position);
+            let build_order = 0usize; // no longer serialized (computed on demand)
+            let road_network = 0usize; // deleted (zero consumers)
+            let upgrade_area = bin.serialize(&plan.upgrade_area).unwrap().len();
+            let substitutions = bin.serialize(&plan.substitutions).unwrap().len();
+            let spawn_approaches = bin.serialize(&plan.spawn_approaches).unwrap().len();
+            let approach_tiles = bin.serialize(&plan.approach_tiles).unwrap().len();
+            let score = bin.serialize(&plan.score).unwrap().len();
+            println!(
+                "plan total={total}B  structures={structures}B ({n_locs} locs / {n_items} items, {:.1}B/item)  build_order={build_order}B ({} steps, {:.1}B/step)  road_network={road_network}B ({} edges)  upgrade_area={upgrade_area}B  substitutions={substitutions}B  spawn_approaches={spawn_approaches}B  approach_tiles={approach_tiles}B  score={score}B",
+                structures as f64 / n_items.max(1) as f64,
+                computed_build_order.len(),
+                0.0f64,
+                0usize,
+            );
+            if dumped == 0 {
+                // How does ONE placement actually encode? (string vs numeric StructureType)
+                if let Some((loc, items)) = plan.structures.iter().next() {
+                    let one = bin.serialize(&(loc, &items[0])).unwrap();
+                    println!("one (Location, RoomItem) = {} bytes: {:?}", one.len(), one);
+                }
+                if let Some(step) = computed_build_order.first() {
+                    let one = bin.serialize(step).unwrap();
+                    println!("one BuildStep = {} bytes: {:?}", one.len(), one);
+                }
+            }
+            dumped += 1;
+        }
+        println!("plans dumped: {dumped}");
     }
 
     #[test]

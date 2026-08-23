@@ -173,9 +173,20 @@ field attributes verbatim** into its generated `SaveloadData` structs (verified 
   decoder test), ONE transition WFV bump, and `#[serde(default)]` on new fields thereafter. The
   sectioned-envelope design (previous section) is **rejected as unnecessary complexity** at these
   numbers — it survives in this document as the escape hatch if segment pressure ever
-  materializes, alongside the second lever: moving `RoomPlanData` (86% of bytes, regenerable by
-  the planner) out of the tolerant stream.
+  materializes, alongside the second lever: moving `RoomPlanData` to its OWN persisted
+  segment written only on plan change (out of the per-tick hot stream, never out of durable
+  storage).
 - WFV remains the outer fingerprint for genuine semantic breaks; `reset.*` stays the escape hatch.
 
 **Post-adoption watch item**: live serialize CPU (wasm) and segment chars per tick; both are
 directly observable and each has a documented lever if it trends wrong.
+
+## Constraint: plans are durable state (operator, 2026-08-23)
+
+Room plans are expensive to compute (the multi-tick beam-search/min-cut pipeline) and consumed on
+an ongoing basis; **the VM must be assumed resettable every tick and the bot must continue** —
+plans are therefore never ephemeral. Any size lever on `RoomPlanData` must preserve durable
+persistence: acceptable forms are (a) removing genuinely dead serialized data, (b) computing cheap
+VIEWS on demand from persisted fields (the `build_order` change — an O(n log n) sort over
+serialized inputs, reset-safe by construction), or (c) relocating plans to their own persisted,
+change-written segment. "Recompute the plan after a reset" is NOT an acceptable form.

@@ -2,7 +2,6 @@ use super::squad::*;
 use screeps_combat_decision::composition::*;
 use screeps::*;
 use screeps_rover::*;
-use specs::Entity;
 
 // ADR 0031 D14: the dead hardcoded-2×2 cost overlay (`is_valid_quad_position`, `apply_quad_cost_overlay`)
 // and its unused generalizations (`apply_formation_cost_overlay`, `apply_tower_avoidance_costs`) were

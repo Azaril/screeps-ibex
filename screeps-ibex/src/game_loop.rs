@@ -40,7 +40,6 @@ use crate::visualization::{
     SummarizeMissionSystem, SummarizeOperationSystem, SummarizeRoomVisibilitySystem, VisualizationData,
 };
 use crate::visualize::*;
-use bincode::{DefaultOptions, Deserializer, Serializer};
 use log::*;
 use screeps::*;
 use screeps_rover::*;
@@ -555,7 +554,10 @@ fn serialize_world(world: &World, segments: &[u32]) {
             let mut serialized_data = Vec::<u8>::with_capacity(1024 * 50);
             serialized_data.extend_from_slice(&WORLD_FORMAT_VERSION.to_le_bytes());
 
-            let mut serializer = Serializer::new(&mut serialized_data, DefaultOptions::new());
+            // ADR 0047: msgpack struct-map — field-tolerant world stream (missing fields
+            // serde-default, unknown fields ignored). WFV remains the fingerprint for
+            // SEMANTIC breaks only; additive shape changes no longer force a reset.
+            let mut serializer = rmp_serde::Serializer::new(&mut serialized_data).with_struct_map();
 
             SerializeComponents::<std::convert::Infallible, SerializeMarker>::serialize(
                 &(
@@ -640,12 +642,18 @@ fn serialize_world(world: &World, segments: &[u32]) {
     sys.run_now(world);
 }
 
-/// Wire-format fingerprint prepended to the serialized world payload. The
-/// component stream is bincode — enum variants are encoded by ORDINAL — so
-/// any shape change to a serialized component (variants added, removed or
-/// reordered; fields changed) makes old payloads decode as misaligned
-/// garbage rather than fail. Every such change MUST bump this constant;
-/// a mismatch is rejected wholesale with one loud error and a clean empty
+/// Wire-format fingerprint prepended to the serialized world payload.
+///
+/// **ADR 0047 (v29+): the component stream is msgpack struct-map (rmp-serde),
+/// which is FIELD-TOLERANT** — a NEW field with `#[serde(default)]` decodes old
+/// payloads fine, and a REMOVED field is ignored, WITHOUT a bump. Bump this
+/// constant only for SEMANTIC breaks the tolerant decode cannot express:
+/// enum variant RENAMES/re-meanings (variants encode by NAME now — additions
+/// are safe, renames are not), field type changes, meaning changes to existing
+/// data, or adding/removing/reordering a COMPONENT in the (de)serialize tuple
+/// (the tuple itself is still positional). The history below predates ADR 0047
+/// and describes the old bincode-positional rules — reference only.
+/// A mismatch is rejected wholesale with one loud error and a clean empty
 /// world (EP-5.1 reset-anytime, EP-3.1 loudness).
 ///
 /// History: 2 = derelict-rooms M1-M5 (RoomDynamicVisibilityData intel fields,
@@ -788,7 +796,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// persisted `unreachable` poison list is wiped by this reset BY DESIGN — no migration code; the empty-list
 /// thundering herd is bounded by tour budgeting (ADR 0046 D2.4 as amended). Mirror:
 /// `operations/claim.rs` `EXPECTED_WORLD_FORMAT_VERSION` (the offline world decoder) bumps in lockstep.
-const WORLD_FORMAT_VERSION: u32 = 28;
+const WORLD_FORMAT_VERSION: u32 = 29; // 29 = the ADR 0047 msgpack transition + the Plan shrink (build_order/road_network removed)
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
@@ -865,7 +873,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                 };
 
                 if !payload.is_empty() {
-                    let mut deserializer = Deserializer::from_slice(payload, DefaultOptions::new());
+                    let mut deserializer = rmp_serde::Deserializer::new(payload); // ADR 0047
 
                     let result = DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
                         &mut (
