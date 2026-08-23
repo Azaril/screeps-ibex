@@ -184,9 +184,18 @@ withdraw-as-clean (which invites instant re-field), and do NOT re-advance (which
   *request* intel and *await* fulfillment. The end-state alternative is a pending-intel request with a
   bounded deadline and an abandon signal, so a commit is scheduled by intel arrival rather than by
   polling. Undecided: whether the poll-until-fresh form is sufficient in practice.
-- **FU2 — a give-up for a committed-but-can't-engage squad.** D2's gate governs a NEW commit; it does
-  not cover an already-CLAIMED objective whose squad never enters or engages (re-field churn). The
-  give-up predicate for that case is not designed here.
+- **FU2 — a give-up for a committed-but-can't-engage squad** — DECIDED: the predicate is a
+  COMPOSITION of per-phase terminators rather than one new gate, so every committed squad has a
+  definite terminator (EP-2.7): never departs → the R22 never-departed breaker; never arrives → the
+  travel budget + the REC-022 proximity-gated lease; arrives to an empty room → the D28 vacuous
+  clear; arrives and loses → `unwinnable_contact` (D4); arrives into a below-band stalemate → the
+  stalemate valve disengages and `can_reengage` (balance < band) keeps Retreating absorbing → the
+  REC-003 retreat budget; arrives onto a harmless turtle at positive balance → the valve's
+  `harmless_turtle` arm PLUS the stalemate re-engage veto (a stalemate disengage also vetoes
+  re-engage while the no-progress signals persist — without it the balance/HP-only re-engage
+  oscillated Retreating↔Moving and reset the REC-003 clock every cycle, an immortal in-room
+  squad); forming stalls → the forming budget + the economic give-up. Hold-intent standoffs are
+  deliberately exempt (pinning is the job; the producer owns their lifecycle).
 
 ---
 

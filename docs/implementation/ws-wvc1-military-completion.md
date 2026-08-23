@@ -28,10 +28,15 @@ boost (Phase 5) then feeds correct machinery.
       behavior (downsize to available energy when nothing holds the line); tower half
       (`should_towers_fire`/`net_tower_damage`) DELETED as superseded by U-TOWER `decide_towers`
       (review O3 answered: already heal-aware, and better).
-- [ ] **S5-CAP** — `MAX_CONCURRENT_SQUADS` (hardcoded 4, `squad_manager.rs:211`) becomes
-      governor/empire-size-aware (review R7: 4 offense squads can starve base defense).
-- [ ] **0035 FU2** — give-up for a COMMITTED squad that reaches the room but never engages (the
-      zombie class the budgets only bound loosely).
+- [x] **S5-CAP** (`7a87df5`): cap = `max_concurrent_squads(homes)` (floor 2 / +1 per 2 rooms /
+      ceiling 8; parity with old 4 at 4 rooms) + `DEFENSE_SURGE_SQUADS=2` so a full offense board
+      can never block a defense claim at the ACTIVE cap (closes R7's starvation; REC-008 covered
+      only the forming pace). `claim_admission` pure kernel, 2 RED-verified pins.
+- [x] **0035 FU2** (decision sub `4d044be`): the one real hole was the harmless-turtle disengage
+      oscillating Retreating↔Moving at positive balance (each cycle reset the REC-003 clock →
+      immortal in-room squad). `can_reengage` now vetoed by an active stalemate → Retreating is
+      absorbing → REC-003/lease terminate. FU2 predicate CLOSED as a composition of per-phase
+      terminators (recorded in ADR 0035 §2.1); RED-verified pin + determinism fence green (391s).
 - [ ] **0026 L8** — coordination DPS keyed on OBSERVED bodies, not `TargetSource`.
 - [ ] **0034 rally-bias live-wire** — renewable-rally bias exists sim-side (`lifecycle.rs:1423`),
       never wired live.
