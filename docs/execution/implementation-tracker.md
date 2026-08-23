@@ -74,11 +74,11 @@ B-1 blocked the private lane, so the operator inverted the order: MMO directly (
 
 ## 2. BLOCKED
 
-- **B-1 · `com.docker.service` is Stopped/Manual; starting it needs Administrator.** Symptom:
-  `docker ps` **hangs** (not errors) while everything else looks healthy. Fix (elevated):
-  `Start-Service com.docker.service` + `Set-Service … -StartupType Automatic`; detail in soak plan
-  §0. Gates the whole private-server lane: H5 parity oracle, P2.M2-LIVE, M4 exit criteria, 0036
-  live-raze, 0028 closeout, the dismantle-seam soak. Highest-leverage unblock in the project.
+- **B-1 · `com.docker.service` Stopped/Manual (needs elevation) — DEMOTED by RULING-8** (operator
+  2026-08-23): the private lane no longer gates ANY deploy; it gates only the harness work (H5
+  parity oracle, P2.M2-LIVE, M4 exit criteria, 0036 live-raze, 0028 closeout), all deferred until
+  the operator is home. Fix when convenient: elevated `Start-Service com.docker.service` +
+  `Set-Service … -StartupType Automatic`; symptom is `docker ps` HANGING. Detail: soak plan §0.
 
 ---
 
@@ -97,7 +97,7 @@ expansion program; collects the 0018 "has an SK farm ever run" evidence for free
 [`../implementation/ws-2-combat-wave-b.md`](../implementation/ws-2-combat-wave-b.md).
 **CODE-COMPLETE 2026-08-23**: D2/D3 `8fa0c60`, D4/D5/D6 `be5ce24`, D28 `b26eba4`, D9/D10
 `1a85a57` + rover `850a06b`, T1/T2 ruled retained-by-design. 15 RED-verified pins, no WFV;
-ADR 0027 amended. **Remaining: the private soak (B-1) before these ride an MMO deploy.**
+ADR 0027 amended. **Shipping to live per RULING-8** (no WFV — hot swap, zero reset cost; sim-validated by the 15 pins + fence).
 *Closes: 0037's decision item and the 2026-07-09 review's Tier −1 as a live work list.*
 
 **Phase 2 — the triage pass: decide, don't build** (one session; create its impl doc — the
@@ -124,7 +124,7 @@ C1–C7), 0042 `opportunity_floor` + R1–R4, 0044/0044a P3 all-sinks activation
 0040 §D8 reserve retirement. Mechanical batch work against a shipped market.
 *Closes: 0007, 0040, 0042, 0043, 0044, 0044a.*
 
-**Phase 6 — remaining designs, only what survives Phase 2.** WS-5 (0045 power creeps) plus
+**Phase 6 — remaining designs, only what survives Phase 2.** **ADR 0047 experiments** (reset-tolerant serialization — high leverage under RULING-8: makes shape changes stop costing recovery; offline benches per its §Experiments), WS-5 (0045 power creeps), plus
 whichever of 0011/0012/0013/0014/0015/0016 the triage keeps (0013's spending half is already
 delegated to 0045; 0014 may reduce to the W4 `WarDecl` hook owned by 0008). New builds, so last
 by policy.
@@ -289,6 +289,13 @@ Recorded because the corpus contradicted itself and a future reader would otherw
   constants, roster/formation logic and adapter wiring. It **does** gate 0024 FU#4, 0031a Tier-2/3,
   0031b's re-sweep, 0032's `value_e` tuning and 0026 L6c — all of which currently list tuning as
   their next action without acknowledging it. Resolve in WS-4.
+- **RULING-8 · Testing posture (operator 2026-08-23): deploy-to-live, batched.** The Docker soak
+  lane is NOT a deploy gate until the operator is home. Validation = the offline sims/pins/fence
+  where possible; otherwise test on live with batches large enough that a reset is acceptable.
+  Rationale: empire impact is acceptable — the real cost is RECOVERY latency (MMO ~1 tick/sec +
+  re-scout/re-plan convergence), which batching amortizes and no-WFV hot swaps avoid entirely.
+  ADR 0047 (Draft) is the structural fix: reset-tolerant serialization so shape changes stop
+  costing a recovery at all.
 - **RULING-7 · Three distinct quantities are called `opportunity_floor`** — `market_adapter.rs:105`
   (computed, discarded), `transfersystem.rs:1669` (the one consumers see), and ADR 0042's forming
   give-up floor (hardcoded `0`). Name them separately; they are not one thing.
