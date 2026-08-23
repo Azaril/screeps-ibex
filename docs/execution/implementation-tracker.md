@@ -191,14 +191,13 @@ One line per item. **Phase tags** (sweep 2026-08-23): P3 boost · P4 R19-tuning 
 - `0026` — L6c **→P4** (L8 SHIPPED, WvC-1: observed-owner classifier).
 - `0026a` — modes activate as their signals land **→P6** (catalog; no standalone schedule).
 - `0027` — Farm producers (PowerBank needs its own ADR) + salvage-teardown migration **→P6**.
-- `0028` — `run_defended_lifecycle` closeout **→HARNESS** (K3/K4 RESOLVED, WvC-1: claim_admission is the shared kernel, `claims_allowed` harness-only; K3 adapters separate by design); multi-squad lane contention **→WvC-2**.
+- `0028` — `run_defended_lifecycle` closeout **→HARNESS** (K3/K4 RESOLVED, WvC-1: claim_admission is the shared kernel, `claims_allowed` harness-only; K3 adapters separate by design); multi-squad lane contention folded into that closeout (WvC-2 ruling: it is scenario-coverage beds 1+3, not bot work).
 
 - `0031` — Tier-2 archetype search + Tier-3 axes **→P4** (the 0031a sweep plan).
 - `0031a` / `0031b` — sweeps invalid (`w_energy` now 1.0, not the 0.001 the results assume); re-run + amend conclusions **→P4**.
 - `0034` — convergence gates **→P4** (D6c renewable-rally bias SHIPPED, WvC-1).
 - `0035` — FU1 **→P6** (poll-until-fresh sufficiency undecided; FU2 CLOSED, WvC-1: terminator composition + stall-aware give-up clock).
 - `0036` — live raze confirmation **→HARNESS** (private-server world mechanics, B-1).
-- `0037` — ~~T1/T2 orphan decision~~ **RULED 2026-08-23: retained by design** (war.rs:550 documents it; owned-path `tower_danger: 0.0` is the neighbour-only-signal design). Remaining: T3 seam candidate emission **→WvC**.
 - `0039` — P2–P4 **folded into the harness lane** (2026-08-23): re-activate with H5 **→HARNESS**.
 
 **Economy**
@@ -271,7 +270,7 @@ wire it or delete it — not necessarily work.
 | `BoostQueue` | `military/boostqueue.rs` | Plumbed into every mission, **no mutator ever called**; `clear()` never called, so it would grow unbounded if fed. |
 | `issue_virtual_anchor_flee` | `military/formation.rs:398` | The **only** squad-level flee construct; nothing replaced it ⇒ squads have no coordinated retreat. Adjacent to review D10. |
 | `Job::describe` layer | `jobs/jobsystem.rs:99,105` + ~15 jobs | Every job implements it; nothing dispatches it. A whole overlay with no renderer. |
-| T1/T2 neighbour kernels | `war_decision.rs:182,327` | **Decided: retained by design** — sim/test-covered, awaiting the offense-side candidate feed (war.rs:550). Not dead code. |
+| T1/T2 neighbour kernels | `war_decision.rs:182,327` | **Decided: retained by design** — sim/harness kernels (`run_v1_flow` proofs). WvC-2 ruling: NO offense-side feed — emission would contradict ADR 0037 T3 ("structurally incapable of opening a new attack path") + D27. Not dead code. |
 | `HoldModel::Suppress` | `room_economics.rs:88,191` | Unreachable — SK farming runs a duplicate ROI kernel at `sourcekeeper.rs:99`. |
 | `StructureIdentifier` | `structureidentifier.rs:7,32` | Superseded half of a live module. |
 
