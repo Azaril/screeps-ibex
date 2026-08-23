@@ -190,3 +190,24 @@ persistence: acceptable forms are (a) removing genuinely dead serialized data, (
 VIEWS on demand from persisted fields (the `build_order` change — an O(n log n) sort over
 serialized inputs, reset-safe by construction), or (c) relocating plans to their own persisted,
 change-written segment. "Recompute the plan after a reset" is NOT an acceptable form.
+
+## Post-ship measurements (2026-08-23, WFV 29 live)
+
+First live payload after the transition (plans still re-planning post-reset): the msgpack
+struct-map world serializes to **11,220 segment chars = 2.8% of the 400KB budget** (45,586 raw).
+With the Plan shrink (road_network deleted, build_order computed on demand — plans ~70% smaller),
+the full-plans projection is **~12–14% of budget — roughly HALF the pre-change bincode footprint,
+tolerant encoding included.** Named decode on the shrunk world measured FASTER than the old
+bincode baseline (0.34ms vs 0.72ms native).
+
+**Costs actually paid:** (1) the one transition loud reset (intended as the last of its kind);
+(2) **wasm binary +71%** (1.71→2.43 MiB compressed upload, 48.5% of the 5MB code limit) — the
+second serde format monomorphizes the component graph again (bincode remains for the auxiliary
+segment codecs). Watch items: segment chars once all plans rebuild; VM-reset instantiation cost of
+the larger binary. A future lever if the binary matters: migrate the auxiliary segment codecs to
+msgpack too and drop bincode entirely.
+
+## Landed
+
+- foreman `5c89f30` — Plan shrink (road_network deleted, build_order on-demand) (2026-08-23)
+- `e8fdac8` — msgpack struct-map world stream, WFV 29, deployed to MMO (2026-08-23)

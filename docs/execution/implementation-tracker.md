@@ -63,10 +63,12 @@ retries (attempts 1–2 + `retry_after` + fresh-sighting clears) — **L2 (poiso
 OBVIATED BY CONSTRUCTION**: the 0046 machinery *is* the self-heal; L2 targeted the old permanent
 103-room list, which no longer exists as a class. WS-1 doc deleted per the impl-doc lifecycle.
 
-### NOW: WS-6 · ADR 0047 encoding experiments → [`../implementation/ws-6-serialization-bench.md`](../implementation/ws-6-serialization-bench.md)
+### NOW: WS-3 · Boost pipeline (ADR 0010 L0 → 0041) — next up, not yet started
 
-Phase 2 closed 2026-08-23 (every §6 line phase-tagged; ws-triage doc deleted per lifecycle). Wave B
-live-watch continues informally (drain signatures, safe-mode behavior on the next real fight).
+WS-6 SHIPPED and closed 2026-08-23: the msgpack world stream (WFV 29) + the Plan shrink are LIVE —
+from here, additive shape changes need NO reset (serde-default discipline only). Live world at
+2.8% of segment budget mid-rebuild; watch it settle as plans re-plan. Wave B live-watch continues
+informally.
 
 ---
 
@@ -107,7 +109,7 @@ wire-or-delete one-liners, then **UNOWNED-3: remove `#![allow(dead_code)]`** so 
 enforces the register). *Exit criterion: every remaining §6 line is inside a scheduled phase.
 Plausibly closes 6–10 ADRs by amendment.*
 
-**Phase 2.5 — WS-6 · ADR 0047 — DECIDED 2026-08-23** (whole-stream msgpack named; benches done). **Remaining: the implementation** — the game_loop serializer swap, one transition WFV bump, ships batched per RULING-8 with the next WFV-bumping work (or alone if none arrives).
+**Phase 2.5 — WS-6 · ADR 0047 — SHIPPED 2026-08-23** (msgpack world stream + Plan shrink, WFV 29 live; the LAST format-transition reset). WATCH: segment chars once plans rebuild (projected 12–14% of budget); wasm binary 48.5% of code limit.
 
 **Phase 3 — WS-3 · Boost pipeline (ADR 0010 L0 → 0041).** The biggest completion unlock: 0041
 gates review risk R1 (enemy-boost blindness, the top MMO risk) and the whole boosted-assault
@@ -156,7 +158,7 @@ bundle) · **On master** (merged, undeployed) · **Partial** · **Design-only** 
 
 **Closed — no open work. Detail in the ADR; do not re-track.** `0001`, `0005` (containment ratified as-shipped 2026-08-23), `0009c`, `0038`
 
-**Live** — `0002 0004 0008 0017 0019 0024 0025 0027 0029 0031 0031b 0032 0034 0035 0036 0040 0042 0044 0044a 0046`
+**Live** — `0002 0004 0008 0047 0017 0019 0024 0025 0027 0029 0031 0031b 0032 0034 0035 0036 0040 0042 0044 0044a 0046`
 **Host-only** — `0006 0023 0023a 0025a 0026 0026a 0033`
 
 **Partial** — `0003 0007 0008a 0009 0009a 0009b 0011 0012 0018 0020 0021 0028 0031a 0037 0039 0043`
@@ -313,6 +315,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-23** — **WS-6 SHIPPED + CLOSED: ADR 0047 live at WFV 29** (msgpack struct-map stream + foreman Plan shrink `5c89f30` — road_network deleted, build_order on-demand; plans ~70% smaller). The LAST format-transition reset paid; additive changes are now reset-free. Live: 2.8% of segment budget mid-rebuild (proj. 12–14% full), named decode FASTER than old bincode. Costs recorded: wasm +71% (48.5% of code limit). Operator constraint recorded: plans are durable state, never recompute-after-reset. ws-6 doc deleted.
 
 - **2026-08-23** — **ADR 0047 → DECIDED**: whole-stream msgpack struct-map, ONE encoding (operator simplicity steer, confirmed by round-2 data: 30.4% of the real 400KB segment budget; RoomPlanData=86% of bytes and shape-stable; real-world named round-trip works; sectioning rejected as unnecessary). WS-6 remaining: the game_loop swap (one WFV bump, batched).
 
