@@ -76,6 +76,8 @@ expansion program.
 
 ## Log
 
+- 2026-08-23 (cron #6, window close) — 3-hour watch COMPLETE, all 6 checks clean: 0 panics, 0 deser errors, 0 combat-drain signatures across the whole window (offense re-enabled throughout). Final decoder read: phase=Scouting live, 18 candidates (leader W7N47 dist=4 score 0.835 — the far-sprawl target class), plans prefetched, unknowns 23→18, unreachable steady at 1 bounded entry. C5 still pending but imminent. CPU spike to 123 in check 6 = the plan prefetcher grinding W16N52, budget-governed, bucket absorbed (9529→recovering). FOUND WORK (watch item): 3× `create_construction_site … Extension … InvalidTarget` from foreman during the RCL rebuild — transient-looking; recheck next session, escalate to a 0009 item if persistent.
+
 - 2026-08-23 (cron #5) — world-decoder read @ 4,878,785: C1/C2/C3/C4 interim PASS, C5 pending (candidates scored + plans prefetched, no commit yet). Checks 1–5 all clean: 0 panics, 0 drain signatures, bucket pinned 10000.
 
 - 2026-08-22 (late) — **Deployed WFV 28 to MMO** (operator inverted soak order; Docker blocked).
