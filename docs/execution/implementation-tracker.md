@@ -61,14 +61,18 @@ R19 re-tune (`9913ef980109`) all code-complete, tuned, and live as hot swaps; fe
 Live validated post-ship (CPU 34/140, bucket full, 0 panics; 8th AND 9th rooms claimed mid-arc).
 **Live-watch is what remains**: the next real fight exercises the give-up clock, urgent-defender
 downsizing, S5-CAP surge, rampart cover-anchoring, predictive safe mode, exit discipline, and the
-re-tuned open-combat profile. When it closes, the three ws docs delete. **Phase 5 (boost) has STARTED** →
-[`../implementation/ws-5-boost-pipeline.md`](../implementation/ws-5-boost-pipeline.md): P0a (the
-boost EV axis, dark) landed 2026-08-23 — the T-TOWER-3 kernel proof is green (a 6-tower fortress
-the unboosted oracle defers becomes fieldable at T3). Next: P0b seam generalization + P1 supply
-(populate `available_boosts`, the O4 valuation kernel, the caller-side winnable gate).
+re-tuned open-combat profile. When it closes, the three ws docs delete. **Phase 5 (boost): the ENTIRE CONSUMER SIDE (P0–P3) landed DARK 2026-08-23 + shipped** (hot swap
+`00cf29b552ff`) →
+[`../implementation/ws-5-boost-pipeline.md`](../implementation/ws-5-boost-pipeline.md): the boost
+EV axis (T-TOWER-3 proof green), supply clamp + populated `available_boosts`, persisted
+`CombatBodySpec.boost` (reset-free — 0047 obviates the planned WFV bump), and the full apply wire
+(BoostQueue → LabsMission fulfiller → `AwaitBoost` job, renew-skips-boosted). ALL inert behind
+`features.military.boost_military` (default OFF — the deliberate activation switch). Remaining:
+O4 market-fed valuation (constants suffice for first light), the live shakedown on activation,
+the P4 rung sweep, then ADR 0010 L1/L2 demand-driven supply.
 
 WATCH: movement CPU at 9 rooms (transient post-swap spikes ~81, steady ~34 — fine); segment chars;
-wasm 48.7%; foreman `InvalidTarget` transients; post-hot-swap one-tick `INTEGRITY` squad-ref
+wasm 49.1% (boost pipeline added ~0.4%); foreman `InvalidTarget` transients; post-hot-swap one-tick `INTEGRITY` squad-ref
 scrubs (benign backstop, attribute if it recurs outside deploys).
 
 ---
@@ -314,6 +318,7 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 
 Append one line per closed item. Newest first.
 
+- **2026-08-23 (late)** — **ADR 0041 P0–P3 consumer side complete, dark, shipped** (`00cf29b552ff`): EV axis + per-tier winnability (decision `04cc020`), supply table/clamp (`d217a3d`), persisted tier + required_boosts (`78e70b8`), apply wire (`2fd8253`+`82f2e83` — queue/labs/AwaitBoost/renew-skip). 7 RED-verified pins; fence ×2; byte-identical live at T0. `boost_military` = the activation switch.
 - **2026-08-23 (late)** — **Live validation PASS** (CPU 34/140, bucket full, 0 panics, seg ~18%, INTEGRITY scrubs = benign REC-009b backstop) + **Phase 5 P0a landed dark** (decision `04cc020`): BoostTier EV axis, per-tier ceiling assessment, T-TOWER-3 proof green, 3 RED-verified pins; not separately deployed (byte-identical at T0). ADR 0041-P2 WFV bump obviated by 0047 (design delta).
 - **2026-08-23 (late)** — **Phase 4 / WS-4 R19 re-tune DONE + shipped** (`9913ef980109`): `chokepoint_comp_basket` + maximin tournament (eval `940f739`); `open_combat` → a0-i3-d14-K3-s2 (decision `a7acb0b` — only cross-regime-positive config; old profile NEGATIVE vs untuned default, 0026a rejection reversed-with-reconciliation); 0031a/b re-swept at w_energy=1.0 → defaults confirmed, margin knobs inert (0031b §5); S4-TUNE/FU#4-presets/0033-kite-retune closed defaults-confirmed (`s4_weights_retune`, eval `bbc1184`); 0033 corpus-wide fence promoted (rover-eval `ab3e818`, spread==0/21, H 0.9625); L6c + value_e re-tagged →P6 (consumer/bed-gated). Process: run fences in RELEASE (18s vs 385s).
 - **2026-08-23 (late)** — **WvC-2 code-complete + shipped** (hot swap `1fb233b30416`): T-POS-5 exit-tile surcharge (decision `3d451ac`), T-DEF-1 rampart cover via `ThreatField::build_covered` (`47a163a` — TAKEN/EV-risk/survival-veto/traversal all inherit the redirect from one point), T-DEF-5 predictive safe-mode arm (`8502af9`); 0037-T3 emission closed by ruling (contradicts the ADR's no-new-aggression seam + D27), 0028 lane-contention re-routed to the harness closeout. Fence green ×2 this session.
