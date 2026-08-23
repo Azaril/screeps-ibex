@@ -1,6 +1,6 @@
 # Combat Tier −1 Wave B — implementation
 
-**Workstream:** WS-2 · **Advances:** ADR 0008a, ADR 0037, [combat review 2026-07-09](../reviews/combat-systems-review-2026-07-09.md) · **Status:** code-complete — soak pending (B-1)
+**Workstream:** WS-2 · **Advances:** ADR 0008a, ADR 0037, [combat review 2026-07-09](../reviews/combat-systems-review-2026-07-09.md) · **Status:** SHIPPED to live 2026-08-23 (hot swap `0d9524f2668f`, world persisted) — live-watch, then delete this doc
 
 ## Resume point
 

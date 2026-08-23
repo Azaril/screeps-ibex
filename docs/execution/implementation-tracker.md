@@ -97,7 +97,7 @@ expansion program; collects the 0018 "has an SK farm ever run" evidence for free
 [`../implementation/ws-2-combat-wave-b.md`](../implementation/ws-2-combat-wave-b.md).
 **CODE-COMPLETE 2026-08-23**: D2/D3 `8fa0c60`, D4/D5/D6 `be5ce24`, D28 `b26eba4`, D9/D10
 `1a85a57` + rover `850a06b`, T1/T2 ruled retained-by-design. 15 RED-verified pins, no WFV;
-ADR 0027 amended. **Shipping to live per RULING-8** (no WFV — hot swap, zero reset cost; sim-validated by the 15 pins + fence).
+ADR 0027 amended. **SHIPPED to live 2026-08-23** (hot swap `0d9524f2668f`, world persisted — missions carried through, 0 deser errors). Live-watch, then the WS-2 doc deletes.
 *Closes: 0037's decision item and the 2026-07-09 review's Tier −1 as a live work list.*
 
 **Phase 2 — the triage pass: decide, don't build** (one session; create its impl doc — the
@@ -315,6 +315,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-23** — **Wave B SHIPPED to live MMO** (hot swap `0d9524f2668f` per RULING-8; vm_starts 2749, missions persisted, 0 deser). RULING-8 recorded (deploy-to-live batched; B-1 demoted); ADR 0047 drafted (reset-tolerant serialization).
 
 - **2026-08-23** — **Wave B CODE-COMPLETE**: D9/D10 landed (`1a85a57` + rover `850a06b` — shared engaged ladder now ONE implementation in rover, wired live; flee uses partial paths); T1/T2 ruled retained-by-design. 15 pins total. The 2026-07-09 review Tier −1 work list is closed; soak pending B-1. World checks 1–3 healthy.
 
