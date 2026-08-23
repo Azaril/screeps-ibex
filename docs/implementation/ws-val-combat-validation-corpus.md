@@ -110,17 +110,29 @@ Readings (each a finding, not a bug in the corpus):
    the kernel-params tuning was done unboosted and does NOT generalize. A boosted re-tune pass
    (over `boosted_comp_basket`) is a queued follow-up, alongside ADR 0041 P4.
 
-## Follow-up queue (ordered)
+## Follow-up queue (ordered — mirrored as tracker §3 **Phase 4.5**, the durable copy)
 
 1. **Tactical: cohesion under focused fire** — approach formation must keep healers adjacent to the
    focused member (or gate the advance on heal-delivery geometry, not just totals). Grade with the
    stronghold gauntlet (L1@T3 → Killed is the acceptance bar).
-2. **Tactical: border crossing under fire** — the border gauntlet g1→g4 ladder is the instrument.
+2. **Tactical: border crossing under fire** — the border gauntlet g1→g4 ladder is the instrument
+   (bar: g1–g2 Killed, then g3+).
 3. **Lone-survivor policy** — wipe-or-retreat, never eternal stalemate.
-4. **Parity backlog** — H0 first (neutral-wall intents), then the threat/traversal unification.
-5. **Boosted kernel re-tune** (with ADR 0041 P4 sweep).
+4. **Parity backlog** — H0 first (neutral-wall intents), then the threat/traversal unification,
+   then the ranked rest (H5/H6/H8/H9/M4/M6 — see the parity report).
+5. **Boosted kernel re-tune** over `boosted_comp_basket` (merges with ADR 0041 P4 sweep).
+6. **Stronghold capability: L2+ defer even at T3** — one squad under the 3000-energy member clamp
+   cannot out-sustain 2+ towers at any tier. Needs multi-squad assault doctrine or a deliberate
+   siege member-clamp lift — a DESIGN fork (stop-and-ask), not a tuning knob.
 
 ## Log
 
 - 2026-08-23 — corpus + boosted lane + boost-blind seam fix + parity audit landed (this batch).
   Gauntlet + dashboards produced the baseline tables above.
+- 2026-08-23 (late) — MMO hot swap (wasm `039c587dc1c6`) **tail-verified live**: 0 panics/deser/
+  INTEGRITY over the watch window; war threat pricing visibly flowing through `effective_output`
+  (`heal=12` per unboosted heal part). Movement CPU in the known post-swap transient band (~85),
+  expected to settle ~34. Tail tooling upgraded for this: `screeps-rest-api/examples/tail.rs` now
+  takes `--server <name>` and resolves the token straight from `.screeps.yaml` into a
+  `SecretString` (no shell-env export needed). Found work swept into tracker §3 Phase 4.5 +
+  §6 (0010/0041/0025/0023 refreshed, §8 BoostQueue row closed).

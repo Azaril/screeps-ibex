@@ -32,7 +32,10 @@ boosted-TOUGH, 0020-TOUGH, 0008a Tier 3, 0008 S2.
 - [x] **P2 — persisted tier** (decision, this commit): `CombatBodySpec.boost` serde-default T0 (old payloads tolerant — pinned); optimizer stamps the winning rung per slot; `required_boosts()` real (30×parts per family incl. derived MOVE). Spawn-side attach deferred INTO P3 (the job re-derives from its slot's spec — no extra field needed).
 - [x] **P3 — apply path** (decision `2fd8253`, super `82f2e83`): the full producer→fulfiller→consumer wire — creep-name-keyed ephemeral BoostQueue with owner-staged clears; manager files remaining compounds per awaiting member; LabsMission loads one lab per compound + pauses reactions while pending; `AwaitBoost` job variant (tier in the variant) boosts at the ready lab, deadline 300 fall-through; renew skips boosted creeps (0010 §5). All dark behind `boost_military`.
 - [ ] **P4 — sweep**: which rungs EV-win per bed (the O3 full-ladder validation) + the O4
-      approximation validation, over the chokepoint basket.
+      approximation validation, over the chokepoint basket. INSTRUMENT READY (WS-VAL 2026-08-23):
+      `boosted_comp_basket`/`payoff_over_boosted_comps` + the `boosted_selfplay_dashboard`, whose
+      first reading already shows the default tactics LOSE at T2/T3 — P4 merges with the WS-VAL
+      boosted re-tune (tracker Phase 4.5 item 6).
 - [ ] ADR 0010 L1/L2 demand-driven supply planner (after the consumer is proven live).
 
 ## Design deltas

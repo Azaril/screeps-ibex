@@ -87,9 +87,14 @@ EV axis (T-TOWER-3 proof green), supply clamp + populated `available_boosts`, pe
 O4 market-fed valuation (constants suffice for first light), the live shakedown on activation,
 the P4 rung sweep, then ADR 0010 L1/L2 demand-driven supply.
 
-WATCH: movement CPU at 9 rooms (transient post-swap spikes ~81, steady ~34 — fine); segment chars;
-wasm 49.1% (boost pipeline added ~0.4%); foreman `InvalidTarget` transients; post-hot-swap one-tick `INTEGRITY` squad-ref
-scrubs (benign backstop, attribute if it recurs outside deploys).
+WATCH: movement CPU at 9 rooms (transient post-swap spikes ~81, steady ~34 — fine; seen ~85 right
+after the WS-VAL swap, expected to settle); segment chars;
+wasm 49.0%; foreman `InvalidTarget` transients; post-hot-swap one-tick `INTEGRITY` squad-ref
+scrubs (benign backstop, attribute if it recurs outside deploys). **WS-VAL swap (wasm
+`039c587dc1c6`, 2026-08-23) tail-verified clean** (0 panics/deser, war pricing through the new
+boost-aware path). NEW WATCH: live threat assessment now prices BOOSTED hostiles at real strength
+(×2–×4) — defense sizing may correctly grow vs boosted invaders, and offense may correctly defer
+fights it previously under-priced; attribute any "why did sizing change" observation here first.
 
 ---
 
@@ -136,10 +141,30 @@ Plausibly closes 6–10 ADRs by amendment.*
 
 **Phase 4 — WS-4 · R19 chokepoint re-tune — DONE 2026-08-23** (same-day as Phase 3): chokepoint basket + maximin tournament built; `open_combat` re-tuned a1-i6-tight-s2 → a0-i3-d14-K3-s2 (the only cross-regime-positive config; the old profile measured NEGATIVE vs untuned default — R19 quantified) + SHIPPED (`9913ef980109`); 0031a/b re-swept at w_energy=1.0 (defaults confirmed, 0031b §5); 0019 S4-TUNE + 0024 FU#4-presets + 0033 kite-retune closed defaults-confirmed via `s4_weights_retune` (flat surface — the EV kernel owns engaged positioning); 0033 corpus-wide fence promoted (spread==0 over 21, H 0.9625). Re-tagged →P6: 0026 L6c (consumer-gated per its own rule), 0032 value_e (its ADR says "later"; no discriminating bed).
 
-**Phase 5 — Boost pipeline (ADR 0010 L0 → 0041)** — the military CAPSTONE, after the machinery it feeds is correct: 0041
-gates review risk R1 (enemy-boost blindness, the top MMO risk) and the whole boosted-assault
-frontier, but is **blocked on 0010** — nothing calls `boostCreep`; `BoostQueue` is a dead pipe.
-*Closes: 0010, 0041; unblocks 0019 boosted-TOUGH, 0020-TOUGH, 0008a Tier 3, 0008 S2.*
+**Phase 4.5 — WS-VAL defect program (QUEUED NEXT — operator 2026-08-23: "we'll work through the
+defects found from the broad review afterwards").** The instruments exist and are checked in; each
+item has an acceptance bar. Ordered: **(1) cohesion under focused fire** — approach must keep
+healers at heal-range 1 of the focused member or gate the advance on heal-delivery geometry
+(bar: `stronghold_gauntlet` L1@T3 → Killed); **(2) border crossing under fire** (bar: border
+gauntlet g1–g2 → Killed, then g3+); **(3) lone-survivor policy** — wipe-or-retreat, no eternal
+stalemate (bar: no `Timeout` with a lone surviving member); **(4) parity H0** — live drops
+Attack/Dismantle vs NEUTRAL constructed walls (`get_hostile_structures` filter; sim executes them);
+**(5) threat/traversal unification** (parity H1/H2/H3 + M-cluster — live movement executes without
+the threat layer the sim validates against; one shared fold entry point); **(6) boosted kernel
+re-tune** over `boosted_comp_basket` (default tactics lose at T2/T3) — merges with 0041 P4;
+**(7) the rest of the parity backlog** (H5 roster scope, H6 mover config, H8 tower-path fork,
+H9 lifecycle inputs, M4/M6 wrong-room matrix — ranked in
+[`../reviews/live-sim-parity-audit-2026-08-23.md`](../reviews/live-sim-parity-audit-2026-08-23.md));
+**(8) stronghold capability** — L2+ defer even at T3 (multi-squad assault doctrine or a
+deliberate member-clamp lift for sieges; a DESIGN fork, stop-and-ask).
+*Closes: the WS-VAL follow-up queue; makes the corpus verdicts green instead of honest-red.*
+
+**Phase 5 — Boost pipeline (ADR 0010 L0 → 0041) — CONSUMER SIDE (P0–P3) SHIPPED DARK 2026-08-23**
+(see §1 prior arc + [`../implementation/ws-5-boost-pipeline.md`](../implementation/ws-5-boost-pipeline.md)).
+Remaining: O4 market-fed valuation (constants suffice for first light), the deliberate live
+activation shakedown (`boost_military` flag flip, watching), the P4 rung sweep (now over the
+WS-VAL boosted basket — same instrument as Phase 4.5 item 6), then ADR 0010 L1/L2 demand-driven
+supply. *Closes: 0010, 0041; unblocks 0019 boosted-TOUGH, 0020-TOUGH, 0008a Tier 3, 0008 S2.*
 
 **Phase 6 — economy completion.** The 0043 band→EV conversions (A2/A4/A7/A9/A10, A11, A12,
 C1–C7), 0042 `opportunity_floor` + R1–R4, 0044/0044a P3 all-sinks activation, 0007 item 4,
@@ -213,7 +238,7 @@ One line per item. **Phase tags** (sweep 2026-08-23): P3 boost · P4 R19-tuning 
 
 **Economy**
 - `0007` — item 4 (route-distance hauler sizing + shared predicted capacity) **→P5**.
-- `0010` — L0 populate `available_boosts`, per-tick `BoostQueue::clear`, chain math; L1–L4 planner/labs/factory. **Nothing in the bot calls `boostCreep`.** Blocks 0041 **→P3**.
+- `0010` — L0 SHIPPED dark 2026-08-23 (`available_boosts` populated, `BoostQueue` wired with owner-staged clears, `AwaitBoost` calls `boost_creep` — ws-5 P1+P3); remaining: chain math + L1–L4 demand-driven planner/labs/factory **→P3** (after the 0041 activation shakedown).
 - `0012` — M2/M3 **→P6**.
 - `0040` — §D8 #2: the 20% military reserve (`economy.rs:87`) was never retired post-soak. Owns review R15 **→P5**.
 - `0042` — `opportunity_floor` still hardcoded `0` (`squad_manager.rs:1868`, gated on 0043 A2); R1–R4 refinements **→P5**.
@@ -233,10 +258,10 @@ One line per item. **Phase tags** (sweep 2026-08-23): P3 boost · P4 R19-tuning 
 - `0004` — governor pressure-scenario calibration **→HARNESS**.
 - `0006` — server-harness combat scenarios absent (`Fault` enum is only CpuBurn/GlobalReset/PanicOnce); **H5 sim-vs-server parity oracle** (golden vectors + nightly gate — reassigned here from 0008/0028, see UNOWNED-2; blocked on B-1) **→HARNESS**.
 - `0013` / `0014` / `0015` / `0016` / `0045` — design-only. 0015 (testkit + seam registry) and 0016 (HUD) were marked "in scope" by the ultracode completion kickoff, a program that has driven nothing since 2026-07-02 (RULING-5) **→P6**.
-- `0023` / `0023a` — S5 border scenarios, cross-room `Flee`, MultiRoom generator **→HARNESS**.
-- `0025` — `action_oscillation_rate` metric **→P4** (rides the sweep instrumentation). (0025a residual closed 2026-08-23.)
+- `0023` / `0023a` — S5 border scenarios, cross-room `Flee`, MultiRoom generator **→HARNESS**. Partially advanced by WS-VAL: the border gauntlet + multi-room stronghold scenarios ARE sim-side border-crossing beds (and they FAIL honestly — Phase 4.5 item 2 is the fix lane).
+- `0025` — `action_oscillation_rate` metric **→P4** (rides the sweep instrumentation). (0025a residual closed 2026-08-23.) WS-VAL grew the harness: stronghold + border gauntlet corpus + boosted self-play lane (2026-08-23). Documented corpus approximations to revisit ON EVIDENCE: fortifier rampart-repair unresolved (no creep-repair intent in the sim), defender micro = `Hold` (not the engine's coordinated spot-walk), L5 anti-nuke fortify out of scope, roads/containers omitted.
 - `0033` — BOTH P4 items DONE (WS-4): kite retune = defaults confirmed via `s4_weights_retune`; corpus-wide fence = `full_corpus_evaluation_is_deterministic` (spread==0 over 21, H 0.9625).
-- `0041` — entire P0–P3 **→P3** (blocked on 0010).
+- `0041` — P0–P3 SHIPPED dark 2026-08-23 (flag `boost_military` OFF); remaining: O4 market valuation, the deliberate activation shakedown, P4 rung sweep (over the WS-VAL boosted basket) **→P3**. WS-VAL verified the T3 unlock in sim (L1 fields; T0 defers everything — the quantified boost case).
 
 ---
 
@@ -278,7 +303,7 @@ wire it or delete it — not necessarily work.
 |---|---|---|
 | `gameview.rs` | 104 lines, zero refs | The ADR 0006 seam Inc-6 record/replay and 0015's fakes both assume. Never migrated a single consumer. |
 | `ui.rs` | 36 lines, `UISystem` never constructed | Doc comment claims consumers that do not exist. |
-| `BoostQueue` | `military/boostqueue.rs` | Plumbed into every mission, **no mutator ever called**; `clear()` never called, so it would grow unbounded if fed. |
+| ~~`BoostQueue`~~ | `military/boostqueue.rs` | **WIRED 2026-08-23** (ws-5 P3): manager files compounds, LabsMission fulfills, owner-staged clears. No longer dead — row kept for the register's history. |
 | `issue_virtual_anchor_flee` | `military/formation.rs:398` | The **only** squad-level flee construct; nothing replaced it ⇒ squads have no coordinated retreat. Adjacent to review D10. |
 | `Job::describe` layer | `jobs/jobsystem.rs:99,105` + ~15 jobs | Every job implements it; nothing dispatches it. A whole overlay with no renderer. |
 | T1/T2 neighbour kernels | `war_decision.rs:182,327` | **Decided: retained by design** — sim/harness kernels (`run_v1_flow` proofs). WvC-2 ruling: NO offense-side feed — emission would contradict ADR 0037 T3 ("structurally incapable of opening a new attack path") + D27. Not dead code. |
@@ -353,6 +378,10 @@ Append one line per closed item. Newest first.
 
 - **2026-08-23** — **Wave B SHIPPED to live MMO** (hot swap `0d9524f2668f` per RULING-8; vm_starts 2749, missions persisted, 0 deser). RULING-8 recorded (deploy-to-live batched; B-1 demoted); ADR 0047 drafted (reset-tolerant serialization).
 
+- **2026-08-23 (later)** — **WS-VAL phase closed out**: MMO hot swap tail-verified clean (new
+  `tail.rs --server` reads `.screeps.yaml` directly — no more env-token dance); found work swept
+  into §3 **Phase 4.5** (the defect program, queued next per operator), §6 refreshed
+  (0010/0041/0025/0023 were stale vs shipped code), §8 BoostQueue row closed.
 - **2026-08-23 (late)** — **WS-VAL corpus landed**: engine-exact stronghold gauntlet + border
   gauntlet + boosted self-play lane; boost-blind seam fixed live+sim (shared `effective_output`,
   heal_power un-latched); ultracode parity audit (43 findings; H4/H7/M15/M16/M19 fixed, rest
