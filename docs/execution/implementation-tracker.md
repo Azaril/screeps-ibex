@@ -103,11 +103,10 @@ fights it previously under-priced; attribute any "why did sizing change" observa
 
 ## 2. BLOCKED
 
-- **B-1 · `com.docker.service` Stopped/Manual (needs elevation) — DEMOTED by RULING-8** (operator
-  2026-08-23): the private lane no longer gates ANY deploy; it gates only the harness work (H5
-  parity oracle, P2.M2-LIVE, M4 exit criteria, 0036 live-raze, 0028 closeout), all deferred until
-  the operator is home. Fix when convenient: elevated `Start-Service com.docker.service` +
-  `Set-Service … -StartupType Automatic`; symptom is `docker ps` HANGING. Detail: soak plan §0.
+- ~~**B-1 · `com.docker.service` Stopped/Manual**~~ **RESOLVED 2026-08-24** (operator updated +
+  relaunched Docker; `docker ps` responds). The private-server/harness lane is AVAILABLE again:
+  H5 parity oracle, P2.M2-LIVE, M4 exit criteria, 0036 live-raze, 0028 closeout (all →HARNESS in
+  §6) can be scheduled. RULING-8's deploy-to-live posture stands regardless.
 
 ---
 
