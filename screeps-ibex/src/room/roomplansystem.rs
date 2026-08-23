@@ -435,10 +435,10 @@ impl<'a> System<'a> for RoomPlanSystem {
                                     RoomPlanState::Valid(_) => construction.force_plan,
                                     // S3: a `Failed` room has NO usable plan (O2 keeps any
                                     // last-known-good as `Valid`), so recovery must not be
-                                    // blocked by the `allow_replan` kill-switch -- retry once
-                                    // the backoff elapses regardless. `allow_replan` is reserved
-                                    // for discretionary re-planning of rooms that already have a
-                                    // plan (today only `force_plan` triggers that).
+                                    // blocked -- retry once the backoff elapses regardless.
+                                    // Discretionary re-planning of an already-VALID room is
+                                    // force_plan-only today (a dedicated flag was deleted as
+                                    // declared-but-inert, UNOWNED-6; re-add one WITH its consumer).
                                     RoomPlanState::Failed { time, attempts } => {
                                         game::time() >= time.saturating_add(replan_backoff_ticks(attempts))
                                     }

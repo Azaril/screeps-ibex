@@ -89,8 +89,8 @@ maximum number of open ADR tails; Phase 2 is a *decision* pass, not a build pass
 active at a time (§1).
 
 **Phase 0 — close WS-1** (above). Observe live, judge C1–C5, L2 last. Ride-alongs while in the
-deploy loop: UNOWNED-4 (`search_radius` retune once scouting is healthy), UNOWNED-5/6 (features.rs
-doc/flag contradictions). *Closes: 0046→Live, 0038, 0017's deploy residue, 0021 re-head, the
+deploy loop: UNOWNED-4 (`search_radius` retune once scouting is healthy; UNOWNED-5/6 closed 2026-08-23
+— features.rs doc fixed, `allow_replan` deleted). *Closes: 0046→Live, 0038, 0017's deploy residue, 0021 re-head, the
 expansion program; collects the 0018 "has an SK farm ever run" evidence for free.*
 
 **Phase 1 — WS-2 · Combat review Tier −1 Wave B** →
@@ -231,11 +231,12 @@ One line per item.
 - **UNOWNED-4 · `remote_mine.search_radius` still defaults to `1`** (`features.rs:209`) — the
   expansion Wave-1 fix shipped the knob at the value that was the bug. "Wave 1 done" reads as if the
   remote ring widened; it did not.
-- **UNOWNED-5 · `features.rs` self-contradiction:** the `SourceKeeperFeatures` doc comment says
-  "Default OFF until… a private-server soak validate it" (`:637`) while `farming: true` sits at
-  `:657`.
-- **UNOWNED-6 · `construction.allow_replan`** (`features.rs:97`) is read by no code — an operator
-  flipping it gets nothing.
+- ~~**UNOWNED-5**~~ **CLOSED 2026-08-23**: the `SourceKeeperFeatures` container doc contradicted
+  its own field default for two months; it now records the operator's real 2026-06-18 default-ON
+  decision.
+- ~~**UNOWNED-6**~~ **CLOSED 2026-08-23**: `construction.allow_replan` **deleted** (declared but
+  read by no code — an operator flipping it silently got nothing). Re-add a replan flag together
+  with its consumer when discretionary replan lands (0009).
 - ~~**UNOWNED-7 · Stale `Memory._features` overrides**~~ **CLOSED 2026-08-22** by the
   `reset.features` one-shot (`77dc9cc`): setting `Memory._features.reset.features = true` rebuilds
   the persisted tree from compiled defaults next tick (self-clearing, like the other reset flags).

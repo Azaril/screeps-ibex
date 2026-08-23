@@ -496,7 +496,7 @@ impl Mission for ConstructionMission {
                 // No usable plan (Failed with no last-known-good). Recovery is
                 // unconditional (S3) -- a plan-less owned room must re-plan so it
                 // regains construction + authoritative spawn approaches; this is
-                // deliberately NOT gated by `allow_replan` (the backoff in
+                // deliberately NOT gated by any discretionary-replan flag (the backoff in
                 // roomplansystem still prevents thrashing).
                 if game::time().is_multiple_of(50) {
                     log::info!(

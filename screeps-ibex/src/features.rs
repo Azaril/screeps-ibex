@@ -104,12 +104,6 @@ impl ConstructionVisualizeFeatures {
 pub struct ConstructionFeatures {
     pub plan: bool,
     pub force_plan: bool,
-    /// Reserved kill-switch for discretionary re-planning of rooms that already
-    /// have a valid plan. Recovery of a plan-less room is NOT gated by this (S3):
-    /// a room with no usable plan always re-plans (subject to backoff) so it
-    /// regains construction and authoritative spawn approaches. Today only
-    /// `force_plan` triggers re-planning of an already-valid room.
-    pub allow_replan: bool,
     pub execute: bool,
     pub cleanup: bool,
     pub max_construction_sites: i32,
@@ -139,7 +133,6 @@ impl Default for ConstructionFeatures {
         Self {
             plan: true,
             force_plan: false,
-            allow_replan: false,
             execute: true,
             cleanup: true,
             max_construction_sites: 10,
@@ -649,8 +642,9 @@ impl Default for DerelictFeatures {
 }
 
 /// Source Keeper room exploitation (ADR 0018): clear/suppress the keepers in an
-/// adjacent SK room and mine around them. Default OFF until the sim + a
-/// private-server soak validate it (the duo kite, the suppression↔mining gate).
+/// adjacent SK room and mine around them. Default ON (operator 2026-06-18 — the
+/// combat-overhaul behaviors run on by default; the old "OFF until soaked" note
+/// here contradicted the field default for two months, UNOWNED-5).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SourceKeeperFeatures {
