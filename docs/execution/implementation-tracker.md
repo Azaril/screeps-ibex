@@ -71,6 +71,10 @@ feature on the board; the military column holds the densest partial work incl. b
 machinery, and the 2026-07-09 review remainder is the standing bug farm. Boost moves behind the
 military waves + P4 re-tune (it completes peak-vs-BOOSTED-opponents last).
 
+**2026-08-23: ALL 7 WvC-1 items CODE-COMPLETE** (T-HEAL-3a, readiness wiring, S5-CAP, FU2, L8,
+D6c rally bias, K3/K4 shared-kernel resolution — details + SHAs in the ws doc). Remaining:
+batch-ship (hot swap, no WFV) + live-watch, then the doc deletes and WvC-2 starts.
+
 WS-6 shipped 2026-08-23 (msgpack WFV 29 live — additive shape changes now reset-free). WATCH:
 segment chars as plans rebuild; wasm 48.5% of code limit; Wave B behaviors on the next real fight.
 
@@ -179,18 +183,18 @@ One line per item. **Phase tags** (sweep 2026-08-23): P3 boost · P4 R19-tuning 
 
 **Combat**
 - `0008` — S2 boost handoff **→P3**; S1 pre-spawn, W2 trim + W4 `WarDecl` **→P6**; O5 power-bank + heavy assault = deferred capabilities (activate by decision, not schedule).
-- `0008a` — T-HEAL-3 (widens into R1) **→P3**; T-DEF-1/T-DEF-5/T-POS-5 + the damage.rs readiness tranche **→WvC**; Tier 3 **→P6** (after P3).
+- `0008a` — T-HEAL-3 (widens into R1) **→P3** (T-HEAL-3a SHIPPED, WvC-1); T-DEF-1/T-DEF-5/T-POS-5 **→WvC-2** (readiness tranche wired/pruned, WvC-1); Tier 3 **→P6** (after P3).
 - `0019` — S4-TUNE **→P4**; boosted-TOUGH **→P3** (blocked on 0041).
-- `0020` — S5/S6/S7 (blob auction + R7 currency, adaptivity, adversarial room-gen): **operator-ratified scheduled end-state, sequenced AFTER Phase 4** (they want the R19-retuned kernels). **S5-CAP: `MAX_CONCURRENT_SQUADS` still hardcoded 4** (`squad_manager.rs:211`).
-- `0026` — L6c **→P4**; L8 observed-bodies coordination **→WvC**.
+- `0020` — S5/S6/S7 (blob auction + R7 currency, adaptivity, adversarial room-gen): **operator-ratified scheduled end-state, sequenced AFTER Phase 4** (they want the R19-retuned kernels). S5-CAP SHIPPED (WvC-1): empire-scaled cap + defense surge, shared `claim_pacing` kernel.
+- `0026` — L6c **→P4** (L8 SHIPPED, WvC-1: observed-owner classifier).
 - `0026a` — modes activate as their signals land **→P6** (catalog; no standalone schedule).
 - `0027` — Farm producers (PowerBank needs its own ADR) + salvage-teardown migration **→P6**.
-- `0028` — K3/K4 bot wiring + `run_defended_lifecycle` closeout **→HARNESS**; multi-squad lane contention **→WvC**.
+- `0028` — `run_defended_lifecycle` closeout **→HARNESS** (K3/K4 RESOLVED, WvC-1: claim_admission is the shared kernel, `claims_allowed` harness-only; K3 adapters separate by design); multi-squad lane contention **→WvC-2**.
 
 - `0031` — Tier-2 archetype search + Tier-3 axes **→P4** (the 0031a sweep plan).
 - `0031a` / `0031b` — sweeps invalid (`w_energy` now 1.0, not the 0.001 the results assume); re-run + amend conclusions **→P4**.
-- `0034` — convergence gates **→P4**; renewable-rally live-wire **→WvC**.
-- `0035` — FU1 + FU2 **→WvC**.
+- `0034` — convergence gates **→P4** (D6c renewable-rally bias SHIPPED, WvC-1).
+- `0035` — FU1 **→P6** (poll-until-fresh sufficiency undecided; FU2 CLOSED, WvC-1: terminator composition + stall-aware give-up clock).
 - `0036` — live raze confirmation **→HARNESS** (private-server world mechanics, B-1).
 - `0037` — ~~T1/T2 orphan decision~~ **RULED 2026-08-23: retained by design** (war.rs:550 documents it; owned-path `tower_danger: 0.0` is the neighbour-only-signal design). Remaining: T3 seam candidate emission **→WvC**.
 - `0039` — P2–P4 **folded into the harness lane** (2026-08-23): re-activate with H5 **→HARNESS**.
@@ -263,7 +267,6 @@ wire it or delete it — not necessarily work.
 | `gameview.rs` | 104 lines, zero refs | The ADR 0006 seam Inc-6 record/replay and 0015's fakes both assume. Never migrated a single consumer. |
 | `ui.rs` | 36 lines, `UISystem` never constructed | Doc comment claims consumers that do not exist. |
 | `BoostQueue` | `military/boostqueue.rs` | Plumbed into every mission, **no mutator ever called**; `clear()` never called, so it would grow unbounded if fed. |
-| Readiness tranche | `military/damage.rs:33,39,64,78,99,115` | `defender_spawn_readiness`, `net_tower_damage`, `should_towers_fire`, `estimated_ticks_to_kill` — built, tested, uncalled. One coherent unfinished tranche. |
 | `issue_virtual_anchor_flee` | `military/formation.rs:398` | The **only** squad-level flee construct; nothing replaced it ⇒ squads have no coordinated retreat. Adjacent to review D10. |
 | `Job::describe` layer | `jobs/jobsystem.rs:99,105` + ~15 jobs | Every job implements it; nothing dispatches it. A whole overlay with no renderer. |
 | T1/T2 neighbour kernels | `war_decision.rs:182,327` | **Decided: retained by design** — sim/test-covered, awaiting the offense-side candidate feed (war.rs:550). Not dead code. |
@@ -319,6 +322,7 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 
 Append one line per closed item. Newest first.
 
+- **2026-08-23 (late)** — **WvC-1 code-complete, all 7 items**: T-HEAL-3a winnability inputs (`c5a06c8`), defender spawn-readiness wired + tower half deleted as U-TOWER-superseded (`81ee72f`), S5-CAP empire-scaled cap + defense surge (`7a87df5` → shared kernel `13112e6`), 0035 FU2 closed (veto attempt `4d044be` reverted `4d186d8` after 2 eval-bed regressions — the probe bounce is load-bearing; final = stall-aware give-up clock + engaged-gated stall streaks, agent `0c57c45`), 0026 L8 observed-owner coordination (`0455298`), 0034 D6c renewable-rally bias (`e6aa3ce`), 0028 K3/K4 resolved as-built (ADR rewritten). Ship + live-watch pending.
 - **2026-08-23** — **Operator reorder: military first.** Boost pipeline (largest NEW build) demoted behind the military completion waves (WvC-1 correctness+wiring, WvC-2 defensive features) and the P4 re-tune — finish partial machinery + kill the bug farm before feeding it boosts. WvC promoted out of the old Phase-6 into Phase 3; NOW = WvC-1.
 
 - **2026-08-23** — **WS-6 SHIPPED + CLOSED: ADR 0047 live at WFV 29** (msgpack struct-map stream + foreman Plan shrink `5c89f30` — road_network deleted, build_order on-demand; plans ~70% smaller). The LAST format-transition reset paid; additive changes are now reset-free. Live: 2.8% of segment budget mid-rebuild (proj. 12–14% full), named decode FASTER than old bincode. Costs recorded: wasm +71% (48.5% of code limit). Operator constraint recorded: plans are durable state, never recompute-after-reset. ws-6 doc deleted.

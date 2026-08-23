@@ -122,12 +122,22 @@ spread-0). The only new ordering surface is the spawn queue — modeled as a **d
   per_member_cap, priority, move_profile)` wraps the shared
   `sized_for`/`composition::build_body`/`PREFERRED_MEMBER_ENERGY`: one `QueuedSpawn` per UNFILLED
   slot, body built at `min(best_capacity, per_member_cap)`, a slot no in-range home can build is
-  skipped (the `None` stall), `id` = slot index. Home: `screeps-combat-decision::fielding`; the bot
-  adapter is the `slots_to_spawn`→`build_body` token broadcast into `queue_slot_spawn`.
-- **K4 — claim pacing.** `claim_pacing::claims_allowed(active, forming, max_concurrent,
-  max_forming)` = the tighter of the two headrooms — it reproduces the forming-cap LOCKUP (a stuck
-  forming squad blocks all new claims, the `forming-cap=1` zeroing seen live). Home:
-  `screeps-combat-decision::claim_pacing`; the bot adapter gates `field_new_squad` on it.
+  skipped (the `None` stall), `id` = slot index. Home: `screeps-combat-decision::fielding`.
+  SHARING SHAPE (as built): the shared decision content — which body at what energy — IS the
+  decision-crate `build_body` + `PREFERRED_MEMBER_ENERGY` both drivers call; `slots_to_spawn` is
+  the HARNESS's adapter of it onto the econ spawn-queue model, and the bot's `queue_slot_spawn` is
+  the LIVE adapter (token broadcast + REC-037/REC-015b stall latches + the WvC-1 defender
+  spawn-readiness downsize). Routing the bot through the harness's `QueuedSpawn` shape would
+  duplicate the policy, not unify it — the two adapters stay separate by design.
+- **K4 — claim pacing.** SHARED KERNEL (as built, WvC-1): the live Phase C policy —
+  `claim_pacing::claim_admission` (defense-aware: offense under the cap AND the forming pace;
+  defense within cap + `DEFENSE_SURGE_SQUADS`) over the empire-scaled
+  `claim_pacing::max_concurrent_squads` (S5-CAP) — lives in `screeps-combat-decision::claim_pacing`
+  and the bot imports it (one policy, live + harness drivers). The scalar
+  `claims_allowed(active, forming, max_concurrent, max_forming)` remains the OFFENSE-only budget
+  the harness's forming-lockup beds exercise (it reproduces the `forming-cap=1` zeroing seen live);
+  it has no defense dimension and must never be wired back into the live loop (it would re-open
+  the REC-008/S5-CAP defense starvation).
 
 ### Forming-phase colony driver
 

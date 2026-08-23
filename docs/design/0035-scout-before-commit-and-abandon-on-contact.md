@@ -188,14 +188,18 @@ withdraw-as-clean (which invites instant re-field), and do NOT re-advance (which
   COMPOSITION of per-phase terminators rather than one new gate, so every committed squad has a
   definite terminator (EP-2.7): never departs → the R22 never-departed breaker; never arrives → the
   travel budget + the REC-022 proximity-gated lease; arrives to an empty room → the D28 vacuous
-  clear; arrives and loses → `unwinnable_contact` (D4); arrives into a below-band stalemate → the
-  stalemate valve disengages and `can_reengage` (balance < band) keeps Retreating absorbing → the
-  REC-003 retreat budget; arrives onto a harmless turtle at positive balance → the valve's
-  `harmless_turtle` arm PLUS the stalemate re-engage veto (a stalemate disengage also vetoes
-  re-engage while the no-progress signals persist — without it the balance/HP-only re-engage
-  oscillated Retreating↔Moving and reset the REC-003 clock every cycle, an immortal in-room
-  squad); forming stalls → the forming budget + the economic give-up. Hold-intent standoffs are
-  deliberately exempt (pinning is the job; the producer owns their lifecycle).
+  clear; arrives and loses → `unwinnable_contact` (D4); arrives into a NO-HEADWAY fight (stalemate,
+  disengaged or probe-bouncing) → the STALL-AWARE give-up clock: the REC-003 clock runs while the
+  squad is Retreating OR while the enemy-HP stall streak is latched, and clears only on a
+  non-Retreating tick with the stall unlatched — so the period-2 Retreating↔Engaged probe bounce a
+  borderline position-dependent fight legitimately runs (re-enter, test the water) stays ALLOWED
+  as behavior but can no longer reset the clock on its Engaged ticks and become immortal; genuine
+  headway (any damage landed — the stall streak resets on a decrease in ANY state, and grows only
+  on engaged ticks) unlatches the stall and clears the clock. Forming stalls → the forming budget +
+  the economic give-up. Hold-intent standoffs are deliberately exempt (pinning is the job; the
+  producer owns their lifecycle). (A first cut made Retreating ABSORBING via a kernel re-engage
+  veto; reverted — the probe bounce is load-bearing for recoverable borderline fights, so the bound
+  lives in the manager's clock, not the state machine.)
 
 ---
 

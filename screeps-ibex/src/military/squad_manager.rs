@@ -137,9 +137,12 @@ pub struct SquadFormingProgress {
     /// "stalled" (the old single MIN signal) and one moving lead can't mask a stuck bulk. Ephemeral (NOT
     /// serialized — no WFV bump). Cleared on retire.
     member_target_dist: std::collections::BTreeMap<(ObjectiveId, u32), u32>,
-    /// REC-003 (the Retreating liveness bound): objective id → the tick the squad ENTERED `Retreating`
-    /// this stretch. Any non-Retreating tick (a genuine re-engage, travel, forming) removes the entry;
-    /// past [`MAX_RETREAT_BUDGET`] the reconcile kernel force-aborts (`retreat_budget_exhausted`).
+    /// REC-003 (the Retreating liveness bound) + ADR 0035 FU2: objective id → the tick the give-up
+    /// clock STARTED this stretch. The clock runs while the squad is `Retreating` OR while the
+    /// enemy-HP stall streak is latched (`retreat_clock_holds`) — so a period-2 probe bounce on a
+    /// no-headway fight cannot reset it on its Engaged ticks (the committed-never-progresses zombie).
+    /// A non-Retreating tick with the stall unlatched (genuine headway) removes the entry; past
+    /// [`MAX_RETREAT_BUDGET`] the reconcile kernel force-aborts (`retreat_budget_exhausted`).
     /// Ephemeral (NOT serialized — no WFV bump; a VM reload restarts the clock, still bounded). Cleared
     /// on retire/reassign.
     retreating_since: std::collections::BTreeMap<ObjectiveId, u32>,
@@ -205,42 +208,16 @@ impl SquadPhase {
 /// this-many ticks so a long-lived stuck squad keeps producing one greppable status line without flooding.
 const SQUAD_TRACE_HEARTBEAT: u32 = 25;
 
-/// S5-CAP (review R7) — the global concurrent-squad cap scales with EMPIRE SIZE instead of the old
-/// flat 4: a one-room colony cannot afford 4 rosters' spawn pressure, and an 8-room empire fielding
-/// only 4 leaves EV-positive objectives (SK farms, expansions' escorts, raids) permanently unclaimed.
-/// Floor 2 (even a small colony may need a defender + one farm/offense), +1 per 2 owned spawn-capable
-/// rooms, ceiling 8 (beyond that the spawn lanes, not the cap, are the binding constraint).
-/// `owned_rooms` = the Phase-gather `homes` count (owned + spawn + capacity>0 — the real spawn base).
-const MIN_CONCURRENT_SQUADS: usize = 2;
-const MAX_CONCURRENT_SQUADS: usize = 8;
-fn max_concurrent_squads(owned_rooms: usize) -> usize {
-    (MIN_CONCURRENT_SQUADS + owned_rooms / 2).min(MAX_CONCURRENT_SQUADS)
-}
-
-/// S5-CAP defense surge: a DEFENSE claim may exceed the global cap by this many slots, so a full
-/// board of fielded OFFENSE squads can never block a base-under-attack defender from claiming
-/// (REC-008 exempted defense from the FORMING pace; this closes the same starvation at the ACTIVE
-/// cap). Bounded — defense objectives themselves are producer-capped, this is not unlimited.
-const DEFENSE_SURGE_SQUADS: usize = 2;
-
-/// The pure claim-admission decision for one ranked objective (S5-CAP): OFFENSE requires a free
-/// slot under the global cap AND the forming pace; DEFENSE requires only a slot within
-/// cap + surge (deploys immediately — never queued behind offense on either axis).
-fn claim_admission(active: usize, forming: usize, cap: usize, is_defense: bool) -> bool {
-    if is_defense {
-        active < cap + DEFENSE_SURGE_SQUADS
-    } else {
-        active < cap && forming < MAX_FORMING_SQUADS
-    }
-}
-
-/// Cap on squads still FORMING (incomplete roster) at once. A forming squad's slots spawn at HIGH (above
-/// the economy bulk — see `spawn_priority_for`), so letting many form together starves logistics AND
-/// splits the scarce high-priority spawn-ticks so none completes (observed: two squads co-stalled at 3/5
-/// and 1/2 for thousands of ticks). Serializing finishes one or two rosters before the next is claimed.
-/// Complete squads (out fighting) do NOT count toward this, so it never reduces total concurrent offense
-/// below `MAX_CONCURRENT_SQUADS` — it only paces how fast new rosters are started.
-const MAX_FORMING_SQUADS: usize = 2;
+/// ADR 0028 K4 (the claim-pacing wiring): the Phase C claim policy — the empire-scaled cap
+/// (`max_concurrent_squads`, S5-CAP/R7), the forming pace (`MAX_FORMING_SQUADS`), the defense surge,
+/// and the per-claim `claim_admission` decision — is the SHARED `screeps_combat_decision::claim_pacing`
+/// kernel (one policy, live + harness drivers; the pins live with it). `owned_rooms` fed to
+/// `max_concurrent_squads` = the Phase-gather `homes` count (owned + spawn + capacity>0 — the real
+/// spawn base). Forming-cap context: forming slots spawn at HIGH (above the economy bulk — see
+/// `spawn_priority_for`), so serializing rosters at ≤ MAX_FORMING_SQUADS is what lets any complete
+/// (observed: two squads co-stalled at 3/5 and 1/2 for thousands of ticks); complete squads never
+/// count toward it, and REC-008: defense never does either.
+use screeps_combat_decision::claim_pacing::{claim_admission, max_concurrent_squads, DEFENSE_SURGE_SQUADS, MAX_FORMING_SQUADS};
 
 /// While a squad is still FORMING (incomplete roster), renew a present member whose remaining TTL drops
 /// below this so a slow/contested form does not bleed out its early members to old age before the roster
@@ -485,12 +462,35 @@ fn lost_in_room_verdict(in_room_any: bool, hostile_threat_present: bool, present
 /// the new pair given this tick's total alive enemy hits. The sim driver's exact rule (combat-agent
 /// `ManagedSimSquad`): the streak grows while the sum does not DECREASE (kills/damage shrink it;
 /// heal-back/reinforcement keep it flat-or-up = no headway) and resets on any decrease. Pure.
-fn advance_enemy_stall(prev: Option<(u32, u32)>, enemy_hits_now: u32) -> (u32, u32) {
-    let stall = match prev {
-        Some((prev_hits, stall)) if enemy_hits_now >= prev_hits => stall.saturating_add(1),
-        _ => 0,
-    };
-    (enemy_hits_now, stall)
+/// ADR 0035 FU2 — whether the REC-003 give-up clock RUNS this tick. It runs while the squad is
+/// `Retreating` (the original REC-003 bound) OR while the enemy-HP stall streak is LATCHED
+/// (`ENEMY_STALL_TICKS` of engaged no-headway ticks) — so the period-2 Retreating↔Engaged probe bounce
+/// a borderline position-dependent fight legitimately runs (re-enter, test the water, maybe this time
+/// the geometry favours us) cannot reset the clock on its Engaged ticks and become IMMORTAL (the
+/// committed-never-progresses zombie). The clock CLEARS only on a non-Retreating tick with the stall
+/// unlatched — which genuine headway produces (any damage landed resets the streak). Pure.
+fn retreat_clock_holds(state_retreating: bool, stalemate_latched: bool) -> bool {
+    state_retreating || stalemate_latched
+}
+
+fn advance_enemy_stall(prev: Option<(u32, u32)>, enemy_hits_now: u32, engaged: bool) -> (u32, u32) {
+    // FU2 (the re-engage-veto companion): a DECREASE resets the streak in ANY state — headway is
+    // headway, and a kiting/parting-shot retreat that lands damage is real progress (freezing it
+    // deadlocked the multi-room assault bed: the un-latch that used to release the stalemate never
+    // fired). The streak GROWS only on ENGAGED ticks: a squad not in contact cannot *fail* to make
+    // headway, so a recovery retreat under flat enemy hits must not accrue toward the re-engage veto
+    // (a winning raze that dipped out of tower range would otherwise latch a stall at range). Flat
+    // hits while disengaged FREEZE the streak — a genuine stall latched while engaged survives the
+    // disengage (dropping it would re-open the period-2 oscillation).
+    match prev {
+        Some((prev_hits, _)) if enemy_hits_now < prev_hits => (enemy_hits_now, 0),
+        Some((prev_hits, stall)) if engaged => {
+            debug_assert!(enemy_hits_now >= prev_hits);
+            (enemy_hits_now, stall.saturating_add(1))
+        }
+        Some(frozen) => frozen,
+        None => (enemy_hits_now, 0),
+    }
 }
 
 /// REC-017 — the renew-to-SUFFICIENCY TTL target for a member held/forming at a home room, from its
@@ -1955,11 +1955,21 @@ impl<'a> System<'a> for SquadManagerSystem {
                 now
             };
             let travel_budget_remaining = now.saturating_sub(departed_at) < MAX_TRAVEL_BUDGET;
-            // ── REC-003: the time-in-Retreating clock. Entered on the first Retreating tick; ANY
-            // non-Retreating tick (a genuine re-engage per `can_reengage`, travel, forming) clears it —
-            // "time in Retreating WITHOUT re-engage". Past MAX_RETREAT_BUDGET the kernel force-aborts
-            // (its terminal dominates the in-room focus-refresh that made the state absorbing). ──
-            let retreat_budget_exhausted = if state_retreating {
+            // ── REC-003: the time-in-Retreating clock. Entered on the first Retreating tick. ADR 0035
+            // FU2: cleared only by a non-Retreating tick with NO LATCHED STALEMATE (`retreat_clock_holds`)
+            // — a probe re-engage during a latched stall (the period-2 Retreating↔Engaged bounce a
+            // borderline position-dependent fight legitimately runs to test the water) does NOT reset it,
+            // so the committed-never-progresses zombie is bounded: the clock accrues ACROSS the bounce
+            // and force-aborts at MAX_RETREAT_BUDGET (GaveUp + backoff). Genuine headway (damage landed)
+            // resets the stall streak → the stall unlatches → the next non-Retreating tick clears the
+            // clock — a fight that is actually progressing never trips this. Past MAX_RETREAT_BUDGET the
+            // kernel force-aborts (its terminal dominates the in-room focus-refresh). ──
+            let stalemate_latched = data
+                .forming_progress
+                .enemy_stall
+                .get(&obj_id)
+                .is_some_and(|&(_, streak)| streak >= screeps_combat_decision::ENEMY_STALL_TICKS);
+            let retreat_budget_exhausted = if retreat_clock_holds(state_retreating, stalemate_latched) {
                 let since = *data.forming_progress.retreating_since.entry(obj_id).or_insert(now);
                 now.saturating_sub(since) >= MAX_RETREAT_BUDGET
             } else {
@@ -3116,9 +3126,13 @@ fn compute_squad_orders(
     // so a winning grind or a creepless structure siege (balance clamps positive) never trips it. On a
     // trip: Retreating → the exit is REC-003's retreat bound / re-engage — the disengage composes with
     // the lifecycle bounds instead of oscillating. Ephemeral tracker — no serialized state, no WFV bump.
+    // FU2: the streak ADVANCES only on ENGAGED ticks and FREEZES otherwise (see `advance_enemy_stall`) —
+    // paired with the kernel's stalemate re-engage veto, a recovery retreat can't latch a stall while a
+    // genuinely latched one survives the disengage. `current_state` is the previous tick's applied state.
+    let stall_engaged = current_state == screeps_combat_decision::SquadOrderState::Engaged;
     let enemy_stalled = if in_room_any {
         let enemy_hits_now: u32 = hostiles.iter().filter(|h| h.hits > 0).map(|h| h.hits).sum();
-        let advanced = advance_enemy_stall(forming_progress.enemy_stall.get(&obj_id).copied(), enemy_hits_now);
+        let advanced = advance_enemy_stall(forming_progress.enemy_stall.get(&obj_id).copied(), enemy_hits_now, stall_engaged);
         forming_progress.enemy_stall.insert(obj_id, advanced);
         advanced.1 >= screeps_combat_decision::ENEMY_STALL_TICKS
     } else {
@@ -3139,7 +3153,7 @@ fn compute_squad_orders(
             .filter(|s| s.ownership == screeps_combat_decision::Ownership::Hostile && s.hits > 0)
             .map(|s| s.hits)
             .sum();
-        let advanced = advance_enemy_stall(forming_progress.structure_stall.get(&obj_id).copied(), structure_hits_now);
+        let advanced = advance_enemy_stall(forming_progress.structure_stall.get(&obj_id).copied(), structure_hits_now, stall_engaged);
         forming_progress.structure_stall.insert(obj_id, advanced);
         advanced.1 >= screeps_combat_decision::ENEMY_STALL_TICKS
     } else {
@@ -3412,11 +3426,17 @@ fn compute_squad_orders(
                     .map(|d| d.owner().hostile() || d.militarily_active())
                     .unwrap_or(false)
             };
-            let rally = screeps_combat_decision::rally::shared_rally_point_for_members_avoiding(
+            // ADR 0034 D6c / D3(d) (live-wire): among the safe on-corridor staging candidates, prefer
+            // a room that is one of OUR spawn-capable homes — a member held/gathered there is inside a
+            // home room, so the Phase B-renew pass tops its TTL up (the RC-6 spawn-less-forward-rally
+            // age-out). The sim models this as the `rally_spawn` toggle; this is the live half.
+            let room_is_renewable = |room: RoomName| -> bool { homes.iter().any(|h| h.name == room) };
+            let rally = screeps_combat_decision::rally::shared_rally_point_for_members_biased(
                 &member_positions,
                 assault_target,
                 uncontested,
                 &room_is_dangerous,
+                &room_is_renewable,
             );
 
             // ── ADR 0034 D4 + D8 (RC-3/RC-8 — member-side movement-failure escalation, NO silent retry) ──
@@ -4085,34 +4105,6 @@ fn apply_squad_decision(
 mod tests {
     use super::*;
     use crate::military::objective_queue::FarmKind;
-
-    /// S5-CAP (review R7): the concurrency cap scales with the spawn base — floor 2 for a small
-    /// colony, PARITY with the old flat 4 at four owned rooms, growth for a real empire, ceiling 8.
-    #[test]
-    fn concurrent_squad_cap_scales_with_empire_size() {
-        assert_eq!(max_concurrent_squads(1), 2); // floor: a colony can't afford 4 rosters
-        assert_eq!(max_concurrent_squads(4), 4); // parity with the pre-S5-CAP flat cap
-        assert_eq!(max_concurrent_squads(8), 6); // the live 8-room empire gains real concurrency
-        assert_eq!(max_concurrent_squads(20), 8); // ceiling: spawn lanes bind, not the cap
-    }
-
-    /// S5-CAP: a full board of fielded OFFENSE squads never blocks a DEFENSE claim — defense is
-    /// admitted within cap + DEFENSE_SURGE_SQUADS while offense is refused at the cap (and at the
-    /// forming pace). Beyond the surge even defense is bounded.
-    #[test]
-    fn defense_claims_surge_past_a_full_offense_board() {
-        let cap = 4;
-        // Board full of offense (active == cap): offense refused, defense admitted.
-        assert!(!claim_admission(cap, 0, cap, false));
-        assert!(claim_admission(cap, 0, cap, true));
-        // Defense is bounded too: past cap + surge, refused.
-        assert!(!claim_admission(cap + DEFENSE_SURGE_SQUADS, 0, cap, true));
-        // Offense under the cap still respects the forming pace (REC-008 unchanged).
-        assert!(claim_admission(0, MAX_FORMING_SQUADS - 1, cap, false));
-        assert!(!claim_admission(0, MAX_FORMING_SQUADS, cap, false));
-        // ...and the forming pace never applies to defense.
-        assert!(claim_admission(0, MAX_FORMING_SQUADS, cap, true));
-    }
 
     /// ADR 0033 slice 7 — the §D5.4 military bid lands in the (Normal, High) band by construction:
     /// `Normal_anchor + clamp(quantized R_O, 1, 999_999)`. Every point of the clamp is pinned: a
@@ -5119,16 +5111,42 @@ mod tests {
         assert!(clear_departure_clock(false, true), "a genuine engage ends the travel phase — the clock may clear");
     }
 
+    /// ADR 0035 FU2 — the give-up clock survives the probe bounce: it RUNS on a Retreating tick AND
+    /// on an Engaged tick with the stall latched (the period-2 Retreating↔Engaged probe that made the
+    /// pre-fix clock immortal — every Engaged tick cleared it), and CLEARS only once the squad is
+    /// non-Retreating with the stall unlatched (genuine headway resets the streak → unlatches).
+    #[test]
+    fn giveup_clock_survives_the_probe_bounce() {
+        assert!(retreat_clock_holds(true, false), "Retreating alone runs the clock (REC-003 unchanged)");
+        assert!(retreat_clock_holds(true, true), "Retreating with a latched stall runs the clock");
+        assert!(
+            retreat_clock_holds(false, true),
+            "an Engaged PROBE tick during a latched stall must NOT clear the clock (the immortal-bounce fix)"
+        );
+        assert!(!retreat_clock_holds(false, false), "engaged with real headway (stall unlatched) clears it");
+    }
+
     /// REC-036 — the enemy-stall streak mirrors the sim driver exactly (combat-agent `ManagedSimSquad`):
     /// it grows while the total alive enemy hits do not DECREASE (out-healed / reinforced = no headway)
     /// and resets on any decrease (damage landed / a kill). The threshold constant is shared with the
-    /// decision crate so live and sim report the stalemate input the same way.
+    /// decision crate so live and sim report the stalemate input the same way. FU2: the streak advances
+    /// only on ENGAGED ticks and FREEZES otherwise — a recovery retreat neither latches a stall (which
+    /// the re-engage veto would then read, deadlocking a winning fight) nor releases a latched one
+    /// (which would re-open the period-2 disengage oscillation).
     #[test]
     fn enemy_stall_streak_grows_only_without_hp_progress() {
-        assert_eq!(advance_enemy_stall(None, 5_000), (5_000, 0), "first in-room reading starts a fresh streak");
-        assert_eq!(advance_enemy_stall(Some((5_000, 3)), 5_000), (5_000, 4), "flat (out-healed) grows the streak");
-        assert_eq!(advance_enemy_stall(Some((5_000, 3)), 6_000), (6_000, 4), "healed-up/reinforced is also no headway");
-        assert_eq!(advance_enemy_stall(Some((5_000, 30)), 4_990), (4_990, 0), "any decrease (damage landed) resets");
+        assert_eq!(advance_enemy_stall(None, 5_000, true), (5_000, 0), "first in-room reading starts a fresh streak");
+        assert_eq!(advance_enemy_stall(Some((5_000, 3)), 5_000, true), (5_000, 4), "flat (out-healed) grows the streak");
+        assert_eq!(advance_enemy_stall(Some((5_000, 3)), 6_000, true), (6_000, 4), "healed-up/reinforced is also no headway");
+        assert_eq!(advance_enemy_stall(Some((5_000, 30)), 4_990, true), (4_990, 0), "any decrease (damage landed) resets");
+        // FU2 refinements: a DECREASE resets in ANY state (a kiting/parting-shot retreat that lands
+        // damage is real headway — freezing it deadlocked the multi-room assault bed); flat hits on a
+        // non-engaged tick FREEZE the streak — no growth (a healing retreat under flat enemy hits must
+        // not accrue toward the re-engage veto) and no release of a latched stall.
+        assert_eq!(advance_enemy_stall(Some((5_000, 3)), 5_000, false), (5_000, 3), "frozen: flat hits don't grow the streak while disengaged");
+        assert_eq!(advance_enemy_stall(Some((5_000, 6)), 6_000, false), (5_000, 6), "frozen: healed-up while disengaged neither grows nor resets");
+        assert_eq!(advance_enemy_stall(Some((5_000, 41)), 4_000, false), (4_000, 0), "a decrease resets in ANY state — kiting fire is headway");
+        assert_eq!(advance_enemy_stall(None, 5_000, false), (5_000, 0), "first reading seeds without accrual");
         // Parity pin: the shared threshold matches the sim driver's historical STALL_LIMIT (=40,
         // combat-agent squad.rs) — the two surfaces must report the one stalemate input identically.
         assert_eq!(screeps_combat_decision::ENEMY_STALL_TICKS, 40, "sim/live stall-threshold parity");

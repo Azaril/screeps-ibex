@@ -32,19 +32,29 @@ boost (Phase 5) then feeds correct machinery.
       ceiling 8; parity with old 4 at 4 rooms) + `DEFENSE_SURGE_SQUADS=2` so a full offense board
       can never block a defense claim at the ACTIVE cap (closes R7's starvation; REC-008 covered
       only the forming pace). `claim_admission` pure kernel, 2 RED-verified pins.
-- [x] **0035 FU2** (decision sub `4d044be`): the one real hole was the harmless-turtle disengage
-      oscillating Retreating↔Moving at positive balance (each cycle reset the REC-003 clock →
-      immortal in-room squad). `can_reengage` now vetoed by an active stalemate → Retreating is
-      absorbing → REC-003/lease terminate. FU2 predicate CLOSED as a composition of per-phase
-      terminators (recorded in ADR 0035 §2.1); RED-verified pin + determinism fence green (391s).
+- [x] **0035 FU2**: the real hole = the no-headway probe bounce (Retreating↔Engaged) resetting the
+      REC-003 clock every Engaged tick → immortal in-room squad. First cut (kernel re-engage veto,
+      decision `4d044be`) REVERTED (`4d186d8`) — it deadlocked two eval beds (positional
+      "harmless" reads wrong at range; the probe bounce is load-bearing for borderline fights).
+      Final: the give-up clock runs while Retreating OR stall-latched (`retreat_clock_holds`),
+      clears only on genuine headway; stall streaks grow engaged-only / reset-on-decrease-any-state
+      (bot + sim driver mirrored, agent `0c57c45`). Predicate CLOSED as terminator composition
+      (ADR 0035 §2.1); pins RED-verified; eval regressions resolved (114 green).
 - [x] **0026 L8** (`0455298`): `classify_coordination` reads scouted hostile OWNERS first (all-NPC ⇒
       Individual, any player body ⇒ Coordinated); Q1 source prior only as unobserved fallback.
       RED-verified pin. (ADR 0026 L8 note should drop its "until it is" caveat — done below.)
-- [ ] **0034 rally-bias live-wire** — renewable-rally bias exists sim-side (`lifecycle.rs:1423`),
-      never wired live.
-- [ ] **0028 K3/K4 wiring** — `slots_to_spawn` into the spawn adapter; `claims_allowed` into claim
-      pacing (the harness computes both; the bot ignores them). The CLOSEOUT run stays
-      HARNESS-gated; the wiring is not.
+- [x] **0034 rally-bias live-wire** (decision `e6aa3ce`): D6c/D3(d) renewable-rally bias —
+      `shared_rally_point_for_members_biased` prefers a friendly-spawn room among the valid+safe
+      staging candidates; live caller feeds `homes`. The renew half was already free: Phase B-renew
+      matches any member in a home room, and the job side walks them to the spawn. RED-verified pin.
+- [x] **0028 K3/K4 wiring** — resolved the inverse way: the LIVE loop had evolved past both
+      kernels. K4: `claim_admission` + `max_concurrent_squads` + surge/forming consts MOVED into
+      `screeps_combat_decision::claim_pacing` as the shared kernel (bot imports it; pins moved
+      with it); scalar `claims_allowed` stays harness-only — wiring it live would regress
+      REC-008/S5-CAP defense exemptions. K3: the shared content is `build_body` +
+      `PREFERRED_MEMBER_ENERGY` (already decision-crate); `slots_to_spawn` is the harness adapter,
+      `queue_slot_spawn` the live one (latches + readiness downsize) — separate by design.
+      ADR 0028 K3/K4 rows rewritten to as-built.
 - [ ] Batch-ship + live-watch (drain signatures, engage/retreat sanity on the next real fight)
 
 ## Design deltas
@@ -62,3 +72,4 @@ offense-soak (B-1) validates the wave end-to-end when the operator is home.
 
 - 2026-08-23 — created on the operator's military-first reorder; T-HEAL-3a first.
 - 2026-08-23 — readiness tranche wired (`81ee72f`); tower half deleted as superseded. Next: S5-CAP.
+- 2026-08-23 (cont.) — S5-CAP (`7a87df5`), L8 (`0455298`), FU2 (veto→revert→clock, decision `4d186d8` + agent `0c57c45`), D6c rally bias (decision `e6aa3ce`) all landed. Remaining: 0028 K3/K4 wiring, batch-ship + live-watch.
