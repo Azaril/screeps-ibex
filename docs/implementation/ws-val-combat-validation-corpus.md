@@ -184,3 +184,17 @@ Readings (each a finding, not a bug in the corpus):
   (`room_combat_dtos` is already in place as their input). Additional findings recorded in-code:
   goal-convergence churn (exact-claim exclusion tried/reverted — costs kite chip-fire) and the
   heal-vs-offense EV asymmetry (flat premium vs residual-diluted attack value).
+- 2026-08-24 (item 5 sim side COMPLETE) — the deferred parity substitutions LANDED (decision
+  `71c6e0a`, agent `4e68de4`, eval `1736ea6`): the sim traversal field = the shared
+  `build_room_threat_field` (H1/H2/M3/M8) + own-rampart passability (M2). Unlocked by finishing the
+  drain rework: (1) **placement, not the form phase** (correcting the prior log entry) — the
+  harness placed drain squads at ~r11 inside the falloff, the focused tank died in ~3 ticks in
+  every variant, and the canary's verdict rode the surviving remnant; drain squads now place at
+  falloff+2; (2) deliverable standoff sizing moved the band from the fictional r15 to the
+  survivable r19; (3) the **approach-aware plateau tie-break** — the last blocker: on equal-cost
+  tiles the old lower-x/y tie-break was objective-blind and a post-drain squad plateau-drifted AWAY
+  from its target and perched (traced per-tile with SQ_DEBUG3); ties now prefer smaller approach
+  distance. Full battery green (1537 + EXP + oscillation + all gauntlet pins + fence); fresh
+  gauntlet: every fielding rung still KILLS under the unified field (open 267 / choke 215 / multi
+  590 / border 87·48·52). Item 5 remaining = live side only: H3/M13 (mover threat layer), M4/M6
+  (wrong-room callback).

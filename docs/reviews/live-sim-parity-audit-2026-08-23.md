@@ -27,10 +27,12 @@ from the verified audit output).
    which always saw them), in BOTH the cached-RoomData arm and the live `find` fallback — the
    emitted Attack/Dismantle intents against a neutral wall ring now resolve instead of silently
    dropping. (No native unit pin — JS-backed types; verify on the next live neutral-wall breach.)
-2. **H1/H2/H3 + M2/M3/M8/M13 (threat/traversal unification cluster)** — sim traversal field is not
-   cover-aware, stamps own/drained towers, and is folded into EVERY sim matrix while live folds it
-   ONLY into squad_manager decide-searches (anchor mover + rover MovementSystem run unpriced).
-   Fix direction: one shared threat-fold entry point both sides call.
+2. **H1/H2/H3 + M2/M3/M8/M13 (threat/traversal unification cluster)** — SIM SIDE FIXED
+   2026-08-24 (agent `4e68de4`: the traversal field now delegates to the shared
+   `build_room_threat_field` — cover-aware, hostile-energized-tower-gated, unboosted-stamped
+   (H1/H2/M3/M8); own ramparts walkable (M2)). REMAINING (live side): H3/M13 — the live rover
+   MovementSystem/anchor mover still execute movement WITHOUT the threat layer the (now unified)
+   field prices; fix = fold the squad_manager-computed field into the live mover matrices.
 3. ~~**H5 / M0**~~ **FIXED 2026-08-24** (agent `1fbff1b` + decision `b0b7ea0`): the sim now builds
    full-roster member views matching live (execution stays room-scoped), and the shared kernel's
    cross-room-centroid consequences are defused on BOTH sides — fight-room anchoring

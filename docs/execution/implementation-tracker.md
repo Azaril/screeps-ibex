@@ -171,19 +171,21 @@ constructed walls with hits in both arms, matching the decision layer — no nat
 (JS types); verify on the next live neutral-wall breach. H5/M0 also closed by the item-2 batch
 (sim full-roster views + shared-kernel room fixes). Original H0 text: live drops
 Attack/Dismantle vs NEUTRAL constructed walls (`get_hostile_structures` filter; sim executes them);
-**(5) threat/traversal unification — PARTIAL 2026-08-24** (decision `acf3600`, agent `bed5f0e`):
-shipped = drain delivery honesty (distinct rear-ring support slots + DELIVERABLE standoff sizing —
-the shared-tile scatter under-healed the soak), URGENT_HEAL_MULT 8→3 (×8 let survivors PERCH:
-flat heal premium vs residual-diluted attack value — the asymmetry itself is queued), and the
-`room_combat_dtos` inputs for the sim-field delegation. **DEFERRED into a DRAIN-REWORK sub-batch**
-(they demonstrably swing the drain canary, whose verdict rides remnant-composition luck): (a) sim
-traversal-field delegation to `build_room_threat_field` (H1/H2/M3/M8 — code ready, one
-substitution in agent pathing.rs), (b) own-rampart passability M2, (c) the live mover threat layer
-H3/M13, (d) live wrong-room callback M4/M6. FOUND DEFECTS for that batch: the drain FORM phase
-marches the squad INTO the nest under fire (invariant tank bleed −45/tick, PRE-existing — the
-canary always lost the tank and passed on the surviving remnant); goal-convergence churn (an
-exact-claim exclusion fixed it but cost kite chip-fire — needs the EXP register in the loop);
-heal-vs-offense EV asymmetry. Instruments: `SQ_DEBUG`/`SQ_DEBUG2` env-gated driver traces;
+**(5) threat/traversal unification — SIM SIDE ✅ COMPLETE 2026-08-24** (decision
+`acf3600`+`71c6e0a`, agent `bed5f0e`+`4e68de4`, eval `1736ea6`): the sim traversal field now IS
+the shared `build_room_threat_field` (cover-aware, hostile-energized-tower-gated,
+unboosted-stamped — H1/H2/M3/M8) and own ramparts are walkable (M2). Unblocked by the DRAIN
+REWORK the substitutions forced: drain-aware placement (the harness placed the squad at ~r11
+INSIDE the falloff — the focused tank died in ~3 ticks every run, every variant, and the canary's
+"Killed" rode whichever remnant survived; a corrected earlier note blamed the form phase — it was
+placement), DELIVERABLE standoff sizing (total-heal optimism picked r15; the survivable band is
+r19), distinct rear-ring support slots, URGENT_HEAL_MULT 8→3 (flat heal premium vs
+residual-diluted attack value let survivors PERCH — asymmetry queued), and the approach-aware
+PLATEAU TIE-BREAK (equal-cost bands drift objective-blind under lower-x/y; ties now prefer
+smaller approach distance — the last blocker). REMAINING in item 5 (live side): (c) the live
+mover threat layer H3/M13, (d) the live wrong-room callback M4/M6. Other queued finds:
+goal-convergence churn (exact-claim tried/reverted — needs the EXP register in the loop);
+heal-vs-offense EV asymmetry. Instruments: `SQ_DEBUG`/`SQ_DEBUG2`/`SQ_DEBUG3` env-gated traces;
 **(6) boosted kernel
 re-tune** over `boosted_comp_basket` (default tactics lose at T2/T3) — merges with 0041 P4;
 **(7) the rest of the parity backlog** (H5 roster scope, H6 mover config, H8 tower-path fork,
