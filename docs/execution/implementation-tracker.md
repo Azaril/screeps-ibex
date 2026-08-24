@@ -171,8 +171,20 @@ constructed walls with hits in both arms, matching the decision layer — no nat
 (JS types); verify on the next live neutral-wall breach. H5/M0 also closed by the item-2 batch
 (sim full-roster views + shared-kernel room fixes). Original H0 text: live drops
 Attack/Dismantle vs NEUTRAL constructed walls (`get_hostile_structures` filter; sim executes them);
-**(5) threat/traversal unification** (parity H1/H2/H3 + M-cluster — live movement executes without
-the threat layer the sim validates against; one shared fold entry point); **(6) boosted kernel
+**(5) threat/traversal unification — PARTIAL 2026-08-24** (decision `acf3600`, agent `bed5f0e`):
+shipped = drain delivery honesty (distinct rear-ring support slots + DELIVERABLE standoff sizing —
+the shared-tile scatter under-healed the soak), URGENT_HEAL_MULT 8→3 (×8 let survivors PERCH:
+flat heal premium vs residual-diluted attack value — the asymmetry itself is queued), and the
+`room_combat_dtos` inputs for the sim-field delegation. **DEFERRED into a DRAIN-REWORK sub-batch**
+(they demonstrably swing the drain canary, whose verdict rides remnant-composition luck): (a) sim
+traversal-field delegation to `build_room_threat_field` (H1/H2/M3/M8 — code ready, one
+substitution in agent pathing.rs), (b) own-rampart passability M2, (c) the live mover threat layer
+H3/M13, (d) live wrong-room callback M4/M6. FOUND DEFECTS for that batch: the drain FORM phase
+marches the squad INTO the nest under fire (invariant tank bleed −45/tick, PRE-existing — the
+canary always lost the tank and passed on the surviving remnant); goal-convergence churn (an
+exact-claim exclusion fixed it but cost kite chip-fire — needs the EXP register in the loop);
+heal-vs-offense EV asymmetry. Instruments: `SQ_DEBUG`/`SQ_DEBUG2` env-gated driver traces;
+**(6) boosted kernel
 re-tune** over `boosted_comp_basket` (default tactics lose at T2/T3) — merges with 0041 P4;
 **(7) the rest of the parity backlog** (H5 roster scope, H6 mover config, H8 tower-path fork,
 H9 lifecycle inputs, M4/M6 wrong-room matrix — ranked in
@@ -401,6 +413,11 @@ Append one line per closed item. Newest first.
 - **2026-08-23** — **Wave B SHIPPED to live MMO** (hot swap `0d9524f2668f` per RULING-8; vm_starts 2749, missions persisted, 0 deser). RULING-8 recorded (deploy-to-live batched; B-1 demoted); ADR 0047 drafted (reset-tolerant serialization).
 
 - **2026-08-24 (latest)** — **Phase 4.5 item 4 (parity H0): FIXED** — `is_combat_targetable` in
+- **2026-08-24 (item 5 partial)** — drain delivery honesty + heal-premium rebalance shipped
+  (decision `acf3600`, agent `bed5f0e`); the sim-field delegation + M2 + live mover threat layer
+  DEFERRED into a drain-rework sub-batch with four precisely-traced findings (form-into-the-nest
+  tank bleed is pre-existing and invariant; the drain canary passes on remnant luck). SQ_DEBUG
+  trace instrumentation landed. 1537 + fence + wasm green.
   squad_combat.rs: the execution-side structure list now includes neutral constructed walls with
   hits (both the cached arm and the live find fallback), so kernel-chosen wall breaches resolve
   instead of silently dropping. H5/M0 also closed (item-2 batch). Parity report triage updated;

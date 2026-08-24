@@ -170,3 +170,17 @@ Readings (each a finding, not a bug in the corpus):
   wiped, zero losses). Pinned: `stronghold_floor_t0_defers_t3_kills_every_l1_rung`. g3/g4 defer at
   sizing (capability item 8). Replay viewer (`write_stronghold_replays` → target/replays/stronghold/
   index.html) regenerated + delivered.
+- 2026-08-24 (item 5, partial) — threat/traversal unification: the DECISION-side batch shipped
+  (decision `acf3600`: distinct rear-ring drain support slots, DELIVERABLE standoff sizing,
+  URGENT_HEAL_MULT 8→3); the SIM-field delegation (H1/H2/M3/M8), own-rampart passability (M2), the
+  live mover threat layer (H3/M13) and the wrong-room callback (M4/M6) are DEFERRED into a
+  DRAIN-REWORK sub-batch. Why: tick-tracing the drain canary showed its Killed verdict rides
+  remnant-composition luck on top of a PRE-existing blunder — the FORM phase marches the squad
+  into the tower nest, the tank has always bled out (−45/tick, byte-invariant across every
+  variant), and whichever members survive decide the endgame. The parity substitutions legitimately
+  reshuffle that remnant, flipping the canary either way. Correct sequence: fix the drain
+  form/approach discipline (form OUTSIDE the falloff; approach respecting the standoff band —
+  the same assembly principle as the border bloc gate), THEN land the parity substitutions
+  (`room_combat_dtos` is already in place as their input). Additional findings recorded in-code:
+  goal-convergence churn (exact-claim exclusion tried/reverted — costs kite chip-fire) and the
+  heal-vs-offense EV asymmetry (flat premium vs residual-diluted attack value).
