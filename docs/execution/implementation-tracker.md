@@ -52,7 +52,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2+4+5+6 + RULING-9 currency + boost flip ALL DONE 2026-08-24; next = item 7 parity remainder → item 8 clamp-then-doctrine)
+### NOW: Phase 4.5 — the WS-VAL defect program (items 1-7 + RULING-9 currency + boost flip ALL DONE 2026-08-24; next = item 8 clamp-then-doctrine, the LAST item)
 See §3 Phase 4.5 for the ordered ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
 
 ### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
@@ -218,9 +218,16 @@ RULING-9 currency; no config is positive in all 9 cells (literal maximin = the u
 adoption used maximin-with-a-noise-band (a2-i6-tight: −26/−18 noise cells vs mean +652, the
 strongest boosted generalizer). Full battery + fence green. **Unblocks the watched
 `boost_military` flip (the RULING-9 next step)**;
-**(7) the rest of the parity backlog** (H5 roster scope, H6 mover config, H8 tower-path fork,
-H9 lifecycle inputs, M4/M6 wrong-room matrix — ranked in
-[`../reviews/live-sim-parity-audit-2026-08-23.md`](../reviews/live-sim-parity-audit-2026-08-23.md));
+**(7) parity backlog — ✅ ACHIEVED 2026-08-24** (H6/H8/H9 + M10/M11/M12 batch; sim-core, agent,
+decision, live): sim shove depth 3→10, flee knobs matched (High/swap/bid-MoveTo-only), live
+retreat arm carries the engaged ladder, live tower no-squad path prices with the kernel's
+`heal_reaching` + the chip fallback deleted (hold fire), `forming_state` gets a `departed` gate
+(released under-strength squads travel on the progress-gated lease). M10 resolved by moving LIVE
+`friendly_creep_distance` 15→5 (pre-tournament hand-tune; 15 made the cross-border bed arrive
+strung out and die — details in the
+[parity report](../reviews/live-sim-parity-audit-2026-08-23.md)). REMAINDER queued: M14
+resolver-scope + M17/M18 tower unification + WORK/CLAIM threat_value (design fork) → item 8 /
+below; M20–M23 harness input gaps → the private-harness lane;
 **(8) stronghold capability** — L2+ defer even at T3 (multi-squad assault doctrine or a
 deliberate member-clamp lift for sieges; a DESIGN fork, stop-and-ask).
 *Closes: the WS-VAL follow-up queue; makes the corpus verdicts green instead of honest-red.*
@@ -432,6 +439,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-24 (latest)** — **Phase 4.5 item 7 (parity remainder) ACHIEVED**: H6/H8/H9 + M10/M11/M12 landed both sides (sim shove depth 10, flee-knob parity, live engaged-ladder retreat arm, live tower heal_reaching + chip fallback deleted, forming_state departed gate); LIVE friendly_creep_distance 15->5 (pre-tournament hand-tune, made crossings arrive strung out). Remainder: M14+M17/M18 -> item 8/design fork; M20-M23 -> harness lane.
 
 - **2026-08-24 (latest)** — **boost_military ACTIVATED on live MMO (WATCHED)**: Memory._features.military.boost_military = true on shardX via the new rest-api console example (`eeabd42` — POST /api/user/console, shard auto-injected); verified by console echo of the military tree; 0 panics post-flip. WATCH: first boosted engagement (labs fill BoostQueue, AwaitBoost job, offense sized per tier); attribute lab/spawn/sizing changes here first.
 

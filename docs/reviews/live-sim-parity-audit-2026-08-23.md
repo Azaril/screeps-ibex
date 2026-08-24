@@ -38,10 +38,24 @@ from the verified audit output).
    full-roster member views matching live (execution stays room-scoped), and the shared kernel's
    cross-room-centroid consequences are defused on BOTH sides — fight-room anchoring
    (`plan_squad_ev` room param), room-gated mover anchor, room-local tower assessment.
-4. **H6 / M10 / M12 / M14** — mover-config parity (shove depth 3 sim vs 10 live, flee knobs,
-   friendly-avoid radius 15 vs 5). Mechanical: point both at one shared config.
-5. **H8 / M17 / M18** — live no-squad tower path forks from `decide_towers`.
-6. **H9 / M20–M23** — lifecycle snapshot inputs the harness never exercises.
+4. ~~**H6 / M10 / M11 / M12**~~ **FIXED 2026-08-24** (item 7 batch; sim-core + agent + live): sim
+   shove depth 3→10 (10 IS live), flee knobs matched (High for every fleer, swap allowed, bid
+   MoveTo-only), live retreat arm now carries the engaged stuck ladder (M11 — the sim's uniform
+   in-room treatment; a withdrawing member needs squadmate-transparency most). M10 resolved in the
+   OTHER direction: live `friendly_creep_distance` 15→5 — the 15 was a pre-tournament hand-tune,
+   and matching sim to it made the cross-border assault bed arrive strung out and DIE; 5 is the
+   value the whole validated envelope runs at. M14 (per-squad vs global resolver pass) REMAINS —
+   architectural, queued with the multi-squad doctrine (Phase 4.5 item 8).
+5. ~~**H8**~~ **FIXED 2026-08-24** (live tower.rs + decision `heal_reaching` export): the no-squad
+   path prices sustain with the KERNEL's `heal_reaching` (adjacent healers + hostile towers,
+   boost-aware) and the no-net-damage weakest-hostile chip fallback is DELETED (hold fire — the
+   kernel discipline). M17 (full no-squad decide_towers unification) and M18 (threat_value has no
+   WORK/CLAIM term — a DESIGN fork: it feeds focus EV too) REMAIN — queued below.
+6. ~~**H9**~~ **FIXED 2026-08-24** (squad_manager): `forming_state` takes `departed` (stamped by
+   the SquadTrace phase pass the tick the rally gate releases, cumulative per generation), and
+   `traveling` accepts a released under-strength squad — the progress-gated travel lease, matching
+   the harness drivers. M20–M23 (harness never exercises forming_in_flight/vacuous_clear/
+   retreat-budget/economic-give-up inputs) REMAIN — harness-lane work, queued there.
 7. **M4 / M6** — live `room_callback` returns the TARGET room's matrix for every requested room.
 
 ---

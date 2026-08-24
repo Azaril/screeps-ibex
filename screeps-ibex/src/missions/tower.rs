@@ -373,16 +373,18 @@ impl Mission for TowerMission {
             }
 
             // ─── No defending squad: the passive-base defensive path (drain-sawtooth / probe / chip) ───
-            // Calculate per-hostile heal rate for net damage assessment.
+            // Per-hostile sustain for the net-damage gate — the KERNEL's `heal_reaching` over the
+            // same DTOs the squad path prices with (parity H8, 2026-08-24): every hostile healer
+            // in range of the candidate + hostile towers, boost-aware. The old own-body-only sum
+            // read a HEAL-less tank at 0 sustain while its adjacent healer kept it alive — the
+            // canonical mid-room drainer bait (never edge-confirmed by the sawtooth tracker), and
+            // the towers bled at it indefinitely.
+            let hostile_dtos: Vec<_> = hostile_creeps.iter().map(crate::jobs::squad_combat::creep_to_dto).collect();
+            let structure_dtos: Vec<_> = structures.all().iter().map(crate::jobs::squad_combat::structure_to_dto).collect();
             let hostile_infos: Vec<_> = hostile_creeps
                 .iter()
                 .map(|c| {
-                    let heal_per_tick: f32 = c
-                        .body()
-                        .iter()
-                        .filter(|p| p.hits() > 0 && p.part() == Part::Heal)
-                        .map(|p| if p.boost().is_some() { 48.0 } else { 12.0 })
-                        .sum();
+                    let heal_per_tick = crate::combat::heal_reaching(&hostile_dtos, &structure_dtos, c.pos()) as f32;
                     let is_confirmed_drainer = c.try_id().map(|id| confirmed_drainers.contains(&id)).unwrap_or(false);
                     (c, heal_per_tick, is_confirmed_drainer)
                 })
@@ -463,19 +465,12 @@ impl Mission for TowerMission {
                 for tower in &my_towers {
                     let _ = tower.attack(target);
                 }
-            } else {
-                // No target where we can do net damage. Check for any hostile we should still shoot.
-                // Fall back to weakest non-drainer hostile.
-                let weakest = hostile_creeps
-                    .iter()
-                    .filter(|c| !c.try_id().map(|id| confirmed_drainers.contains(&id)).unwrap_or(false))
-                    .min_by_key(|c| c.hits());
-                if let Some(target) = weakest {
-                    for tower in &my_towers {
-                        let _ = tower.attack(target);
-                    }
-                }
             }
+            // No net-positive target and not classified drain: HOLD FIRE (parity H8, 2026-08-24).
+            // The old fallback fired all towers at the weakest hostile with no net-damage check —
+            // exactly the out-healed dogpile the kernel refuses (pinned by
+            // `holds_fire_against_an_out_healed_drainer`). If it out-heals us, feeding it energy
+            // is the attacker's plan; ramparts + the defense mission are the answer, not chip.
 
             return Ok(MissionResult::Running);
         }

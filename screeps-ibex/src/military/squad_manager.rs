@@ -411,11 +411,18 @@ fn squad_is_wiped(total_members_added: u32, living_members: usize) -> bool {
 fn forming_state(
     has_members: bool,
     engaged_once: bool,
+    departed: bool,
     present_count: usize,
     requested_slots: usize,
     prev_present: usize,
 ) -> (bool, bool) {
-    let forming = has_members && !engaged_once && requested_slots > 0 && present_count < requested_slots;
+    // `!departed` (parity H9, 2026-08-24): a squad RELEASED below full roster (win-or-stall fast
+    // path, uncontested quorum, deploy-then-retreat valve) is TRAVELING, not forming — without the
+    // gate it re-entered the forming lease (unconditional refresh, MAX_FORMING_BUDGET 3000t) instead
+    // of the progress-gated travel lease (MAX_TRAVEL_BUDGET) the harness validated, and its eventual
+    // GaveUp read as "never departed" to the R22 circuit breaker. Matches the harness drivers'
+    // `forming = has_members && !engaged_once && !departed && present < n_slots`.
+    let forming = has_members && !engaged_once && !departed && requested_slots > 0 && present_count < requested_slots;
     let forming_progress = forming && present_count > prev_present;
     (forming, forming_progress)
 }
@@ -1898,8 +1905,12 @@ impl<'a> System<'a> for SquadManagerSystem {
                 .map(|c| c.slots.len())
                 .unwrap_or(0);
             let prev_present = data.forming_progress.last_present.get(&obj_id).copied().unwrap_or(0);
+            // Parity H9: `departed_at` is stamped by the SquadTrace phase pass the tick the rally
+            // gate releases (Travel phase — full roster OR quorum/fast-path), and by the traveling
+            // arm below. Once stamped, the squad can no longer classify as forming this generation.
+            let departed = data.forming_progress.departed_at.contains_key(&obj_id);
             let (forming, forming_progress) =
-                forming_state(has_members, engaged_once, present_count, requested_slots_for_form, prev_present);
+                forming_state(has_members, engaged_once, departed, present_count, requested_slots_for_form, prev_present);
             // Record this tick's present count for the next reconcile's progress delta.
             data.forming_progress.last_present.insert(obj_id, present_count);
 
@@ -1954,7 +1965,10 @@ impl<'a> System<'a> for SquadManagerSystem {
             // base lease lapses mid-hop (the W7N7 1-slot lapse). Refresh while it is closing distance on the
             // target room (positional progress), BOUNDED by an absolute travel clock from the departure tick.
             let full_roster = requested_slots_for_form > 0 && present_count >= requested_slots_for_form;
-            let traveling = full_roster && !engaged_once && !in_target_room && has_members;
+            // Parity H9: a RELEASED under-strength squad travels on the same progress-gated lease
+            // as a full one (the old `full_roster &&` left it on the forming lease — see
+            // `forming_state`).
+            let traveling = (full_roster || departed) && !engaged_once && !in_target_room && has_members;
             // REC-004(b): the departure stamp is CUMULATIVE for this generation — cleared only once the
             // squad genuinely ENGAGES (or on retire/reassign), never on a transient `in_target_room`
             // poke. Deleting it on every non-traveling tick reset `MAX_TRAVEL_BUDGET` on each
@@ -3989,6 +4003,14 @@ fn compute_squad_orders(
                 );
             }
         }
+        // Parity H9: the phase pass is the one place that knows the rally gate RELEASED (Travel is
+        // `ready_to_depart` regardless of roster — full, quorum, or fast-path). Stamp the departure
+        // clock here so the snapshot classification stops treating a released under-strength squad
+        // as forming. Cumulative per generation (REC-004b) — `or_insert`, cleared only on genuine
+        // engage / retire, exactly like the traveling arm's stamp.
+        if phase == SquadPhase::Travel {
+            forming_progress.departed_at.entry(obj_id).or_insert(now);
+        }
         // TRAVEL progress/stall: while crossing, report the room distance + whether it is closing.
         if phase == SquadPhase::Travel {
             let prev_dist = forming_progress.last_target_dist.get(&obj_id).copied();
@@ -4645,16 +4667,19 @@ mod tests {
         // FIX 2: a squad with members, not yet engaged, below the requested roster is FORMING; progress
         // is true ONLY when the present count grew since last reconcile (self-bounding).
         // present 4, prev 3, requested 5 → forming + progress (a member just appeared).
-        assert_eq!(forming_state(true, false, 4, 5, 3), (true, true), "present grew → forming + progress");
+        assert_eq!(forming_state(true, false, false, 4, 5, 3), (true, true), "present grew → forming + progress");
         // present 3, prev 3 (flat — can't bank energy for #4) → forming but NO progress → kernel gives up.
-        assert_eq!(forming_state(true, false, 3, 5, 3), (true, false), "flat present → forming, no progress");
+        assert_eq!(forming_state(true, false, false, 3, 5, 3), (true, false), "flat present → forming, no progress");
         // full roster present (5/5) → NOT forming (the squad departs).
-        assert_eq!(forming_state(true, false, 5, 5, 4), (false, false), "full roster → not forming");
+        assert_eq!(forming_state(true, false, false, 5, 5, 4), (false, false), "full roster → not forming");
         // engaged already → never forming (the lease refreshes via focus, not the forming path).
-        assert_eq!(forming_state(true, true, 3, 5, 2), (false, false), "engaged → not forming");
+        assert_eq!(forming_state(true, true, false, 3, 5, 2), (false, false), "engaged → not forming");
         // no members / unknown roster → not forming (legacy preserved).
-        assert_eq!(forming_state(false, false, 0, 5, 0), (false, false), "no members → not forming");
-        assert_eq!(forming_state(true, false, 1, 0, 0), (false, false), "unknown roster size → not forming");
+        assert_eq!(forming_state(false, false, false, 0, 5, 0), (false, false), "no members → not forming");
+        assert_eq!(forming_state(true, false, false, 1, 0, 0), (false, false), "unknown roster size → not forming");
+        // Parity H9: a RELEASED (departed) under-strength squad is NOT forming — it travels on the
+        // progress-gated lease, even though its present count is below the requested roster.
+        assert_eq!(forming_state(true, false, true, 3, 5, 2), (false, false), "departed → not forming (travels)");
     }
 
     #[test]

@@ -287,7 +287,13 @@ impl Default for PathingFeatures {
             custom: true,
             reuse_path_length: 20,
             max_shove_depth: 10,
-            friendly_creep_distance: 15,
+            // 5 = rover's own default and the value the ENTIRE validated movement envelope runs
+            // at (the ADR 0033 tournament, the rover-eval H corpus, every combat gauntlet bed).
+            // The old hand-tuned 15 (2026-02, pre-tournament) was the parity-M10 outlier: matching
+            // the sim to it made the cross-border stronghold assault arrive strung out and DIE
+            // (stuck travellers priced detours around their whole formation) — the same strung-out
+            // crossing observed live. Parity resolved by moving LIVE to the validated value.
+            friendly_creep_distance: 5,
             movement_cpu_budget_pct: 0.3,
             repath_cpu_budget: 5.0,
             pathfinding_cpu_budget: 20.0,

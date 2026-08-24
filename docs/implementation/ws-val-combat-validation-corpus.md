@@ -240,3 +240,18 @@ Readings (each a finding, not a bug in the corpus):
   demand-driven: nothing changes until war sizing picks a tier and labs fill the BoostQueue —
   the WATCH is the first boosted engagement. RULING-9 sequence now: item 7 parity remainder
   (H6 mover config, H8 tower-path fork, H9 lifecycle inputs) -> item 8 clamp-then-doctrine.
+- 2026-08-24 (item 7 ACHIEVED — parity remainder H6/H8/H9 + M10/M11/M12): sim-core (H6 shove depth
+  3->10 = the live value; M12 flee swap allowed), agent (M12 flee High for all + bid MoveTo-only),
+  decision (heal_reaching exported), live (H8: tower no-squad path prices sustain with the
+  kernel's heal_reaching — adjacent healers + hostile towers, boost-aware — and the no-net-damage
+  weakest-hostile chip fallback is DELETED per the kernel hold-fire discipline; H9: forming_state
+  takes `departed` stamped by the SquadTrace phase pass on rally release, traveling accepts
+  released under-strength squads — the progress-gated lease the harness validated; M11: the
+  Retreating/Formation arm passes engaged=true so withdrawing members keep squadmate-transparent
+  stuck repaths). KEY FINDING (M10): matching the sim to live's friendly_creep_distance=15 BROKE
+  the cross-border assault bed (stuck travellers priced detours around their whole formation ->
+  strung-out arrival, 6/8 dead, toothless remnant parked) — the 15 was a 2026-02 hand-tune
+  pre-dating the whole tournament; parity resolved by moving LIVE to the validated 5. Remainder
+  queued: M14 resolver scope + M17/M18 tower unification + WORK/CLAIM threat_value (DESIGN fork —
+  threat_value feeds focus EV too) -> item 8 / operator; M20-M23 harness input gaps -> the
+  private-harness lane. Battery + 1537 + fence green.

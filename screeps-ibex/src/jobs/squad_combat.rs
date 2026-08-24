@@ -1233,8 +1233,12 @@ impl Retreating {
                 TickMovement::Formation => {
                     // Retreating → NO anti-scatter anchor (REC-056): a withdrawing block must not be
                     // pinned to its own centroid inside threat range. The sim's Retreating members carry
-                    // no anchor either (the sim only anchors Engaged).
-                    Engaged::execute_decide_movement(creep, creep_pos, orders, false, tick_context);
+                    // no anchor either (the sim only anchors Engaged). But they DO carry the engaged
+                    // stuck ladder (parity M11, 2026-08-24): the sim applies it to every IN-ROOM member
+                    // uniformly — the ladder's whole point is that a stuck member never prices a detour
+                    // around its own heal cluster, and a WITHDRAWING member needs that protection most
+                    // (the heal-collapse pathology: received heal ~800→~300/t detouring mid-retreat).
+                    Engaged::execute_decide_movement(creep, creep_pos, orders, true, tick_context);
                 }
                 _ => {
                     flee_from_hostiles(tick_context);
