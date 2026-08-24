@@ -52,7 +52,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2 ACHIEVED 2026-08-24 — every fielding gauntlet rung KILLS; next = parity H0 → threat/traversal unification → boosted re-tune)
+### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2+4 ACHIEVED 2026-08-24; next = threat/traversal unification (item 5) → boosted re-tune (item 6))
 See §3 Phase 4.5 for the ordered ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
 
 ### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
@@ -165,7 +165,11 @@ cross-border stronghold assault end-to-end) — **and border g1@T0 74 / g1@T3 49
 with the bloc crossing together** (pinned: `stronghold_floor_t0_defers_t3_kills_every_l1_rung`).
 Remaining ladder: border g3/g4 (T2/T3 camper packs — sizing defers; capability item 8 territory);
 **(3) lone-survivor policy** — largely superseded by rout-to-rally, keep the bar (no `Timeout`
-with a lone surviving member) as a watch; **(4) parity H0** — live drops
+with a lone surviving member) as a watch; **(4) parity H0 — ✅ FIXED 2026-08-24**
+(`is_combat_targetable`, squad_combat.rs): the execution-side structure list now includes neutral
+constructed walls with hits in both arms, matching the decision layer — no native pin possible
+(JS types); verify on the next live neutral-wall breach. H5/M0 also closed by the item-2 batch
+(sim full-roster views + shared-kernel room fixes). Original H0 text: live drops
 Attack/Dismantle vs NEUTRAL constructed walls (`get_hostile_structures` filter; sim executes them);
 **(5) threat/traversal unification** (parity H1/H2/H3 + M-cluster — live movement executes without
 the threat layer the sim validates against; one shared fold entry point); **(6) boosted kernel
@@ -395,6 +399,13 @@ Append one line per closed item. Newest first.
 - **2026-08-23** — Triage decisions ratified (operator): 0030 Withdrawn (tempo→0031), 0025a residual documented-mitigated, 0039 P2–P4→harness lane, 0020 S5–S7 kept-scheduled (after Phase 4); **0047 pulled forward as Phase 2.5 (WS-6)**. `search_radius` 1→2 shipped + live-reconciled (wasm `bd6eebcc0f56`, hot swap, pattern proven twice). UNOWNED-4 closed.
 
 - **2026-08-23** — **Wave B SHIPPED to live MMO** (hot swap `0d9524f2668f` per RULING-8; vm_starts 2749, missions persisted, 0 deser). RULING-8 recorded (deploy-to-live batched; B-1 demoted); ADR 0047 drafted (reset-tolerant serialization).
+
+- **2026-08-24 (latest)** — **Phase 4.5 item 4 (parity H0): FIXED** — `is_combat_targetable` in
+  squad_combat.rs: the execution-side structure list now includes neutral constructed walls with
+  hits (both the cached arm and the live find fallback), so kernel-chosen wall breaches resolve
+  instead of silently dropping. H5/M0 also closed (item-2 batch). Parity report triage updated;
+  no native pin (JS types) — live-verify on the next neutral-wall breach. Master replay index
+  (all six lenses) generated + delivered.
 
 - **2026-08-24 (later)** — **Phase 4.5 item 2: border crossing — ACHIEVED** (decision `b0b7ea0`,
   agent `1fbff1b`, eval `8dab84d`; root-caused live from the operator's replay observation "one

@@ -22,15 +22,19 @@ from the verified audit output).
   boosted self-play basket; `place_at_entry` honors the stamped comp tier).
 
 **BACKLOG (unfixed — ranked; each is a real live/sim behavior divergence):**
-1. **H0** — live drops Attack/Dismantle intents against NEUTRAL constructed walls
-   (`get_hostile_structures` filter) while the sim executes them: live squads stall adjacent to
-   unowned wall rings the kernel chose to breach. Top of the backlog.
+1. ~~**H0**~~ **FIXED 2026-08-24** (`is_combat_targetable` in squad_combat.rs): the execution-side
+   structure list now includes NEUTRAL constructed walls with hits (matching the decision layer,
+   which always saw them), in BOTH the cached-RoomData arm and the live `find` fallback — the
+   emitted Attack/Dismantle intents against a neutral wall ring now resolve instead of silently
+   dropping. (No native unit pin — JS-backed types; verify on the next live neutral-wall breach.)
 2. **H1/H2/H3 + M2/M3/M8/M13 (threat/traversal unification cluster)** — sim traversal field is not
    cover-aware, stamps own/drained towers, and is folded into EVERY sim matrix while live folds it
    ONLY into squad_manager decide-searches (anchor mover + rover MovementSystem run unpriced).
    Fix direction: one shared threat-fold entry point both sides call.
-3. **H5 / M0** — live member views = whole roster anywhere; sim = in-room only. Centroid/retreat/
-   sustain inputs diverge whenever a member is out of room.
+3. ~~**H5 / M0**~~ **FIXED 2026-08-24** (agent `1fbff1b` + decision `b0b7ea0`): the sim now builds
+   full-roster member views matching live (execution stays room-scoped), and the shared kernel's
+   cross-room-centroid consequences are defused on BOTH sides — fight-room anchoring
+   (`plan_squad_ev` room param), room-gated mover anchor, room-local tower assessment.
 4. **H6 / M10 / M12 / M14** — mover-config parity (shove depth 3 sim vs 10 live, flee knobs,
    friendly-avoid radius 15 vs 5). Mechanical: point both at one shared config.
 5. **H8 / M17 / M18** — live no-squad tower path forks from `decide_towers`.

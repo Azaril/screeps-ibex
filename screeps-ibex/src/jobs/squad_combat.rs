@@ -1672,6 +1672,22 @@ fn get_friendly_creeps(room_name: RoomName, tick_context: &JobTickContext) -> Ve
 }
 
 /// Get cached hostile structures in the given room from dynamic visibility data.
+/// Whether the combat path may TARGET this structure: any hostile-OWNED structure, plus a NEUTRAL
+/// constructed wall with hits (WS-VAL parity H0 fix). The decision layer sees ALL structures
+/// (`squad_manager::build_room_combat_dtos` feeds `structures.all()`), and `breach_redirect`
+/// deliberately prices unowned walls as dismantlable blockers — but this execution-side list was
+/// hostile-owned only, so the emitted Attack/Dismantle intent resolved against nothing and was
+/// SILENTLY DROPPED: live squads stood adjacent to a neutral wall ring doing zero damage until a
+/// stall valve fired, while the sim (whose executor indexes walls) razed it — the sim overstating
+/// live breach capability exactly where it mattered. A zero-hits wall (the indestructible
+/// novice/respawn-border kind) stays untargetable.
+fn is_combat_targetable(s: &StructureObject) -> bool {
+    match s.as_owned() {
+        Some(o) => !o.my(),
+        None => matches!(s, StructureObject::StructureWall(w) if w.hits() > 0),
+    }
+}
+
 fn get_hostile_structures(room_name: RoomName, tick_context: &JobTickContext) -> Vec<StructureObject> {
     if let Some(room_entity) = tick_context.runtime_data.mapping.get_room(&room_name) {
         if let Some(room_data) = tick_context.system_data.room_data.get(room_entity) {
@@ -1679,15 +1695,22 @@ fn get_hostile_structures(room_name: RoomName, tick_context: &JobTickContext) ->
                 return structures
                     .all()
                     .iter()
-                    .filter(|s| s.as_owned().map(|o| !o.my()).unwrap_or(false))
+                    .filter(|s| is_combat_targetable(s))
                     .cloned()
                     .collect();
             }
         }
     }
+    // Live fallback: find ALL structures and apply the same targetable filter — the
+    // `HOSTILE_STRUCTURES` find this replaced also excluded neutral walls (the same H0 drop).
     game::rooms()
         .get(room_name)
-        .map(|room| room.find(find::HOSTILE_STRUCTURES, None))
+        .map(|room| {
+            room.find(find::STRUCTURES, None)
+                .into_iter()
+                .filter(is_combat_targetable)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
