@@ -52,7 +52,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2+4 ACHIEVED 2026-08-24; next = threat/traversal unification (item 5) → boosted re-tune (item 6))
+### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2+4+5 ACHIEVED 2026-08-24; next = item 6 boosted re-tune → item 7 parity remainder → item 8 L2+ capability fork)
 See §3 Phase 4.5 for the ordered ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
 
 ### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
@@ -182,8 +182,11 @@ placement), DELIVERABLE standoff sizing (total-heal optimism picked r15; the sur
 r19), distinct rear-ring support slots, URGENT_HEAL_MULT 8→3 (flat heal premium vs
 residual-diluted attack value let survivors PERCH — asymmetry queued), and the approach-aware
 PLATEAU TIE-BREAK (equal-cost bands drift objective-blind under lower-x/y; ties now prefer
-smaller approach distance — the last blocker). REMAINING in item 5 (live side): (c) the live
-mover threat layer H3/M13, (d) the live wrong-room callback M4/M6. Other queued finds:
+smaller approach distance — the last blocker). COMPLETE 2026-08-24 (super `1abcc8f`, rover `fae493b`): the live mover now prices threat —
+squad-manager-published per-tick `RoomThreatCosts` overlaid under the structure layer's hard
+blockers via `ThreatOverlayCostSource` (H3/M13; executed paths — approach/rejoin/retreat/civilian
+traffic through war rooms — route around kill-zones like every sim-validated trajectory), and the
+decide room-callback honors the requested room (M4/M6). Other queued finds:
 goal-convergence churn (exact-claim tried/reverted — needs the EXP register in the loop);
 heal-vs-offense EV asymmetry. Instruments: `SQ_DEBUG`/`SQ_DEBUG2`/`SQ_DEBUG3` env-gated traces;
 **(6) boosted kernel
@@ -416,6 +419,11 @@ Append one line per closed item. Newest first.
 
 - **2026-08-24 (latest)** — **Phase 4.5 item 4 (parity H0): FIXED** — `is_combat_targetable` in
 - **2026-08-24 (item 5 partial)** — drain delivery honesty + heal-premium rebalance shipped
+- **2026-08-24 (item 5 COMPLETE)** — the threat/traversal unification cluster is CLOSED both
+  sides: sim field = shared build_room_threat_field + M2 (agent `4e68de4`), plateau tie-break
+  (decision `71c6e0a`), drain-aware placement (eval `1736ea6`), live mover threat overlay
+  (H3/M13: RoomThreatCosts + ThreatOverlayCostSource, rover `fae493b` merge_from) and room-correct
+  decide callback (M4/M6) — super `1abcc8f`. 1537 + fence + wasm green.
   (decision `acf3600`, agent `bed5f0e`); the sim-field delegation + M2 + live mover threat layer
   DEFERRED into a drain-rework sub-batch with four precisely-traced findings (form-into-the-nest
   tank bleed is pre-existing and invariant; the drain canary passes on remnant luck). SQ_DEBUG

@@ -198,3 +198,10 @@ Readings (each a finding, not a bug in the corpus):
   gauntlet: every fielding rung still KILLS under the unified field (open 267 / choke 215 / multi
   590 / border 87·48·52). Item 5 remaining = live side only: H3/M13 (mover threat layer), M4/M6
   (wrong-room callback).
+- 2026-08-24 (item 5 COMPLETE) — live side landed (super `1abcc8f`, rover `fae493b`): H3/M13 (the
+  executed live path prices threat — squad manager publishes per-tick `RoomThreatCosts`, the
+  movement system overlays them under hard blockers via `ThreatOverlayCostSource` + rover's new
+  `LinearCostMatrix::merge_from`; combat-room approach/rejoin/retreat and civilian traffic now
+  route around kill-zones; rooms without combat objectives are byte-identical) and M4/M6 (the
+  decide room-callback honors the requested room; cross-room requests build honest basic matrices
+  on demand). The H1/H2/H3 + M2/M3/M4/M6/M8/M13 threat/traversal cluster is fully closed.

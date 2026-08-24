@@ -30,9 +30,10 @@ from the verified audit output).
 2. **H1/H2/H3 + M2/M3/M8/M13 (threat/traversal unification cluster)** — SIM SIDE FIXED
    2026-08-24 (agent `4e68de4`: the traversal field now delegates to the shared
    `build_room_threat_field` — cover-aware, hostile-energized-tower-gated, unboosted-stamped
-   (H1/H2/M3/M8); own ramparts walkable (M2)). REMAINING (live side): H3/M13 — the live rover
-   MovementSystem/anchor mover still execute movement WITHOUT the threat layer the (now unified)
-   field prices; fix = fold the squad_manager-computed field into the live mover matrices.
+   (H1/H2/M3/M8); own ramparts walkable (M2)). LIVE SIDE FIXED 2026-08-24 (super `1abcc8f` +
+   rover `fae493b`): H3/M13 — the live mover overlays squad-manager-published per-tick threat
+   tiles under the structure layer's hard blockers (`RoomThreatCosts` + `ThreatOverlayCostSource`);
+   M4/M6 — the decide room-callback honors the requested room. THE WHOLE CLUSTER IS CLOSED.
 3. ~~**H5 / M0**~~ **FIXED 2026-08-24** (agent `1fbff1b` + decision `b0b7ea0`): the sim now builds
    full-roster member views matching live (execution stays room-scoped), and the shared kernel's
    cross-room-centroid consequences are defused on BOTH sides — fight-room anchoring
