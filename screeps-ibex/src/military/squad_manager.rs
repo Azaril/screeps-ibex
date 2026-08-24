@@ -3351,16 +3351,26 @@ fn compute_squad_orders(
             // prebuilt threat-folded matrix; any other requested room gets an honest basic matrix
             // (terrain + structures, no foreign threat fold) built on demand — cross-room requests
             // are rare (the kernel anchors on the fight room), so the extra build is cold-path.
+            // MEMOIZED per decide-call: the searches invoke the callback repeatedly (flood +
+            // breach + kite legs) — rebuilding a cross-room matrix from the game API on every
+            // invocation was a measured live CPU spike (movement-adjacent ticks at ~120 CPU right
+            // after this landed un-memoized).
+            let mut other_rooms: HashMap<RoomName, Option<LocalCostMatrix>> = HashMap::new();
             let mut room_cb = |r: RoomName| {
                 if r == target_room {
                     return Some(matrix.clone());
                 }
-                let mut cache = CostMatrixCache::default();
-                let mut cms = CostMatrixSystem::new(
-                    &mut cache,
-                    Box::new(screeps_rover::screeps_impl::ScreepsCostMatrixDataSource),
-                );
-                build_target_matrix(&mut cms, &CostMatrixOptions::default(), r, None)
+                other_rooms
+                    .entry(r)
+                    .or_insert_with(|| {
+                        let mut cache = CostMatrixCache::default();
+                        let mut cms = CostMatrixSystem::new(
+                            &mut cache,
+                            Box::new(screeps_rover::screeps_impl::ScreepsCostMatrixDataSource),
+                        );
+                        build_target_matrix(&mut cms, &CostMatrixOptions::default(), r, None)
+                    })
+                    .clone()
             };
             decide_squad_with_pathing(&view, Some(layers), tactics, &mut room_cb, MAX_KITE_OPS)
         }
