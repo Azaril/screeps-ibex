@@ -3240,7 +3240,20 @@ fn compute_squad_orders(
     // FU2: the streak ADVANCES only on ENGAGED ticks and FREEZES otherwise (see `advance_enemy_stall`) —
     // paired with the kernel's stalemate re-engage veto, a recovery retreat can't latch a stall while a
     // genuinely latched one survives the disengage. `current_state` is the previous tick's applied state.
-    let stall_engaged = current_state == screeps_combat_decision::SquadOrderState::Engaged;
+    // ... AND IN CONTACT (item-8a finding, 2026-08-24, sim parity — the sim driver carries the
+    // identical gate): a squad is only stalemate EVIDENCE when some living member is within weapon
+    // reach (3, +1 step) of a hostile creep or structure. Without the gate the streak accrued
+    // through the march/approach ("Engaged" begins at focus selection, any distance) and the
+    // harmless-turtle valve disengaged squads 10+ tiles from a bare core (the border-g1 period-2
+    // Engaged↔Retreating flap, sim-traced). Out-of-contact reach problems belong to the travel
+    // budgets, not the fight clock.
+    let in_contact = member_views.iter().filter(|m| m.hits > 0).filter_map(|m| m.pos).any(|p| {
+        hostiles.iter().any(|h| h.hits > 0 && p.get_range_to(h.pos) <= 4)
+            || structures
+                .iter()
+                .any(|s| s.ownership == screeps_combat_decision::Ownership::Hostile && s.hits > 0 && p.get_range_to(s.pos) <= 4)
+    });
+    let stall_engaged = current_state == screeps_combat_decision::SquadOrderState::Engaged && in_contact;
     let enemy_stalled = if in_room_any {
         let enemy_hits_now: u32 = hostiles.iter().filter(|h| h.hits > 0).map(|h| h.hits).sum();
         let advanced = advance_enemy_stall(forming_progress.enemy_stall.get(&obj_id).copied(), enemy_hits_now, stall_engaged);

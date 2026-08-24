@@ -260,3 +260,23 @@ Readings (each a finding, not a bug in the corpus):
   friendly_creep_distance default — the code change alone was inert; flipped 15->5 via the console
   example and verified ([verify4] fcd = 5). Any future features-default change must check the live
   tree the same way.
+- 2026-08-24 (item 8a: lift machinery landed WIRED OFF; three shipped by-product fixes): decision
+  `d693229` + agent `380ceb3` + eval `6c01505`. The full story: (1) VERDICT HONESTY — the runner's
+  SideWiped(defender) stop mis-scored "Killed" at camper-death (L2 "Killed{20}" 13 tiles from the
+  core; border rungs never actually razed) — removed; Killed = core razed. (2) The honest verdicts
+  exposed TWO real tactical defects, both fixed and shipped: the STALL clocks accrued through the
+  march (Engaged starts at focus selection) -> harmless-turtle disengage fired mid-approach ->
+  border-g1@T3 period-2 Engaged<->Retreating at the room edge; now IN-CONTACT-gated on BOTH sides
+  (weapon reach 4 of hostile creep/structure). And the OUT-OF-CONTACT PARK: with act=0 everywhere
+  the per-tile EV deadlocks the pack as a rigid body (each lone step prices as leaving the pack;
+  the centroid cannot lead) -> the kernel now HANDS OFF out-of-contact members under a same-room
+  block Advance to the traffic-managed mover (squad-level contact — per-member flapped; cross-room
+  goals excluded — the mover marched members over the exit edge, designed#4 99.6% -> 0.6%).
+  (3) The LIFT: fallback retry (standard cap first — a flat raise re-sized every siege),
+  deliverable-heal ceiling (healers pinned at adjacency-bound 5; linear healer credit fielded
+  wiping squads incl. T0@L1), anti-creep reserve (the gross-ceiling requirement + overlay lands
+  ~2 members past ANY cap without it). At cap 16 sizing fields L2@T3 (p_surv .82) and the WHOLE
+  battery stays green — but the 16-blob congeals in chokes / parks at the tower-threat edge open:
+  MEASURED RED, wired OFF at member_cap_for (the single 8b wiring point). Border gauntlet now
+  END-TO-END: g1@T0 Killed{325}, g1@T3 Killed{143}, g2@T3 Killed{118}. NEXT: item 8b — the
+  multi-squad assault doctrine DESIGN (two 8-squads; subsumes mass tactics + parity M14).

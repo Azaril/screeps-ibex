@@ -52,7 +52,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: Phase 4.5 — the WS-VAL defect program (items 1-7 + RULING-9 currency + boost flip ALL DONE 2026-08-24; next = item 8 clamp-then-doctrine, the LAST item)
+### NOW: Phase 4.5 — the WS-VAL defect program (items 1-7 + 8a + RULING-9 currency + boost flip DONE 2026-08-24; LAST = item 8b multi-squad doctrine DESIGN)
 See §3 Phase 4.5 for the ordered ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
 
 ### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
@@ -228,8 +228,23 @@ strung out and die — details in the
 [parity report](../reviews/live-sim-parity-audit-2026-08-23.md)). REMAINDER queued: M14
 resolver-scope + M17/M18 tower unification + WORK/CLAIM threat_value (design fork) → item 8 /
 below; M20–M23 harness input gaps → the private-harness lane;
-**(8) stronghold capability** — L2+ defer even at T3 (multi-squad assault doctrine or a
-deliberate member-clamp lift for sieges; a DESIGN fork, stop-and-ask).
+**(8a) siege clamp lift — MACHINERY LANDED, WIRED OFF 2026-08-24** (decision `d693229`, agent
+`380ceb3`, eval `6c01505`; RULING-9 "clamp first"): the sizing works end-to-end (fallback retry,
+deliverable-heal ceiling — healers held at the adjacency-bound 5, anti-creep reserve; at cap 16
+the optimizer correctly FIELDS L2@T3, full battery green with the lift active) but **measured
+RED tactically**: the 16-blob congeals in chokes and parks as a rigid body at the tower-threat
+edge in the open — shipping it would convert live L2+ defers into repeated wipes, so the policy
+point (`member_cap_for`) stays 8 with the wiring documented. The batch's shipped by-products are
+substantial: **honest gauntlet verdicts** (no defender-wipe stop — Killed now means the core was
+RAZED; the old artifact mis-scored border rungs at camper-kill), the **in-contact stall gate**
+(both sides — the harmless-turtle clock accrued through the march and period-2 flapped border
+g1@T3 at the room edge), and the kernel **out-of-contact handoff** (block Advance yields
+out-of-contact members to the traffic-managed mover; the per-tile EV micro is a contact
+instrument — it rigid-body-deadlocked the pack mid-room). Border g1/g2 now kill END-TO-END
+(g1@T0 325 / g1@T3 143 / g2@T3 118); designed#4 cross-room oscillation 1.7%→0.6%.
+**(8b) multi-squad assault doctrine — NEXT (the L2+ path)**: two coordinated 8-squads keep every
+validated cohesion/crossing behavior; subsumes the mass-tactics gap (and parity M14 resolver
+scope). DESIGN work — draft the ADR, operator reviews.
 *Closes: the WS-VAL follow-up queue; makes the corpus verdicts green instead of honest-red.*
 
 **Phase 5 — Boost pipeline (ADR 0010 L0 → 0041) — CONSUMER SIDE (P0–P3) SHIPPED DARK 2026-08-23**
@@ -439,6 +454,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-24 (latest)** — **Phase 4.5 item 8a: siege clamp lift MACHINERY LANDED, WIRED OFF (measured red)** + shipped by-products: honest gauntlet verdicts (Killed = core RAZED), in-contact stall gate BOTH sides (fixed the border-g1 period-2 room-edge flap), kernel out-of-contact handoff (fixed the mid-room rigid-body park) — border g1/g2 now kill END-TO-END. L2+ path = item 8b multi-squad doctrine. decision `d693229`, agent `380ceb3`, eval `6c01505`.
 
 - **2026-08-24 (latest)** — **Phase 4.5 item 7 (parity remainder) ACHIEVED**: H6/H8/H9 + M10/M11/M12 landed both sides (sim shove depth 10, flee-knob parity, live engaged-ladder retreat arm, live tower heal_reaching + chip fallback deleted, forming_state departed gate); LIVE friendly_creep_distance 15->5 (pre-tournament hand-tune, made crossings arrive strung out). Remainder: M14+M17/M18 -> item 8/design fork; M20-M23 -> harness lane.
 
