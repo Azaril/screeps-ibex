@@ -90,8 +90,10 @@ EV axis (T-TOWER-3 proof green), supply clamp + populated `available_boosts`, pe
 O4 market-fed valuation (constants suffice for first light), the live shakedown on activation,
 the P4 rung sweep, then ADR 0010 L1/L2 demand-driven supply.
 
-WATCH: movement CPU at 9 rooms (transient post-swap spikes ~81, steady ~34 — fine; seen ~85 right
-after the WS-VAL swap, expected to settle); segment chars;
+WATCH: movement CPU at 9 rooms (transient post-swap spikes ~81-95, steady ~34; the H3/M13 threat
+overlay + M4/M6 landed 2026-08-24 — un-memoized cross-room builds spiked ~120, fixed `2f38c1a`,
+settled to ~85-93 post-swap; VERIFY it returns to ~34 once path caches warm, and attribute any
+sustained elevation to the overlay first); segment chars;
 wasm 49.0%; foreman `InvalidTarget` transients; post-hot-swap one-tick `INTEGRITY` squad-ref
 scrubs (benign backstop, attribute if it recurs outside deploys). **WS-VAL swap (wasm
 `039c587dc1c6`, 2026-08-23) tail-verified clean** (0 panics/deser, war pricing through the new
