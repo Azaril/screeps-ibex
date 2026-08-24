@@ -52,7 +52,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2+4+5 ACHIEVED 2026-08-24; next = item 6 boosted re-tune → item 7 parity remainder → item 8 L2+ capability fork)
+### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2+4+5 + RULING-9 currency ACHIEVED 2026-08-24; next = item 6 boosted re-tune → boost flip watched → item 7 parity remainder → item 8 clamp-then-doctrine)
 See §3 Phase 4.5 for the ordered ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
 
 ### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
@@ -190,7 +190,24 @@ blockers via `ThreatOverlayCostSource` (H3/M13; executed paths — approach/rejo
 traffic through war rooms — route around kill-zones like every sim-validated trajectory), and the
 decide room-callback honors the requested room (M4/M6). Other queued finds:
 goal-convergence churn (exact-claim tried/reverted — needs the EXP register in the loop);
-heal-vs-offense EV asymmetry. Instruments: `SQ_DEBUG`/`SQ_DEBUG2`/`SQ_DEBUG3` env-gated traces;
+~~heal-vs-offense EV asymmetry~~ → became the RULING-9 redesign, below. Instruments:
+`SQ_DEBUG`/`SQ_DEBUG2`/`SQ_DEBUG3`/`SQ_DEBUG4` env-gated traces;
+**(RULING-9 currency redesign — ✅ ACHIEVED 2026-08-24** (decision `f8b97a6`, agent `34152cd`,
+eval `04c7414`): ONE progress-diluted currency across all three EV legs. Heal value_per_hp =
+`g_us × member_output / horizon_hits` (TRIAGE price, swells near death; wounded-evidence includes
+hostiles inside weapon band); self-RISK = `net × my own value_per_hp` at the **MARGINAL** price
+`g_us.max(unit) × my_out / max(tile_raw, hits/H)` — the triage form diverges as a risk price
+(healthy ≈ risk-blind, six of eight died in the choke kill zone; the doomed remnant priced its hp
+infinite and parked to timeout), marginal is bounded both ways. Flat `NET_RISK_MULT` deleted
+(out-massed every diluted attack value → universal cowardice, T3 refused a 4:1 trade). Batch also
+flushed two latent defects the currency exposed: the **kite dead-zone** (kite-plan-None suppressed
+the EV kernel → stable non-fighting equilibrium at the melee-band edge; now falls through, except
+Retreating) and the **focus stall attractor** (our_dps=0 comps focusing unkillable creeps over a
+live structure objective). Heal incumbency dead-band (1×unit) stops value_per_hp breathing from
+re-deciding positions (designed#2 29.5%→5%). Gates: floor pin all-rungs, t3_twin (repinned vs
+HOLDING defender — the mirror fleer is honestly uncatchable), oscillation, drain, assembler, EXP;
+1537 workspace + fence green. Generated-bed fairness bound 2000→3000 (mirror fights now TRADE —
+order-bias compounds over real casualties; sign still seed-varying).**)
 **(6) boosted kernel
 re-tune** over `boosted_comp_basket` (default tactics lose at T2/T3) — merges with 0041 P4;
 **(7) the rest of the parity backlog** (H5 roster scope, H6 mover config, H8 tower-path fork,
@@ -355,6 +372,14 @@ wire it or delete it — not necessarily work.
 
 ## 9. Rulings — decided 2026-08-22, do not relitigate
 
+- **RULING-9 (operator 2026-08-24)** — Phase 4.5 tail order: **heal-EV principled redesign NOW**
+  (reprice heal in the same progress-diluted currency as attack — an ADR 0025 semantics change,
+  done BEFORE the re-tune so the tune grades the final currency) → **item 6 boosted re-tune** →
+  **boost activation flip, watched** (gated on the re-tune) → item 7 parity remainder → **item 8:
+  BOTH capability directions, clamp first** (siege member-clamp lift lands first for L2–L3 reach;
+  multi-squad assault doctrine is the follow-on design for L4–L5). Phase 4.5 completes before the
+  private-harness lane.
+
 Recorded because the corpus contradicted itself and a future reader would otherwise reopen these.
 
 - **RULING-1 · Minted `SquadId`/`SquadStore` (I1/I2) will NOT be built.** `EntityOption<Entity>` +
@@ -399,6 +424,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-24 (latest)** — **RULING-9 one-currency EV redesign ACHIEVED + shipped** (decision `f8b97a6`, agent `34152cd`, eval `04c7414`): progress-diluted heal value_per_hp (triage form) + MARGINAL self-risk price (flat NET_RISK_MULT deleted) + kite dead-zone fall-through + our_dps=0 focus gate + heal-incumbency dead-band. All 6 gates + 1537 workspace + fence green. Full detail in §3 Phase 4.5.
 
 - **2026-08-23 (late)** — **ADR 0041 P0–P3 consumer side complete, dark, shipped** (`00cf29b552ff`): EV axis + per-tier winnability (decision `04cc020`), supply table/clamp (`d217a3d`), persisted tier + required_boosts (`78e70b8`), apply wire (`2fd8253`+`82f2e83` — queue/labs/AwaitBoost/renew-skip). 7 RED-verified pins; fence ×2; byte-identical live at T0. `boost_military` = the activation switch.
 - **2026-08-23 (late)** — **Live validation PASS** (CPU 34/140, bucket full, 0 panics, seg ~18%, INTEGRITY scrubs = benign REC-009b backstop) + **Phase 5 P0a landed dark** (decision `04cc020`): BoostTier EV axis, per-tier ceiling assessment, T-TOWER-3 proof green, 3 RED-verified pins; not separately deployed (byte-identical at T0). ADR 0041-P2 WFV bump obviated by 0047 (design delta).

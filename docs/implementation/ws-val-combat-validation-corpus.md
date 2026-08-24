@@ -205,3 +205,20 @@ Readings (each a finding, not a bug in the corpus):
   route around kill-zones; rooms without combat objectives are byte-identical) and M4/M6 (the
   decide room-callback honors the requested room; cross-room requests build honest basic matrices
   on demand). The H1/H2/H3 + M2/M3/M4/M6/M8/M13 threat/traversal cluster is fully closed.
+- 2026-08-24 (RULING-9 currency ACHIEVED) — the one-currency EV redesign landed (decision
+  `f8b97a6`, agent `34152cd`, eval `04c7414`): heal value_per_hp = g_us x output / horizon_hits
+  (TRIAGE price, wounded-evidence includes hostiles in weapon band); self-RISK repriced at the
+  MARGINAL value of an hp — g_us.max(unit) x my_out / max(tile_raw, hits/H) — because the triage
+  form diverges as a risk price (healthy squads read exposure as ~zero and marched six of eight
+  into the choke kill zone; the wounded remnant priced its hp infinite and PARKED to timeout).
+  Flat NET_RISK_MULT deleted (universal cowardice: T3 refused a 4:1 trade vs a holding T0 twin).
+  The currency flushed two latent defects: the KITE DEAD-ZONE (plan-None suppressed the EV kernel
+  -> stable non-fighting equilibrium at the melee-band edge; now falls through unless Retreating)
+  and the FOCUS STALL ATTRACTOR (our_dps=0 comps focusing unkillable creeps over a live structure
+  objective). Heal-incumbency dead-band (1x unit) stops value_per_hp breathing from re-deciding
+  positions (designed#2 29.5% -> 5.0%). t3_twin repinned vs a HOLDING defender (equal-speed mirror
+  fleer is honestly uncatchable — eternal-chase draw is correct behavior, not a defect);
+  generated-bed fairness bound 2000 -> 3000 (mirror fights now TRADE; order-bias compounds over
+  real casualties, sign still seed-varying). All 6 gates + 1537 workspace + determinism fence
+  green. Next per RULING-9: item 6 boosted re-tune (grades the FINAL currency), then the watched
+  boost flip.
