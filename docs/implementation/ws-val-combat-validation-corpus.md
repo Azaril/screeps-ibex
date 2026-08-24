@@ -280,3 +280,12 @@ Readings (each a finding, not a bug in the corpus):
   MEASURED RED, wired OFF at member_cap_for (the single 8b wiring point). Border gauntlet now
   END-TO-END: g1@T0 Killed{325}, g1@T3 Killed{143}, g2@T3 Killed{118}. NEXT: item 8b — the
   multi-squad assault doctrine DESIGN (two 8-squads; subsumes mass tactics + parity M14).
+- 2026-08-24 (item 8b DRAFTED): ADR 0048 (docs/design/0048-multi-squad-assault-doctrine.md) —
+  siege operations as N coordinated standard 8-squads (N=2 first light) with exactly four
+  coordination points: D1 joint sizing (the item-8a capped machinery as the joint sizer; the
+  deliverable-heal insight is WHY multi-squad works — each squad brings its own 5 deliverable
+  healers and its own focus), D2 operation staging gate (the border bloc gate one level up),
+  D3 distinct lanes/arcs (halves the choke congestion; makes the sim run one resolver pass per
+  side -> closes parity M14), D4 operation-level focus/retreat. Validation bars: L2 (all
+  terrains) + L3 @T3 -> Killed by a 2-squad op; all existing pins green; dark-first live.
+  Three operator questions in ADR section 5. AWAITING OPERATOR REVIEW — Phase 4.5's last item.

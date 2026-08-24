@@ -52,7 +52,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: Phase 4.5 — the WS-VAL defect program (items 1-7 + 8a + RULING-9 currency + boost flip DONE 2026-08-24; LAST = item 8b multi-squad doctrine DESIGN)
+### NOW: Phase 4.5 — the WS-VAL defect program (items 1-7 + 8a + RULING-9 currency + boost flip DONE; item 8b = ADR 0048 DRAFTED, AWAITING OPERATOR REVIEW)
 See §3 Phase 4.5 for the ordered ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
 
 ### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
@@ -242,9 +242,13 @@ g1@T3 at the room edge), and the kernel **out-of-contact handoff** (block Advanc
 out-of-contact members to the traffic-managed mover; the per-tile EV micro is a contact
 instrument — it rigid-body-deadlocked the pack mid-room). Border g1/g2 now kill END-TO-END
 (g1@T0 325 / g1@T3 143 / g2@T3 118); designed#4 cross-room oscillation 1.7%→0.6%.
-**(8b) multi-squad assault doctrine — NEXT (the L2+ path)**: two coordinated 8-squads keep every
-validated cohesion/crossing behavior; subsumes the mass-tactics gap (and parity M14 resolver
-scope). DESIGN work — draft the ADR, operator reviews.
+**(8b) multi-squad assault doctrine — ADR 0048 DRAFTED 2026-08-24**
+([`../design/0048-multi-squad-assault-doctrine.md`](../design/0048-multi-squad-assault-doctrine.md)):
+N coordinated standard 8-squads (N=2 first light) + a thin operation layer with exactly four
+coordination points (joint sizing via the item-8a machinery, operation staging gate, distinct
+lanes/arcs — which also closes parity M14, operation-level focus/retreat). Validation bars + 3
+open operator questions in the ADR (ownership shape, one-bid-vs-per-squad economics, harness soak
+vs watched flip). **AWAITING OPERATOR REVIEW — Phase 4.5's last open item.**
 *Closes: the WS-VAL follow-up queue; makes the corpus verdicts green instead of honest-red.*
 
 **Phase 5 — Boost pipeline (ADR 0010 L0 → 0041) — CONSUMER SIDE (P0–P3) SHIPPED DARK 2026-08-23**
@@ -286,7 +290,7 @@ GCL 12, bucket 10000, W7N47 under remote-build.
 
 ## 5. ADR state index
 
-56 ADRs. States: **Live** (in `ab692bd`) · **Host-only** (offline tooling, never in the wasm
+57 ADRs. States: **Live** (in `ab692bd`) · **Host-only** (offline tooling, never in the wasm
 bundle) · **On master** (merged, undeployed) · **Partial** · **Design-only** · **Closed**.
 
 **Closed — no open work. Detail in the ADR; do not re-track.** `0001`, `0005` (containment ratified as-shipped 2026-08-23), `0009c`, `0037` (T1-T3 landed; emission closed by ruling 2026-08-23), `0038`
@@ -298,6 +302,7 @@ bundle) · **On master** (merged, undeployed) · **Partial** · **Design-only** 
 **Withdrawn** — `0030` (2026-08-23; tempo axis preserved in 0031 — no open work)
 **Superseded** — `0022` (by 0027; its P-AUCTION residue is owned by 0020/0031, and its P-OBJ asks were superseded by 0027's observed-success model — no open work of its own)
 **Design-only, zero code** — `0010 0013 0014 0015 0016 0041 0045`
+**Draft (operator review pending)** — `0048` (multi-squad assault doctrine — Phase 4.5 item 8b deliverable, 2026-08-24; sizing engine = the wired-off item-8a machinery)
 
 Open work for these is in §6 and §7. An ADR absent from both is Closed.
 
@@ -454,6 +459,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-24 (latest)** — **Phase 4.5 item 8b: ADR 0048 multi-squad assault doctrine DRAFTED** (N coordinated 8-squads, 4 coordination points, joint sizing = the item-8a machinery; closes parity M14 as a by-product). Awaiting operator review — the LAST Phase 4.5 item. Item-8a batch deployed to MMO (wasm `e1595e7745f5`, tail clean).
 
 - **2026-08-24 (latest)** — **Phase 4.5 item 8a: siege clamp lift MACHINERY LANDED, WIRED OFF (measured red)** + shipped by-products: honest gauntlet verdicts (Killed = core RAZED), in-contact stall gate BOTH sides (fixed the border-g1 period-2 room-edge flap), kernel out-of-contact handoff (fixed the mid-room rigid-body park) — border g1/g2 now kill END-TO-END. L2+ path = item 8b multi-squad doctrine. decision `d693229`, agent `380ceb3`, eval `6c01505`.
 
