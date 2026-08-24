@@ -222,3 +222,13 @@ Readings (each a finding, not a bug in the corpus):
   real casualties, sign still seed-varying). All 6 gates + 1537 workspace + determinism fence
   green. Next per RULING-9: item 6 boosted re-tune (grades the FINAL currency), then the watched
   boost flip.
+- 2026-08-24 (item 6 ACHIEVED — boosted re-tune, merges ADR 0041 P4): decision `173cd5f` + eval
+  `8997234`. New instruments: `boosted_tier_retune` (tier-regime maximin) and the ADOPTION
+  instrument `joint_boosted_terrain_retune` (3 boost tiers x 3 terrain classes = 9-cell maximin
+  over chokepoint_comp_basket boosted per tier; NB comp_basket/boosted_comp_basket is
+  synthetic-only — the first tier run had empty terrain cells). Findings under the RULING-9
+  currency: the R19 winner a0-i3-d14-K3-s2 REGRESSED (worst cell -852, mean +39, rank 16/57); no
+  config positive in all 9 cells (literal maximin = untuned default); adopted `a2-i6-tight`
+  (approach 2, incumbency 6, k 2, discohesion 20, spacing 1) by maximin-with-a-noise-band (-26/-18
+  noise cells vs mean +652 — strongest boosted generalizer). Full battery (6 gates) + 1537 + fence
+  green under the new profile. NEXT per RULING-9: the WATCHED boost_military activation flip.

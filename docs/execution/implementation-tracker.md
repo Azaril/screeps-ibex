@@ -52,7 +52,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2+4+5 + RULING-9 currency ACHIEVED 2026-08-24; next = item 6 boosted re-tune → boost flip watched → item 7 parity remainder → item 8 clamp-then-doctrine)
+### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2+4+5+6 + RULING-9 currency ACHIEVED 2026-08-24; next = watched boost flip → item 7 parity remainder → item 8 clamp-then-doctrine)
 See §3 Phase 4.5 for the ordered ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
 
 ### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
@@ -208,8 +208,14 @@ re-deciding positions (designed#2 29.5%→5%). Gates: floor pin all-rungs, t3_tw
 HOLDING defender — the mirror fleer is honestly uncatchable), oscillation, drain, assembler, EXP;
 1537 workspace + fence green. Generated-bed fairness bound 2000→3000 (mirror fights now TRADE —
 order-bias compounds over real casualties; sign still seed-varying).**)
-**(6) boosted kernel
-re-tune** over `boosted_comp_basket` (default tactics lose at T2/T3) — merges with 0041 P4;
+**(6) boosted kernel re-tune — ✅ ACHIEVED 2026-08-24** (decision `173cd5f`, eval `8997234`;
+merges ADR 0041 P4): `open_combat` re-adopted as **`a2-i6-tight`** via the new
+`joint_boosted_terrain_retune` instrument (3 boost tiers × 3 terrain classes = 9-cell maximin over
+`chokepoint_comp_basket` boosted per tier). The R19 winner regressed to worst −852 under the
+RULING-9 currency; no config is positive in all 9 cells (literal maximin = the untuned default),
+adoption used maximin-with-a-noise-band (a2-i6-tight: −26/−18 noise cells vs mean +652, the
+strongest boosted generalizer). Full battery + fence green. **Unblocks the watched
+`boost_military` flip (the RULING-9 next step)**;
 **(7) the rest of the parity backlog** (H5 roster scope, H6 mover config, H8 tower-path fork,
 H9 lifecycle inputs, M4/M6 wrong-room matrix — ranked in
 [`../reviews/live-sim-parity-audit-2026-08-23.md`](../reviews/live-sim-parity-audit-2026-08-23.md));
@@ -424,6 +430,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-24 (latest)** — **Phase 4.5 item 6 (boosted re-tune, merges 0041 P4) ACHIEVED**: `open_combat` -> `a2-i6-tight` (decision `173cd5f`) via the new joint tier x terrain 9-cell maximin (eval `8997234`); the R19 profile regressed to worst -852 under the RULING-9 currency. Battery + fence green. Unblocks the watched boost_military flip.
 
 - **2026-08-24 (latest)** — **RULING-9 one-currency EV redesign ACHIEVED + shipped** (decision `f8b97a6`, agent `34152cd`, eval `04c7414`): progress-diluted heal value_per_hp (triage form) + MARGINAL self-risk price (flat NET_RISK_MULT deleted) + kite dead-zone fall-through + our_dps=0 focus gate + heal-incumbency dead-band. All 6 gates + 1537 workspace + fence green. Full detail in §3 Phase 4.5.
 
