@@ -52,7 +52,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2+4+5+6 + RULING-9 currency ACHIEVED 2026-08-24; next = watched boost flip → item 7 parity remainder → item 8 clamp-then-doctrine)
+### NOW: Phase 4.5 — the WS-VAL defect program (items 1+2+4+5+6 + RULING-9 currency + boost flip ALL DONE 2026-08-24; next = item 7 parity remainder → item 8 clamp-then-doctrine)
 See §3 Phase 4.5 for the ordered ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
 
 ### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
@@ -86,9 +86,9 @@ re-tuned open-combat profile. When it closes, the three ws docs delete. **Phase 
 EV axis (T-TOWER-3 proof green), supply clamp + populated `available_boosts`, persisted
 `CombatBodySpec.boost` (reset-free — 0047 obviates the planned WFV bump), and the full apply wire
 (BoostQueue → LabsMission fulfiller → `AwaitBoost` job, renew-skips-boosted). ALL inert behind
-`features.military.boost_military` (default OFF — the deliberate activation switch). Remaining:
-O4 market-fed valuation (constants suffice for first light), the live shakedown on activation,
-the P4 rung sweep, then ADR 0010 L1/L2 demand-driven supply.
+`features.military.boost_military` — **FLIPPED ON (live, watched) 2026-08-24**; the P4 re-tune
+landed as Phase 4.5 item 6. Remaining: the watched first boosted engagement (shakedown), O4
+market-fed valuation (constants suffice for first light), then ADR 0010 L1/L2 demand-driven supply.
 
 WATCH: movement CPU at 9 rooms (transient post-swap spikes ~81-95, steady ~34; the H3/M13 threat
 overlay + M4/M6 landed 2026-08-24 — un-memoized cross-room builds spiked ~120, fixed `2f38c1a`,
@@ -100,6 +100,8 @@ scrubs (benign backstop, attribute if it recurs outside deploys). **WS-VAL swap 
 boost-aware path). NEW WATCH: live threat assessment now prices BOOSTED hostiles at real strength
 (×2–×4) — defense sizing may correctly grow vs boosted invaders, and offense may correctly defer
 fights it previously under-priced; attribute any "why did sizing change" observation here first.
+NEW WATCH (2026-08-24): boost_military is ON (live) — first sized fight should file BoostQueue
+requests, run labs, spawn AwaitBoost creeps; attribute lab/spawn/sizing observations here first.
 
 ---
 
@@ -430,6 +432,8 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 ## 10. Changelog
 
 Append one line per closed item. Newest first.
+
+- **2026-08-24 (latest)** — **boost_military ACTIVATED on live MMO (WATCHED)**: Memory._features.military.boost_military = true on shardX via the new rest-api console example (`eeabd42` — POST /api/user/console, shard auto-injected); verified by console echo of the military tree; 0 panics post-flip. WATCH: first boosted engagement (labs fill BoostQueue, AwaitBoost job, offense sized per tier); attribute lab/spawn/sizing changes here first.
 
 - **2026-08-24 (latest)** — **Phase 4.5 item 6 (boosted re-tune, merges 0041 P4) ACHIEVED**: `open_combat` -> `a2-i6-tight` (decision `173cd5f`) via the new joint tier x terrain 9-cell maximin (eval `8997234`); the R19 profile regressed to worst -852 under the RULING-9 currency. Battery + fence green. Unblocks the watched boost_military flip.
 

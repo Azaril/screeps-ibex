@@ -232,3 +232,11 @@ Readings (each a finding, not a bug in the corpus):
   (approach 2, incumbency 6, k 2, discohesion 20, spacing 1) by maximin-with-a-noise-band (-26/-18
   noise cells vs mean +652 — strongest boosted generalizer). Full battery (6 gates) + 1537 + fence
   green under the new profile. NEXT per RULING-9: the WATCHED boost_military activation flip.
+- 2026-08-24 (boost activation FLIPPED, watched): Memory._features.military.boost_military = true
+  live on shardX, via the NEW rest-api console example (`eeabd42`: POST /api/user/console with the
+  client shard auto-injected; same .screeps.yaml resolution as tail.rs; run from screeps-rest-api/
+  as `cargo run --release --example console -- --server mmo --shard shardX --expr "<js>"`).
+  Verified by console echo of the full military tree; 0 panics in the post-flip tail. Effects are
+  demand-driven: nothing changes until war sizing picks a tier and labs fill the BoostQueue —
+  the WATCH is the first boosted engagement. RULING-9 sequence now: item 7 parity remainder
+  (H6 mover config, H8 tower-path fork, H9 lifecycle inputs) -> item 8 clamp-then-doctrine.
