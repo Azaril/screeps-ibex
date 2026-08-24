@@ -150,11 +150,53 @@ pub struct MovementUpdateSystemData<'a> {
     room_data: ReadStorage<'a, RoomData>,
     mapping: Read<'a, EntityMappingData>,
     cost_matrix_cache: WriteExpect<'a, CostMatrixCache>,
+    /// WS-VAL parity H3/M13: per-tick room threat tiles published by the squad manager — overlaid
+    /// under the structure layer's hard blockers so EXECUTED paths price kill-zones.
+    threat_costs: Read<'a, crate::pathing::costmatrixsystem::RoomThreatCosts>,
     room_status_cache: ReadExpect<'a, RoomStatusCache>,
     visualizer: Option<Write<'a, Visualizer>>,
     governor: Read<'a, crate::cpugovernor::GovernorSnapshot>,
     metrics: Write<'a, crate::metrics::MetricsState>,
     features: Read<'a, crate::features::Features>,
+}
+
+/// WS-VAL parity H3/M13 — a [`CostMatrixDataSource`] wrapper that overlays the squad manager's
+/// per-tick threat tiles UNDER the inner game-API source's structure entries: the threat entries
+/// merge first, the inner's after, and `LinearCostMatrix` applies in insertion order under SET
+/// semantics — so an impassable structure/wall entry always overrides a threat stamp, while
+/// otherwise-plain tiles in a combat room carry the folded traversal cost (ADR 0024 Stage 1
+/// "safest route", now on the EXECUTED path, not just the decide-search).
+struct ThreatOverlayCostSource {
+    inner: ScreepsCostMatrixDataSource,
+    threat: std::collections::HashMap<RoomName, Vec<(u8, u8, u8)>>,
+}
+
+impl CostMatrixDataSource for ThreatOverlayCostSource {
+    fn get_structure_costs(&self, room_name: RoomName) -> Option<StuctureCostMatrixCache> {
+        let inner = self.inner.get_structure_costs(room_name);
+        let Some(tiles) = self.threat.get(&room_name).filter(|t| !t.is_empty()) else {
+            return inner;
+        };
+        let mut base = inner.unwrap_or_else(|| StuctureCostMatrixCache {
+            roads: LinearCostMatrix::new(),
+            other: LinearCostMatrix::new(),
+        });
+        let mut other = LinearCostMatrix::new();
+        for &(x, y, cost) in tiles {
+            other.set(x, y, cost);
+        }
+        other.merge_from(&base.other); // inner entries later → blockers/walls win on shared tiles
+        base.other = other;
+        Some(base)
+    }
+
+    fn get_construction_site_costs(&self, room_name: RoomName) -> Option<ConstructionSiteCostMatrixCache> {
+        self.inner.get_construction_site_costs(room_name)
+    }
+
+    fn get_creep_costs(&self, room_name: RoomName) -> Option<CreepCostMatrixCache> {
+        self.inner.get_creep_costs(room_name)
+    }
 }
 
 /// Movement visualizer that pushes intents to the screeps-ibex room
@@ -432,7 +474,16 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let mut pathfinder = ScreepsPathfinder;
         let mut ibex_visualizer = data.visualizer.as_deref_mut().map(|v| IbexMovementVisualizer { visualizer: v });
 
-        let mut cost_matrix_system = CostMatrixSystem::new(&mut data.cost_matrix_cache, Box::new(ScreepsCostMatrixDataSource));
+        // WS-VAL parity H3/M13 — wrap the game-API cost source with the squad manager's per-tick
+        // threat tiles: threat entries are merged FIRST, the inner source's entries after (later
+        // SET-applies win), so hard blockers/walls always beat a threat stamp while every
+        // rover-resolved step in a combat room prices the tower/enemy kill-zones the sim's executed
+        // paths always did. Rooms with no combat objective carry no tiles — byte-identical matrices.
+        let threat_source = ThreatOverlayCostSource {
+            inner: ScreepsCostMatrixDataSource,
+            threat: data.threat_costs.rooms.clone(),
+        };
+        let mut cost_matrix_system = CostMatrixSystem::new(&mut data.cost_matrix_cache, Box::new(threat_source));
 
         let mut system = MovementSystem::new(
             &mut cost_matrix_system,

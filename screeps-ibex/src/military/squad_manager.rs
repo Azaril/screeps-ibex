@@ -1696,6 +1696,9 @@ pub struct SquadManagerSystemData<'a> {
     /// ADR 0041 P3 — the manager is the boost-demand PRODUCER (0010 §4: owners file demands): it
     /// re-files each awaiting member's remaining compounds every tick (the queue is ephemeral).
     boost_queue: Write<'a, crate::military::boostqueue::BoostQueue>,
+    /// WS-VAL parity H3/M13 — the manager PUBLISHES each combat room's folded threat tiles for the
+    /// live mover (see [`crate::pathing::costmatrixsystem::RoomThreatCosts`]). Ephemeral per tick.
+    threat_costs: Write<'a, crate::pathing::costmatrixsystem::RoomThreatCosts>,
 }
 
 /// A home room that can act as a spawn source for a squad.
@@ -2581,6 +2584,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 now,
                 deadline,
                 &mut data.forming_progress,
+                &mut data.threat_costs,
                 priority_bid,
             );
         }
@@ -3105,6 +3109,10 @@ fn compute_squad_orders(
     now: u32,
     deadline: Option<u32>,
     forming_progress: &mut SquadFormingProgress,
+    // WS-VAL H3/M13: the per-tick room threat-cost store the live mover overlays (see
+    // `RoomThreatCosts`); this pass publishes the target room's folded tiles when it builds the
+    // threat field.
+    threat_costs: &mut crate::pathing::costmatrixsystem::RoomThreatCosts,
     // ADR 0033 slice 7 — the squad's precomputed §D5.4 binding-member numeric priority bid
     // (`squad_objective_bid`); stamped on exactly ONE member's tick orders at the end of this pass.
     priority_bid: Option<i64>,
@@ -3287,6 +3295,36 @@ fn compute_squad_orders(
         // so the kite/strategic path routes around exposure (the layers' own threat field is rebuilt
         // internally — identical inputs).
         let threat = build_room_threat_field(&hostiles, &structures);
+        // WS-VAL parity H3/M13 — publish this room's folded threat tiles for the LIVE MOVER: the
+        // decide-search matrix below already prices the field, but the rover-resolved EXECUTED
+        // paths (approach, rejoin, retreat, every MoveTo) previously ignored it and threaded
+        // straight through kill-zones the sim's validated trajectories avoided. Terrain walls are
+        // skipped (never weakened); cost = terrain base + capped add — the same fold as the sim's
+        // executed-path source and `build_target_matrix`.
+        if let Some(terrain) = game::map::get_room_terrain(target_room) {
+            let mut tiles: Vec<(u8, u8, u8)> = Vec::new();
+            for x in 0..50u8 {
+                for y in 0..50u8 {
+                    let t = terrain.get(x, y);
+                    if t == Terrain::Wall {
+                        continue;
+                    }
+                    let Ok(xy) = RoomXY::checked_new(x, y) else { continue };
+                    let raw = threat.raw_at(Position::new(xy.x, xy.y, target_room));
+                    if raw <= 0 {
+                        continue;
+                    }
+                    let add = (raw / THREAT_PATH_DIV).min(THREAT_PATH_CAP);
+                    if add > 0 {
+                        let base: i32 = if t == Terrain::Swamp { 10 } else { 2 };
+                        tiles.push((x, y, (base + add).min(254) as u8));
+                    }
+                }
+            }
+            if !tiles.is_empty() {
+                threat_costs.rooms.insert(target_room, tiles);
+            }
+        }
         if let Some(matrix) = build_target_matrix(&mut cms, &opts, target_room, Some(&threat)) {
             let layers = build_room_layers(&hostiles, &structures, target_room, &matrix, MAX_KITE_OPS);
             slot.insert((matrix, layers));
@@ -3306,7 +3344,24 @@ fn compute_squad_orders(
 
     let decision = match room_layers.get(&target_room) {
         Some((matrix, layers)) => {
-            let mut room_cb = |_r: RoomName| Some(matrix.clone());
+            // WS-VAL parity M4/M6: honor the REQUESTED room. The old `|_r| matrix.clone()` handed
+            // the TARGET room's walls + threat stamps to every search regardless of the room asked
+            // for — a mid-crossing squad's centroid-room searches ran over the wrong room's
+            // geometry (the sim's callback was always room-correct). The target room keeps the
+            // prebuilt threat-folded matrix; any other requested room gets an honest basic matrix
+            // (terrain + structures, no foreign threat fold) built on demand — cross-room requests
+            // are rare (the kernel anchors on the fight room), so the extra build is cold-path.
+            let mut room_cb = |r: RoomName| {
+                if r == target_room {
+                    return Some(matrix.clone());
+                }
+                let mut cache = CostMatrixCache::default();
+                let mut cms = CostMatrixSystem::new(
+                    &mut cache,
+                    Box::new(screeps_rover::screeps_impl::ScreepsCostMatrixDataSource),
+                );
+                build_target_matrix(&mut cms, &CostMatrixOptions::default(), r, None)
+            };
             decide_squad_with_pathing(&view, Some(layers), tactics, &mut room_cb, MAX_KITE_OPS)
         }
         None => {

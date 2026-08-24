@@ -43,9 +43,24 @@ pub struct CostMatrixStoreSystemData<'a> {
     memory_arbiter: WriteExpect<'a, MemoryArbiter>,
 }
 
+/// Per-tick THREAT-weighted traversal costs by room (WS-VAL parity H3/M13 — ADR 0024 Stage 1
+/// "safest route" for the EXECUTED path, not just the decide-search). The `SquadManagerSystem`
+/// writes each combat-target room's folded threat tiles (`(x, y, final-cost)`; terrain-walls
+/// excluded, cost = terrain base + capped threat add) when it builds that room's threat field;
+/// the `MovementUpdateSystem` overlays them under the structure layer's hard blockers, so every
+/// rover-resolved step — approach, rejoin, retreat, civilian traffic through a war room — prices
+/// tower/enemy kill-zones the way the sim's executed paths always did. Ephemeral: cleared every
+/// tick before the producers run; rooms with no combat objective carry no entry (matrices stay
+/// byte-identical).
+#[derive(Default)]
+pub struct RoomThreatCosts {
+    pub rooms: std::collections::HashMap<RoomName, Vec<(u8, u8, u8)>>,
+}
+
 #[derive(SystemData)]
 pub struct CostMatrixClearSystemData<'a> {
     cost_matrix: WriteExpect<'a, CostMatrixCache>,
+    threat_costs: Write<'a, RoomThreatCosts>,
 }
 
 /// Clears ephemeral per-tick cost matrix data (construction sites, creeps)
@@ -59,6 +74,7 @@ impl<'a> System<'a> for CostMatrixClearSystem {
 
     fn run(&mut self, mut data: Self::SystemData) {
         data.cost_matrix.clear_ephemeral();
+        data.threat_costs.rooms.clear();
     }
 }
 
