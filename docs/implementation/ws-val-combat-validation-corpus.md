@@ -255,3 +255,8 @@ Readings (each a finding, not a bug in the corpus):
   queued: M14 resolver scope + M17/M18 tower unification + WORK/CLAIM threat_value (DESIGN fork —
   threat_value feeds focus EV too) -> item 8 / operator; M20-M23 harness input gaps -> the
   private-harness lane. Battery + 1537 + fence green.
+- 2026-08-24 (item 7 live): batch deployed (wasm `97975542813f`, tail clean). GOTCHA confirmed:
+  `Memory._features.pathing` is PERSISTED live ("custom":true) and SHADOWED the new
+  friendly_creep_distance default — the code change alone was inert; flipped 15->5 via the console
+  example and verified ([verify4] fcd = 5). Any future features-default change must check the live
+  tree the same way.
