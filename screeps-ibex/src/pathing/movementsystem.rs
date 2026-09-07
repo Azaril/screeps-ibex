@@ -597,9 +597,13 @@ impl<'a> System<'a> for MovementUpdateSystem {
             .max(MIN_MOVEMENT_CPU);
         system.set_movement_cpu_cap(get_cpu, movement_start_cpu, movement_cap);
         // Pathfinding headroom: do not start find_route unless (used + headroom) <= cap (find_route is unbounded).
-        // Normal mode: headroom = cap so we never start pathfinding (saves CPU).
-        // Burst mode: headroom 80 so we only start when we have 80 CPU headroom, allowing one pathfind and capping blow-through.
-        let pathfinding_headroom = if normal_mode { Some(movement_cap) } else { Some(80.0) };
+        // F12 (RULING-11, 2026-09-07): normal mode used to set headroom = cap, i.e. NEVER start a
+        // search while the bucket sat below `bucket_burst_threshold` — every creep without a cached
+        // path then failed on the budget arm and the empire froze exactly like the ops-pool wedge
+        // (live: `move_failed_budget` 29 with the ops pool untouched the moment the bucket dipped to
+        // 9487). Normal mode now keeps a FINITE headroom so searches continue at reduced throughput;
+        // burst mode keeps the 80-CPU headroom (one pathfind, capped blow-through).
+        let pathfinding_headroom = Some(pathfinding_headroom_for(normal_mode, movement_cap));
         system.set_pathfinding_headroom(pathfinding_headroom);
 
         // First-path round-robin hand-off (see `FIRST_PATH_CURSOR`): seed from last tick, read
@@ -712,5 +716,40 @@ mod g13_tests {
             (pos(5, 5), Some((pos(5, 5), 0))),     // wasted
         ];
         assert_eq!(count_wasted_moves(records), 2);
+    }
+}
+
+/// Normal-mode pathfinding headroom (CPU that must remain under the movement cap before a
+/// `find_route` may start). F12: a search that is never started is a creep that never moves —
+/// normal mode keeps a finite headroom instead of the old `headroom = cap` ("never search").
+const NORMAL_MODE_PATHFINDING_HEADROOM: f64 = 20.0;
+/// Burst-mode headroom: one pathfind per tick with capped blow-through.
+const BURST_MODE_PATHFINDING_HEADROOM: f64 = 80.0;
+
+/// The headroom the rover is handed this tick. Normal mode never exceeds the cap itself (a
+/// tiny cap still allows a search once the tick is nearly free) and never reaches it (which
+/// would forbid every search — the F12 freeze).
+pub(crate) fn pathfinding_headroom_for(normal_mode: bool, movement_cap: f64) -> f64 {
+    if normal_mode {
+        NORMAL_MODE_PATHFINDING_HEADROOM.min((movement_cap - 1.0).max(0.0))
+    } else {
+        BURST_MODE_PATHFINDING_HEADROOM
+    }
+}
+
+#[cfg(test)]
+mod f12_headroom_tests {
+    use super::pathfinding_headroom_for;
+
+    /// F12: normal mode must leave room to START a search — a headroom equal to the cap is the
+    /// "never search" freeze observed live at bucket 9487.
+    #[test]
+    fn normal_mode_headroom_is_finite_and_strictly_below_the_cap() {
+        for cap in [5.0_f64, 20.0, 40.0, 80.0] {
+            let h = pathfinding_headroom_for(true, cap);
+            assert!(h < cap, "normal-mode headroom {h} must be strictly below the movement cap {cap} (F12: headroom == cap forbids every search)");
+            assert!(h <= 20.0, "normal-mode headroom is bounded ({h})");
+        }
+        assert_eq!(pathfinding_headroom_for(false, 150.0), 80.0, "burst mode keeps the one-pathfind headroom");
     }
 }

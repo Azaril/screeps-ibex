@@ -1293,11 +1293,13 @@ mod tests {
         assert!(deep_floor > up_bid, "sanity: deep refill floor out-prices the upgrade sink");
 
         // Arm B (no control, no veto): the draw is SHED under the deep floor.
-        let admitted_b = false /* a3_live_control */ || false /* veto */ || econ::admit_use_withdraw(up_bid, deep_floor);
+        let (a3_live_control, veto) = (false, false);
+        let admitted_b = a3_live_control || veto || econ::admit_use_withdraw(up_bid, deep_floor);
         assert!(!admitted_b, "Arm B sheds the upgrade draw under a deep refill deficit");
 
         // Arm A (a3_live_control): the gate is bypassed ⇒ the draw is admitted regardless of floor.
-        let admitted_a = true /* a3_live_control */ || false || econ::admit_use_withdraw(up_bid, deep_floor);
+        let (a3_live_control, veto) = (true, false);
+        let admitted_a = a3_live_control || veto || econ::admit_use_withdraw(up_bid, deep_floor);
         assert!(admitted_a, "Arm A bypasses the admission gate (reproduces the live inversion)");
     }
 }

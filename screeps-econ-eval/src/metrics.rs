@@ -258,11 +258,7 @@ impl RemoteInstruments {
     /// over-hauling signal — rising = the market is spending more haul-e per delivered e/t. 0 when
     /// nothing was delivered.
     pub fn haul_cost_permille(&self) -> u32 {
-        if self.delivered_value == 0 {
-            0
-        } else {
-            (self.realized_haul_cost.saturating_mul(1000) / self.delivered_value) as u32
-        }
+        self.realized_haul_cost.saturating_mul(1000).checked_div(self.delivered_value).unwrap_or(0) as u32
     }
 }
 

@@ -553,17 +553,15 @@ mod tests {
     /// greppable spec in the test suite.
     #[test]
     fn rescout_interval_is_below_threat_data_max_age() {
-        assert!(
-            STRONGHOLD_RESCOUT_INTERVAL < THREAT_DATA_MAX_AGE,
-            "STRONGHOLD_RESCOUT_INTERVAL ({STRONGHOLD_RESCOUT_INTERVAL}) must be < \
-             THREAT_DATA_MAX_AGE ({THREAT_DATA_MAX_AGE}) so a known-stronghold SK room is \
-             re-observed before its RoomThreatData expires"
-        );
+        // STRONGHOLD_RESCOUT_INTERVAL ({STRONGHOLD_RESCOUT_INTERVAL}) must be <
+        // THREAT_DATA_MAX_AGE ({THREAT_DATA_MAX_AGE}) so a known-stronghold SK room is
+        // re-observed before its RoomThreatData expires
+        const _: () = assert!(STRONGHOLD_RESCOUT_INTERVAL < THREAT_DATA_MAX_AGE);
         // It must be a positive cadence (we don't probe every tick — that would
         // feed scouts to tower fire) and leave real margin for the
         // observe→re-populate round-trip, not just barely beat expiry.
-        assert!(STRONGHOLD_RESCOUT_INTERVAL > 0, "must be a real throttle, not every-tick");
-        assert!(
+        const _: () = assert!(STRONGHOLD_RESCOUT_INTERVAL > 0, "must be a real throttle, not every-tick");
+        const _: () = assert!(
             STRONGHOLD_RESCOUT_INTERVAL * 2 <= THREAT_DATA_MAX_AGE,
             "interval should leave >=2x margin (observed twice per expiry window) so a single \
              dropped/late observation still refreshes RoomThreatData in time"

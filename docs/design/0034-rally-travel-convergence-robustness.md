@@ -464,3 +464,71 @@ travel through hostile territory needs engine-proof fidelity (a NICE-TO-HAVE, no
   freeze (one straggler 6 tiles off centroid held the gate closed forever with everyone parked) these
   constants were set to avoid. They are the sim driver's constants (`screeps-combat-agent::squad`),
   distinct from the shared `rally::RALLY_GATHER_RADIUS` = 3 the quorum uses.
+
+## Design deltas (2026-09-07 — F10 rally flap)
+
+- **F10 — the rally ROOM flapped tick to tick (found 2026-09-07 on the private server, WS-CLOSE Phase C,
+  offense objectives Dismantle W5N7 / W7N7; fixed).** One squad's `[Lifecycle] TRAVEL` lines alternated
+  `rally=(W5N7,25,25) uncontested=true` ↔ `rally=(W4N7,25,25) uncontested=false` within seconds, with
+  `in_room=false` on the uncontested lines; members shuttled across the seam, `gathered` never held, the
+  squad acquired FOCUS on the core and left again, and the W5N7 L0 core sat at 100000/100000 through three
+  squad generations. **Mechanism** (`squad_manager.rs`, the classifier block above `ready_to_depart`): the
+  `uncontested` input to `rally::shared_rally_point_for_members_biased` (D2/D3/D6c) was
+  `target_is_uncontested(uncontested_intel, hostiles.is_empty(), no_hostile_towers, !enemy_safe_mode)` with
+  `uncontested_intel = !hostiles.is_empty() || !structures.is_empty() || intel_source == LiveVisible` — the
+  ADR 0035 D3 "real intel" predicate — over the DTOs `build_room_combat_dtos` returns. Its `Cached` arm reads
+  `RoomData::get_creeps/get_structures`, which are PER-TICK caches (`room/data.rs`: expire on every tick
+  change, refill only from `game::rooms()`), so with no eye in the room the DTOs are EMPTY and the classifier
+  read "no real intel ⇒ contested". `uncontested` was therefore a function of THIS TICK's vision — an eye in
+  W5N7 (a member, a scout, an observer, the other squad passing the seam) ⇒ uncontested ⇒ rally INSIDE the
+  target; eye gone ⇒ contested ⇒ rally one room short. The rally-oscillation fix had removed the raw
+  `game::rooms()` read; D3 re-introduced the same coupling one layer down through DTO emptiness (the
+  `build_room_combat_dtos` doc claimed "cached intel persists without live vision" — true of the
+  `RoomData` entity, false of its creep/structure caches; the doc now carries the caveat).
+- **Fix — an EVIDENCE judgement, not a per-tick view and not a latch (per-tick optimal; the oscillation
+  was observed but the root is an unstable input, so the input was fixed rather than damped).** The
+  classifier now reads the target's PERSISTED scouted record with its AGE — `RoomDynamicVisibilityData`
+  (`update_tick`, `militarily_active()`, `tower_dps_at_edge()`, `safe_mode_active_at(now)`), refreshed every
+  visible tick by `UpdateRoomDataSystem`, which runs before `SquadManagerSystem`, so on a visible tick the
+  record IS the live read at age 0 — through the new shared kernel
+  `rally::target_is_uncontested_by_evidence(TargetIntel, RALLY_INTEL_FRESHNESS_TICKS)`:
+  `Unknown` (no record, no vision) ⇒ contested (never trust no-vision emptiness — the trickle-guard stays);
+  `Observed{contested:true}` ⇒ contested however old (a threat seen is a threat until seen gone);
+  `Observed{contested:false, age}` ⇒ uncontested iff `age <= 250`. A sighting REPLACES the record (same
+  content, age 0) and losing vision leaves it, so the age is monotone while unseen and the verdict — hence
+  the rally room — changes at most once per unseen stretch (fresh → stale), never per tick. "Contested" is
+  the bot's ONE militarised-presence notion (the claim-safety gate's: combat-capable hostile creeps / an
+  active hostile spawn / any hostile tower / an enemy safe mode). The unmapped-but-visible arrival-tick hole
+  (`LiveVisible`) reads the live view through the same notion (`live_view_contested`) at age 0. The D3
+  property is kept and strengthened: a towered room's record carries the towers the scout SAW, independent
+  of the per-tick DTO cache. `have_target_intel` (the RC-11 vacuous-win gate on the P(win) fast-path, D9)
+  deliberately STAYS on the DTO view — that gate asks whether the Lanchester VIEW is real, a different
+  question from whether the ROOM is defended; the two may now differ (fresh clear record + no eye ⇒ quorum
+  release without a fast-path), which is the intended composition. `RALLY_INTEL_FRESHNESS_TICKS` = 250 is
+  parity with the claim commit gate's `intel_freshness_ticks` and sits above `SCOUT_RECONFIRM_TICKS` (40,
+  the offense-commit re-confirm that already forced a fresh sighting before fielding) so a roster that formed
+  for a few hundred ticks after that sighting still deploys at quorum; calibratable by a reviewed diff. No
+  serialized state, no WFV bump. `target_is_uncontested` (the per-tick-view kernel) is retained in the
+  decision crate for the harness's pre-fix model; the bot no longer re-exports it.
+- **Pins (RED-verified by degrading the kernel to "a sighting THIS tick only" and watching all three
+  layers fail):** `rally.rs` `f10_evidence_classifier_truth_table`,
+  `f10_rally_room_is_invariant_under_a_per_tick_vision_toggle` (a constant record under an every-other-tick
+  vision toggle keeps ONE rally room; the legacy classifier flips it),
+  `f10_stale_clear_record_transitions_once_then_holds`; `squad_manager.rs`
+  `rally_gate_picks_quorum_only_for_fresh_clear_evidence` (the manager's exact evidence → gate composition),
+  `f10_target_intel_evidence_maps_record_age_and_live_hole`,
+  `f10_live_view_contested_matches_the_militarised_notion`; `harness/lifecycle.rs` `run_rally_flap_flow`
+  (a squad at the W4N7→W5N7 seam, the production rally geometry + gather quorum + FIX-A latch, an external
+  eye blinking every other tick) with `f10_rally_room_holds_under_a_per_tick_vision_toggle` (evidence: 0
+  flips, converges; pre-fix per-tick view: the rally alternates W5N7/W4N7 every tick and the members shuttle
+  without converging), `f10_militarised_record_stages_one_room_short_without_flapping`,
+  `f10_unknown_or_stale_evidence_is_contested_and_stable`, `f10_rally_flap_flow_is_deterministic`.
+- **Residuals (not F10, noted while reading).** (a) The forming-phase quorum arm and the DEPLOY-THEN-
+  RETREAT valve still take `uncontested` / `have_target_intel` per tick, so a departed under-strength squad
+  whose clear record goes STALE mid-travel falls back to the full-roster `ready_to_depart_gate` and the RALLY
+  arm stamps `Hold` on members wherever they stand — a single fresh→stale transition, not a flap, and far
+  rarer with the 250-tick window than with DTO emptiness, but a member-hold mid-field is still the wrong
+  order; the RALLY arm should hold only members at a home room. (b) With a genuinely CONTESTED target, the
+  legacy `shared_rally_point` "arrived contested → target centre" clause keys on the CENTROID room, so a bloc
+  straddling the seam can read the target centre one tick and the neighbour the next until it is fully in;
+  bounded by the bloc gate (a contested assault crosses massed), not observed live.

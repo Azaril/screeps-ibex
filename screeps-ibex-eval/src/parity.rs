@@ -6,11 +6,17 @@
 //!   script); `catalog_names` / `load_catalog`;
 //! - `synth` — replay a catalog entry through the sim and write it as a **placeholder** vector into
 //!   `screeps-combat-engine/tests/conformance/` (provenance says so; replaced by the first capture);
-//! - `capture` (layer 1) — seed the catalog entry's creeps/structures into the warm private world
-//!   through the kit's `cmd_insert_*` builders, inject the script + the `eval.parity_script` flag
-//!   into BOTH owners' Memory with one absolute start tick, run the kit capture, parse the bot's
-//!   per-tick `PV1 ` console lines into frames, cross-check the last frame against the DB, and
-//!   write the vector with server provenance;
+//! - `capture` (layer 1) — verify every owner runs the bot build (`verify_owner_code`), seed the
+//!   catalog entry's creeps/structures into the warm private world through the kit's
+//!   `cmd_insert_*` builders, switch every owner's runtime on (the server zeroes `users.active`
+//!   for a user with no objects), hand the room controller to the tower owner for a tower bed
+//!   (`utils.checkStructureAgainstController`), inject the script + the `eval.parity_script`
+//!   flag into BOTH owners' Memory with one absolute start tick, run the kit capture on EVERY
+//!   owner's console, merge the per-owner `did` into one trace (`LiveTrace::merge_owner`),
+//!   refuse a trace whose script did not execute (`verify_script_executed`), put the room back
+//!   (`BedCleanup`: the controller row as snapshotted, the seeded objects, and EVERY object not
+//!   in the pre-bed snapshot — on success, failure and panic), cross-check the last frame against
+//!   the DB, and write the vector with server provenance;
 //! - `report` (layer 2) — the UNSCRIPTED bed: the same seeded world with the driver in `trace`
 //!   mode (frames only; the bot's own systems decide), then the sim side = `run_engagement`
 //!   (`IbexAgent` vs `IbexAgent`) from the first-contact frame over the identical world, diffed
@@ -23,19 +29,21 @@
 //! the same flag). Seeding is idempotent per scenario (the previous bed's objects are removed).
 
 use anyhow::{anyhow, bail, Context, Result};
+use futures_util::FutureExt;
 use screeps_combat_engine::parity::{
     assess, build_world, diff, frame_of, replay, synthesize, BudgetVerdict, BuiltWorld, FrameCreep,
     FrameStructure, FrameTower, GoldenVector, Owner, ParityBudget, ParityDiff, Provenance,
-    VecCreep, VecFrame, VecPart, VecStructure, VecTower, SERVER_CAPTURE_PROVENANCE,
+    TowerScriptAction, VecCreep, VecFrame, VecPart, VecStructure, VecTower, SERVER_CAPTURE_PROVENANCE,
 };
 use screeps_combat_engine::CombatWorld;
-use screeps_server_kit::capture::{self, ConsoleInjection};
-use screeps_server_kit::config::KitConfig;
+use screeps_server_kit::capture::{self, ConsoleIdentity, ConsoleInjection, RunArtifacts};
+use screeps_server_kit::config::{BotEndpoint, KitConfig};
 use screeps_server_kit::server::{
-    self, CliClient, LiveCreep, SeedCreep, SeedPart, SeedStructure,
+    self, CliClient, CodeFingerprint, ControllerOwnership, LiveCreep, RoomObjectRef, SeedCreep, SeedPart, SeedStructure,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 
 /// The scenario catalog directory (`parity/<name>.json`).
@@ -163,7 +171,9 @@ pub struct Pv1Structure {
     pub hits: u32,
 }
 
-/// A labelled tower still standing this tick (`tw` = the script label).
+/// A labelled tower still standing this tick (`tw` = the script label). `did` = the tower intents
+/// the printing bot issued for it (own towers only; a trailing `!<ErrorCode>` = the game API
+/// rejected the call — e.g. `!RclNotEnough` for a tower in a room its owner does not hold).
 #[derive(Debug, Clone, Deserialize)]
 pub struct Pv1Tower {
     pub g: u32,
@@ -171,6 +181,8 @@ pub struct Pv1Tower {
     pub tw: String,
     pub hits: u32,
     pub energy: u32,
+    #[serde(default)]
+    pub did: Vec<String>,
 }
 
 /// The per-tick roster line (`absent` = scripted creeps not visible this tick; `gone` = labelled
@@ -349,6 +361,277 @@ impl LiveTrace {
     }
 }
 
+impl LiveTrace {
+    /// Merge a SECOND owner's console lines into this (the acting identity's) trace. Every bot in
+    /// the bed prints the same tick-START state for every visible scripted creep, but `did` (the
+    /// intents issued) only ever comes from the bot that OWNS the creep/tower — the server
+    /// delivers a user's console to that user's socket alone, so without this merge the other
+    /// owner's actors carry an empty `did` whether or not that bot acted, and a bed whose second
+    /// owner has no code captures silently as "the other side stood still" (the first five
+    /// captures did exactly that: kite-r3 / heal-race / tower-rampart). `mine` stays relative to
+    /// the acting identity (player 0 — `first_contact` / `world_from_live` read it that way).
+    ///
+    /// The two views MUST agree on the state fields they both print (position / hits / fatigue /
+    /// parts): a disagreement means the lines are not from the same tick and the evidence is not
+    /// byte-exact — an error, not a warning.
+    pub fn merge_owner(&mut self, owner: &str, lines: &[Pv1Line]) -> Result<()> {
+        for l in lines {
+            match l {
+                Pv1Line::Creep(c) => {
+                    let tick = self.ticks.entry(c.t).or_default();
+                    match tick.creeps.get_mut(&c.n) {
+                        Some(base) => {
+                            let same = (base.x, base.y, base.hits, base.hits_max, base.fatigue) == (c.x, c.y, c.hits, c.hits_max, c.fatigue)
+                                && base.parts == c.parts;
+                            if !same {
+                                bail!(
+                                    "owner {owner:?} sees {} at t={} as ({},{}) {}/{}hp fatigue {} but the acting identity sees ({},{}) {}/{}hp fatigue {} — the two consoles are not describing the same tick",
+                                    c.n, c.t, c.x, c.y, c.hits, c.hits_max, c.fatigue, base.x, base.y, base.hits, base.hits_max, base.fatigue
+                                );
+                            }
+                            if c.mine {
+                                base.did = c.did.clone();
+                            }
+                        }
+                        None => {
+                            let mut c = c.clone();
+                            c.mine = false;
+                            tick.creeps.insert(c.n.clone(), c);
+                        }
+                    }
+                }
+                Pv1Line::Structure(s) => {
+                    let tick = self.ticks.entry(s.t).or_default();
+                    match tick.structures.get(&s.s) {
+                        Some(base) if base.hits != s.hits => bail!(
+                            "owner {owner:?} sees structure {} at t={} with {} hits but the acting identity sees {}",
+                            s.s, s.t, s.hits, base.hits
+                        ),
+                        Some(_) => {}
+                        None => {
+                            tick.structures.insert(s.s.clone(), s.clone());
+                        }
+                    }
+                }
+                Pv1Line::Tower(tw) => {
+                    let tick = self.ticks.entry(tw.t).or_default();
+                    match tick.towers.get_mut(&tw.tw) {
+                        Some(base) => {
+                            if (base.hits, base.energy) != (tw.hits, tw.energy) {
+                                bail!(
+                                    "owner {owner:?} sees tower {} at t={} with {} hits / {} energy but the acting identity sees {} / {}",
+                                    tw.tw, tw.t, tw.hits, tw.energy, base.hits, base.energy
+                                );
+                            }
+                            if !tw.did.is_empty() {
+                                base.did = tw.did.clone();
+                            }
+                        }
+                        None => {
+                            tick.towers.insert(tw.tw.clone(), tw.clone());
+                        }
+                    }
+                }
+                Pv1Line::Roster(r) => {
+                    self.ticks.entry(r.t).or_default();
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// ───────────────────────────── bed preconditions ─────────────────────────────
+
+/// The scripted-execution gate: every scripted creep intent / tower action at a captured tick
+/// whose actor was standing must show up as an ISSUED intent in the owning bot's `did`. An actor
+/// with an empty `did` means its owner's driver never ran the script (no code deployed as that
+/// identity, a stale build without the driver, a runtime the server switched off) — the frames
+/// then do not describe the bed the script names, so the vector must not be written as server
+/// evidence.
+///
+/// A `!<ErrorCode>` suffix means the game API refused the call (`!Missing` = the driver made no
+/// call because the scripted target was not there — the dead-target tail of a script;
+/// `!PipelineTaken` = the guarded intent sink refused a second action on one simultaneous-action
+/// pipeline). For a CREEP that is script semantics the engine and the sim both model (a fatigued
+/// creep's `move` → `ERR_TIRED`, the kite-r3 kiter's target resting on the swamp; a dead target
+/// skipped on both sides), so it is returned as a warning and stays in the evidence — the
+/// byte-exact replay is the judge. For a TOWER only `NotEnoughEnergy` is modelled
+/// (the sim's `can_fire`); any other refusal — `RclNotEnough` for a tower whose owner does not
+/// hold the room controller (the first tower-rampart capture), a missing target, a bare `!`
+/// from a pre-error-code driver — is a bed defect and fails the capture.
+pub fn verify_script_executed(v: &GoldenVector, trace: &LiveTrace, ticks: u32) -> Result<Vec<String>> {
+    let owner_of_creep = |name: &str| -> String {
+        v.creeps
+            .iter()
+            .find(|c| c.name == name)
+            .and_then(|c| v.owners.iter().find(|o| o.player == c.owner))
+            .map(|o| o.user.clone())
+            .unwrap_or_else(|| "?".into())
+    };
+    let owner_of_tower = |label: &str| -> String {
+        v.towers
+            .iter()
+            .find(|t| t.id == label)
+            .and_then(|t| v.owners.iter().find(|o| o.player == t.owner))
+            .map(|o| o.user.clone())
+            .unwrap_or_else(|| "?".into())
+    };
+    // A `did` entry the game API refused: `<label>!<ErrorCode>` (or a bare `!`).
+    let refused = |d: &str| d.contains('!');
+    // owner → actor → ticks with an empty did
+    let mut silent: BTreeMap<String, BTreeMap<String, Vec<u32>>> = BTreeMap::new();
+    // owner → refused entries (creeps: warned; towers: fatal unless the sim models the reason)
+    let mut creep_refusals: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut tower_refusals: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for s in v.script.iter().filter(|s| s.t < ticks) {
+        let Some(lines) = trace.ticks.get(&s.t) else { continue };
+        for si in &s.intents {
+            let Some(c) = lines.creeps.get(&si.creep) else { continue }; // dead / not standing
+            if si.actions.is_empty() && si.mv.is_none() && si.pull.is_none() {
+                continue;
+            }
+            if c.did.is_empty() {
+                silent.entry(owner_of_creep(&si.creep)).or_default().entry(si.creep.clone()).or_default().push(s.t);
+            }
+            for d in c.did.iter().filter(|d| refused(d)) {
+                creep_refusals.entry(owner_of_creep(&si.creep)).or_default().push(format!("{} t={} {d}", si.creep, s.t));
+            }
+        }
+        for ts in &s.towers {
+            let Some(tw) = lines.towers.get(&ts.tower) else { continue }; // destroyed
+            if tw.did.is_empty() {
+                silent.entry(owner_of_tower(&ts.tower)).or_default().entry(ts.tower.clone()).or_default().push(s.t);
+            }
+            // The script names its target; once that target is dead/destroyed the driver makes
+            // no call (`!Missing`) — the sim skips the same way, so that one is evidence too.
+            let target = match &ts.action {
+                TowerScriptAction::Attack { target } | TowerScriptAction::Heal { target } | TowerScriptAction::Repair { target } => target,
+            };
+            let target_standing = lines.creeps.contains_key(target)
+                || lines.structures.contains_key(target)
+                || lines.towers.contains_key(target);
+            for d in tw.did.iter().filter(|d| {
+                refused(d) && !d.ends_with("!NotEnoughEnergy") && (!d.ends_with("!Missing") || target_standing)
+            }) {
+                tower_refusals.entry(owner_of_tower(&ts.tower)).or_default().push(format!("{} t={} {d}", ts.tower, s.t));
+            }
+        }
+    }
+    let warnings: Vec<String> = creep_refusals
+        .iter()
+        .map(|(owner, items)| {
+            format!(
+                "owner {owner:?}: the game API refused creep intents the script kept issuing ({}) — recorded as evidence (the engine and the sim both model the refusal; the replay decides)",
+                items.join("; ")
+            )
+        })
+        .collect();
+    if silent.is_empty() && tower_refusals.is_empty() {
+        return Ok(warnings);
+    }
+    let mut msg = String::new();
+    for (owner, actors) in &silent {
+        let list: Vec<String> = actors
+            .iter()
+            .map(|(a, ts)| format!("{a} (t={})", ts.iter().map(u32::to_string).collect::<Vec<_>>().join(",")))
+            .collect();
+        msg.push_str(&format!(
+            "owner {owner:?} never executed its script — no intent issued for {} — is the bot deployed as that identity with the parity driver (`screeps-server-kit deploy --user {owner}`) and is its runtime active?\n",
+            list.join(", ")
+        ));
+    }
+    for (owner, items) in &tower_refusals {
+        msg.push_str(&format!(
+            "owner {owner:?}: the game API REJECTED scripted tower actions ({}) — the sim does not model that refusal (only NotEnoughEnergy), so the bed does not exercise what the script says (a tower needs its owner to hold the room controller at a level allowing towers)\n",
+            items.join("; ")
+        ));
+    }
+    bail!("{}", msg.trim_end())
+}
+
+/// The deployed-code gate: every bed owner must run a BOT build (the parity driver ships in the
+/// bot's wasm — the same module set as the acting identity, not the kit's bootstrap `main`). A bed where the second owner only carries the bootstrap
+/// `main` would otherwise capture silently with that side inert. Byte-identical builds are the
+/// intent but not a hard requirement — two `deploy --user` runs from a tree being edited in
+/// between differ in bytes — so a fingerprint mismatch is reported (warn) rather than refused;
+/// whether the other build carries the driver is what the execution gate
+/// ([`verify_script_executed`]) settles after the capture.
+pub fn verify_owner_code(fps: &[CodeFingerprint], owners: &[(String, String)]) -> Result<Vec<String>> {
+    let row = |user_id: &str| fps.iter().find(|f| f.user == user_id);
+    let (primary_user, primary_id) = owners.first().context("a bed needs at least one owner")?;
+    let primary = row(primary_id).with_context(|| format!("no code row for {primary_user:?}"))?;
+    let Some(reference) = primary.fingerprint.as_deref() else {
+        bail!("owner {primary_user:?} has no active-world code — deploy the bot first (`screeps-server-kit deploy --user {primary_user}`)");
+    };
+    if primary.modules.len() < 2 {
+        bail!(
+            "owner {primary_user:?} runs only {:?} — not a bot build (the parity driver ships in the wasm) — `screeps-server-kit deploy --user {primary_user}`",
+            primary.modules
+        );
+    }
+    let mut warnings = Vec::new();
+    for (user, id) in owners {
+        let f = row(id).with_context(|| format!("no code row for {user:?}"))?;
+        let Some(fp) = f.fingerprint.as_deref() else {
+            bail!(
+                "owner {user:?} has no active-world code — the parity driver never runs for its creeps: `screeps-server-kit deploy --user {user}`"
+            );
+        };
+        if f.modules != primary.modules {
+            bail!(
+                "owner {user:?} runs DIFFERENT code than {primary_user:?} (modules {:?} vs {:?}) — every bed owner must run the bot build: `screeps-server-kit deploy --user {user}`",
+                f.modules, primary.modules
+            );
+        }
+        // `active == 0` is NOT refused here: the driver zeroes it for any user with no objects and
+        // the bed re-activates every owner right after seeding (`cmd_activate_user`).
+        if fp != reference {
+            warnings.push(format!(
+                "owner {user:?} runs a different BUILD than {primary_user:?} (fingerprint {fp} vs {reference}) — same modules, so the driver is present if both were deployed from this tree; re-deploy both from one tree state if the difference matters"
+            ));
+        }
+    }
+    Ok(warnings)
+}
+
+/// The controller level that makes `n` towers ACTIVE for their owner — the engine's
+/// `CONTROLLER_STRUCTURES.tower` ladder (3:1, 5:2, 7:3, 8:6); `utils.checkStructureAgainstController`
+/// counts a tower active only when the room controller belongs to the tower's owner at a level
+/// allowing that many towers. `None` when the bed has no towers.
+pub fn rcl_for_towers(n: usize) -> Result<Option<u32>> {
+    Ok(match n {
+        0 => None,
+        1 => Some(3),
+        2 => Some(5),
+        3 => Some(7),
+        4..=6 => Some(8),
+        _ => bail!("{n} towers exceed the RCL 8 allowance of 6"),
+    })
+}
+
+/// The one owner every tower in the bed belongs to (a room controller has one holder, so a bed
+/// cannot field active towers of two owners).
+pub fn tower_owner(v: &GoldenVector) -> Result<Option<Owner>> {
+    let mut players: Vec<u8> = v.towers.iter().map(|t| t.owner).collect();
+    players.sort_unstable();
+    players.dedup();
+    match players.as_slice() {
+        [] => Ok(None),
+        [p] => v
+            .owners
+            .iter()
+            .find(|o| o.player == *p)
+            .cloned()
+            .map(Some)
+            .with_context(|| format!("tower owner player {p} is not in the scenario's owners")),
+        many => bail!(
+            "towers of {} different owners ({many:?}) — one room controller cannot activate towers for two users",
+            many.len()
+        ),
+    }
+}
+
 // ───────────────────────────── injection ─────────────────────────────
 
 fn js_str(s: &str) -> String {
@@ -376,9 +659,13 @@ struct Labeled {
     y: u8,
 }
 
-/// The JS that installs the script + arms the flag for one user. `start` is the absolute tick of
-/// scenario tick 0 (both users get the same one); `trace` = frames only.
-pub fn inject_expression(v: &GoldenVector, room: &str, start: Option<u32>, trace: bool) -> String {
+/// The JS that installs the script + arms the flag for one user, as a SEQUENCE of console
+/// expressions: the server rejects any single expression over ~1000 characters ("expression size
+/// is too large" — the same limit as MMO), and a script table is several KB, so the JSON is
+/// streamed into `Memory._pv` in `ARM_CHUNK`-character pieces and parsed into `Memory.parity_script`
+/// by the final expression, which also arms the flag. `start` is the absolute tick of scenario
+/// tick 0 (both users get the same one); `trace` = frames only.
+pub fn inject_expressions(v: &GoldenVector, room: &str, start: Option<u32>, trace: bool) -> Vec<String> {
     let mem = ScriptMemory {
         scenario: &v.scenario,
         room,
@@ -398,12 +685,22 @@ pub fn inject_expression(v: &GoldenVector, room: &str, start: Option<u32>, trace
         ticks: &v.script,
     };
     let json = serde_json::to_string(&mem).expect("script memory serializes");
-    format!(
-        "Memory.parity_script={json};{}",
+    let chars: Vec<char> = json.chars().collect();
+    let mut out = vec!["Memory._pv=\"\";".to_owned()];
+    for piece in chars.chunks(ARM_CHUNK) {
+        let piece: String = piece.iter().collect();
+        out.push(format!("Memory._pv+={};", js_str(&piece)));
+    }
+    out.push(format!(
+        "Memory.parity_script=JSON.parse(Memory._pv);delete Memory._pv;{}",
         crate::scenario::feature_set("eval", &format!("parity_script={}", js_str(&v.scenario)))
-    )
+    ));
+    out
 }
 
+/// Raw JSON characters per arming chunk: escaped through `js_str` the piece stays well under the
+/// console limit of ~1000 characters even when every character needs escaping.
+const ARM_CHUNK: usize = 400;
 /// Disarm: clear the flag and drop the script.
 pub fn clear_expression() -> String {
     format!(
@@ -470,13 +767,14 @@ fn seeded_tiles(v: &GoldenVector) -> Vec<(u32, u32)> {
 }
 
 /// One owner's live identity: the kit bot entry + a signed-in client + the DB user id.
-struct OwnerClient {
+struct OwnerClient<'a> {
     owner: Owner,
+    bot: &'a BotEndpoint,
     api: screeps_rest_api::Client,
     user_id: String,
 }
 
-async fn owner_clients(cfg: &KitConfig, v: &GoldenVector) -> Result<Vec<OwnerClient>> {
+async fn owner_clients<'a>(cfg: &'a KitConfig, v: &GoldenVector) -> Result<Vec<OwnerClient<'a>>> {
     if v.owners.is_empty() {
         bail!("scenario {} declares no owners (user ↔ player pairs)", v.scenario);
     }
@@ -489,7 +787,7 @@ async fn owner_clients(cfg: &KitConfig, v: &GoldenVector) -> Result<Vec<OwnerCli
             .ok_or_else(|| {
                 anyhow!(
                     "scenario owner {:?} is not a `bots:` entry in config/local.yml (have {:?}) — \
-                     the parity beds need every owner registered as a bot (README: bots: [ibex, ibex-2])",
+                     the parity beds need every owner registered as a bot (README: bots: [private-server, ibex-2] — .screeps.yaml ENTRY names, not usernames)",
                     owner.user,
                     cfg.bots.iter().map(|b| b.name.as_str()).collect::<Vec<_>>()
                 )
@@ -498,6 +796,7 @@ async fn owner_clients(cfg: &KitConfig, v: &GoldenVector) -> Result<Vec<OwnerCli
         let user_id = api.me().await?.id;
         out.push(OwnerClient {
             owner: owner.clone(),
+            bot,
             api,
             user_id,
         });
@@ -547,6 +846,128 @@ pub struct BedRun {
     pub db_creeps: Vec<LiveCreep>,
 }
 
+// ───────────────────────────── bed cleanup ─────────────────────────────
+
+/// The objects in `current` that were not in the pre-bed `snapshot` — everything the bed or a bot
+/// created in the room while the bed ran: the seeded `pv-*` creeps/structures, and during a tower
+/// bed's controller claim whatever the owning bot did with "its new colony" (the first tower-rampart
+/// capture: 10 construction sites, a completed extension, containers). Identity is the DB `_id`;
+/// order follows `current`. Objects that LEFT the room (a seeded creep that died) are not listed —
+/// there is nothing to remove.
+pub fn objects_not_in(snapshot: &[RoomObjectRef], current: &[RoomObjectRef]) -> Vec<RoomObjectRef> {
+    let keep: BTreeSet<&str> = snapshot.iter().map(|o| o.id.as_str()).collect();
+    current.iter().filter(|o| !keep.contains(o.id.as_str())).cloned().collect()
+}
+
+/// `type x count, ...` for a log line, type-sorted.
+pub fn summarize_kinds(objects: &[RoomObjectRef]) -> String {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for o in objects {
+        *counts.entry(o.kind.as_str()).or_default() += 1;
+    }
+    counts.iter().map(|(k, n)| format!("{k}x{n}")).collect::<Vec<_>>().join(", ")
+}
+
+/// What `run_bed` does with the bed room's controller row it finds BEFORE claiming anything.
+#[derive(Debug, PartialEq)]
+pub enum StaleClaim<'a> {
+    /// Nobody owns the room: nothing to release.
+    Neutral,
+    /// The row is a claim THIS harness made and never restored (the `parityClaim` marker with the
+    /// claim's shape — an aborted run): put back the row the marker saved, then go on from it.
+    Release { holder: &'a str, before: &'a ControllerOwnership },
+    /// Somebody owns the room and it is not our claim: a tower bed refuses; a creep-only bed
+    /// leaves the controller alone (it never needed it).
+    Owned { holder: &'a str },
+}
+
+/// Only a row carrying the harness's own marker is ever released
+/// ([`ControllerOwnership::parity_claim_before`]); an owned room without it is someone's colony.
+pub fn stale_claim(row: &ControllerOwnership) -> StaleClaim<'_> {
+    match (&row.user, row.parity_claim_before()) {
+        (None, _) => StaleClaim::Neutral,
+        (Some(holder), Some(before)) => StaleClaim::Release { holder, before },
+        (Some(holder), None) => StaleClaim::Owned { holder },
+    }
+}
+
+/// The refusal a tower bed gives an owned bed room (the text the operator sees).
+pub fn owned_room_refusal(room: &str, holder: &str) -> String {
+    format!(
+        "bed room {room} is owned by user {holder} and carries no parity claim marker — a tower bed claims only a NEUTRAL room's controller and never touches a room a user holds (an aborted run's own claim is recognised by its `parityClaim` marker and released); pick a neutral bed room (`--room`) or release this one by hand"
+    )
+}
+
+/// What a bed must put back when it ends — on success, on failure and on a panic in the bed body
+/// (`run_bed` runs [`BedCleanup::run`] after `catch_unwind`): the controller row it claimed
+/// (exactly as snapshotted), its seeded `pv-*` objects, and every object that appeared in the room
+/// since the pre-bed snapshot.
+struct BedCleanup {
+    room: String,
+    prefix: String,
+    tiles: Vec<(u32, u32)>,
+    /// `cmd_room_object_ids` of the room before the claim and the seeding.
+    snapshot: Vec<RoomObjectRef>,
+    /// `(claiming user id, the controller row before the claim)` once the claim is in.
+    claimed: Option<(String, ControllerOwnership)>,
+}
+
+impl BedCleanup {
+    /// Run every step even when one fails (the first failure is the returned error): the
+    /// controller restore first — the owning bot stops treating the room as its colony the tick
+    /// the row flips back — then the seeded objects, then the leftover report (what the bed did
+    /// not seed but the room now holds), then everything not in the snapshot.
+    async fn run(&self, cli: &CliClient) -> Result<()> {
+        let mut first_err: Option<anyhow::Error> = None;
+        let mut note = |label: &str, r: Result<String>| match r {
+            Ok(reply) => tracing::info!("bed cleanup: {label}: {}", reply.trim()),
+            Err(e) => {
+                tracing::error!("bed cleanup: {label} FAILED: {e:#}");
+                if first_err.is_none() {
+                    first_err = Some(e.context(format!("bed cleanup: {label}")));
+                }
+            }
+        };
+        if let Some((owner_id, before)) = &self.claimed {
+            note(
+                "controller restored",
+                cli.send(&server::cmd_restore_controller(&self.room, owner_id, before)).await,
+            );
+        }
+        note(
+            "seeded objects removed",
+            cli.send(&server::cmd_remove_seeded(&self.room, &self.prefix, &self.tiles)).await,
+        );
+        match cli
+            .send(&server::cmd_room_object_ids(&self.room))
+            .await
+            .and_then(|body| server::parse_room_object_ids(&body))
+        {
+            Ok(now) => {
+                let extra = objects_not_in(&self.snapshot, &now);
+                if !extra.is_empty() {
+                    tracing::warn!(
+                        "{}: {} object(s) the bed did not seed appeared during the run ({}) — removing them",
+                        self.room,
+                        extra.len(),
+                        summarize_kinds(&extra)
+                    );
+                }
+            }
+            Err(e) => tracing::warn!("bed cleanup: leftover report skipped: {e:#}"),
+        }
+        let keep: Vec<String> = self.snapshot.iter().map(|o| o.id.clone()).collect();
+        note(
+            "room put back to the pre-bed snapshot",
+            cli.send(&server::cmd_remove_objects_not_in(&self.room, &keep)).await,
+        );
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+}
+
 /// Bring the stack up (no reset unless asked), seed the bed, arm both owners, capture.
 async fn run_bed(cfg: &KitConfig, v: &GoldenVector, opts: &BedOptions, trace_only: bool) -> Result<BedRun> {
     let room = opts.room.clone().unwrap_or_else(|| v.room.clone());
@@ -568,22 +989,176 @@ async fn run_bed(cfg: &KitConfig, v: &GoldenVector, opts: &BedOptions, trace_onl
     let cli = CliClient::new(cfg.stack.cli_port)?;
     let owners = owner_clients(cfg, v).await?;
 
+    // Precondition: every owner runs the acting identity's build with a live runtime — the
+    // parity driver ships in the bot, so an owner without it stands still all capture long.
+    let ids: Vec<String> = owners.iter().map(|oc| oc.user_id.clone()).collect();
+    let fps = server::parse_code_fingerprints(&cli.send(&server::cmd_code_fingerprints(&ids)).await?)?;
+    let pairs: Vec<(String, String)> = owners.iter().map(|oc| (oc.owner.user.clone(), oc.user_id.clone())).collect();
+    for w in verify_owner_code(&fps, &pairs)? {
+        tracing::warn!("{w}");
+    }
+    tracing::info!(
+        "owners run the bot build: {}",
+        fps.iter().map(|f| format!("{} fp={}", f.user, f.fingerprint.as_deref().unwrap_or("-"))).collect::<Vec<_>>().join(", ")
+    );
+
     tracing::info!("parity bed 3/5: seed {room}");
     server::pause(&cli).await?;
     let prefix = format!("pv-{}-", v.scenario);
     let removed = cli.send(&server::cmd_remove_seeded(&room, &prefix, &seeded_tiles(v))).await?;
     tracing::info!("cleanup: {}", removed.trim());
-    for oc in &owners {
+    // A controller claim an aborted run of THIS harness left behind is released now (every bed,
+    // tower or not — the marker is ours); any other owned controller is left alone.
+    let mut controller = server::parse_controller_ownership(&cli.send(&server::cmd_controller_ownership(&room)).await?)?;
+    let tower_owner = tower_owner(v)?;
+    if let Some(row) = &controller {
+        match stale_claim(row) {
+            StaleClaim::Neutral => {}
+            StaleClaim::Release { holder, before } => {
+                tracing::warn!("{room} still carries this harness's claim marker (held by {holder} since an aborted run) — restoring the controller row it saved");
+                let r = cli.send(&server::cmd_restore_controller(&room, holder, before)).await?;
+                tracing::info!("{}", r.trim());
+                controller = Some(before.clone());
+            }
+            StaleClaim::Owned { holder } => {
+                if tower_owner.is_some() {
+                    bail!("{}", owned_room_refusal(&room, holder));
+                }
+                tracing::info!("{room} is owned by user {holder}; a creep-only bed leaves the controller alone");
+            }
+        }
+    }
+    // The pre-bed snapshot: the set of objects the room goes back to when the bed ends. Taken
+    // after the stale-seed removal (so a previous bed's leftovers do not get "kept") and before
+    // the claim (so nothing the owning bot builds in its ~60-tick "colony" survives).
+    let snapshot = server::parse_room_object_ids(&cli.send(&server::cmd_room_object_ids(&room)).await?)?;
+    if snapshot.is_empty() {
+        bail!("bed room {room} reports no objects at all (a room always has its controller/sources) — refusing to run a bed whose end-of-bed cleanup would have nothing to keep");
+    }
+    tracing::info!("{room}: pre-bed snapshot of {} objects ({})", snapshot.len(), summarize_kinds(&snapshot));
+    let mut cleanup = BedCleanup {
+        room: room.clone(),
+        prefix,
+        tiles: seeded_tiles(v),
+        snapshot,
+        claimed: None,
+    };
+    // From here to the end of the capture the world is dirty (claim + seeds + whatever the bots
+    // do): the body runs under `catch_unwind` so the cleanup runs whether it returns, fails or
+    // panics, and a panic is re-raised afterwards.
+    let ctx = BedContext {
+        cfg,
+        v,
+        opts,
+        trace_only,
+        cli: &cli,
+        owners: &owners,
+        room: &room,
+        ticks,
+    };
+    let body = AssertUnwindSafe(bed_body(&ctx, tower_owner, controller, &mut cleanup))
+        .catch_unwind()
+        .await;
+    let put_back = cleanup.run(&cli).await;
+    let (artifacts, start, db_creeps) = match body {
+        Err(panic) => std::panic::resume_unwind(panic),
+        Ok(body) => body?,
+    };
+    put_back?;
+
+    let console = std::fs::read_to_string(artifacts.dir.join("console.jsonl"))
+        .with_context(|| format!("reading {}", artifacts.dir.join("console.jsonl").display()))?;
+    let mut trace = LiveTrace::from_lines(&parse_pv1(&console));
+    for oc in &owners[1..] {
+        let path = capture::extra_console_path(&artifacts.dir, &oc.owner.user);
+        let console = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let lines = parse_pv1(&console);
+        tracing::info!("{}: {} PV1 lines", oc.owner.user, lines.len());
+        trace.merge_owner(&oc.owner.user, &lines)?;
+    }
+    if !trace_only {
+        for w in verify_script_executed(v, &trace, ticks)? {
+            tracing::warn!("{w}");
+        }
+    }
+    Ok(BedRun {
+        vector: v.clone(),
+        room,
+        run_dir: artifacts.dir,
+        trace,
+        start_tick: start,
+        ticks,
+        db_creeps,
+    })
+}
+
+/// What [`bed_body`] works with (all borrowed from `run_bed`).
+#[derive(Clone, Copy)]
+struct BedContext<'a> {
+    cfg: &'a KitConfig,
+    v: &'a GoldenVector,
+    opts: &'a BedOptions,
+    trace_only: bool,
+    cli: &'a CliClient,
+    owners: &'a [OwnerClient<'a>],
+    room: &'a str,
+    ticks: u32,
+}
+
+/// The dirty part of a bed — claim, seed, arm, capture, disarm, read the end-of-run creep rows —
+/// run under `run_bed`'s cleanup guard. Returns the capture artifacts, the absolute start tick
+/// and the DB creep rows (read BEFORE the cleanup removes them: the cross-check material).
+async fn bed_body(
+    ctx: &BedContext<'_>,
+    tower_owner: Option<Owner>,
+    controller: Option<ControllerOwnership>,
+    cleanup: &mut BedCleanup,
+) -> Result<(RunArtifacts, u32, Vec<LiveCreep>)> {
+    let BedContext {
+        cfg,
+        v,
+        opts,
+        trace_only,
+        cli,
+        owners,
+        room,
+        ticks,
+    } = *ctx;
+    // Tower beds: the engine only lets a tower act when its owner holds the room controller at a
+    // level allowing towers (`utils.checkStructureAgainstController` → `ERR_RCL_NOT_ENOUGH`
+    // otherwise), so the bed room's controller is handed to the tower owner for the capture and
+    // the snapshotted row put back by the cleanup.
+    if let Some(tower_owner) = tower_owner {
+        let level = rcl_for_towers(v.towers.len())?.expect("towers present");
+        let owner_id = owners
+            .iter()
+            .find(|oc| oc.owner.player == tower_owner.player)
+            .map(|oc| oc.user_id.clone())
+            .expect("tower owner is a scenario owner");
+        let before = controller.with_context(|| format!("bed room {room} has no controller — a tower bed needs one"))?;
+        let r = cli.send(&server::cmd_claim_controller(room, &owner_id, level, &before)).await?;
+        tracing::info!("{}: {} (controller was {:?}; restored by the cleanup)", tower_owner.user, r.trim(), before);
+        cleanup.claimed = Some((owner_id, before));
+    }
+    for oc in owners {
         let creeps = seed_creeps_for(v, oc.owner.player);
         if !creeps.is_empty() {
-            let r = cli.send(&server::cmd_insert_creeps(&oc.user_id, &room, &creeps)).await?;
+            let r = cli.send(&server::cmd_insert_creeps(&oc.user_id, room, &creeps)).await?;
             tracing::info!("{}: creeps {}", oc.owner.user, r.trim());
         }
         let structures = seed_structures_for(v, oc.owner.player);
         if !structures.is_empty() {
-            let r = cli.send(&server::cmd_insert_structures(&oc.user_id, &room, &structures)).await?;
+            let r = cli.send(&server::cmd_insert_structures(&oc.user_id, room, &structures)).await?;
             tracing::info!("{}: structures {}", oc.owner.user, r.trim());
         }
+    }
+    // Every owner's runtime back on: the server's driver zeroes `users.active` (and builds no
+    // runtime) for a user with no room objects, and only a code upload sets it again — a
+    // bed-only identity is off between beds and stays off when its seeded creeps appear, so
+    // its driver would never execute the script (the first captures' silent second owner).
+    for oc in owners {
+        let r = cli.send(&server::cmd_activate_user(&oc.user_id)).await?;
+        tracing::info!("{}: runtime {}", oc.owner.user, r.trim());
     }
     if opts.activate_rooms {
         let r = cli.send(&server::cmd_activate_rooms()).await?;
@@ -591,17 +1166,19 @@ async fn run_bed(cfg: &KitConfig, v: &GoldenVector, opts: &BedOptions, trace_onl
         screeps_server_kit::docker::down().await?;
         screeps_server_kit::docker::up(&cfg.stack).await?;
     }
-    server::resume(&cli).await?;
+    server::resume(cli).await?;
 
     tracing::info!("parity bed 4/5: arm both owners (lead {} ticks)", opts.lead_ticks);
     let now = owners[0].api.game_time().await?.time as u32;
     let start = now + opts.lead_ticks;
-    let expr = inject_expression(v, &room, Some(start), trace_only);
-    for oc in &owners {
-        oc.api
-            .console(&expr)
-            .await
-            .with_context(|| format!("arming {}", oc.owner.user))?;
+    let exprs = inject_expressions(v, room, Some(start), trace_only);
+    for oc in owners {
+        for expr in &exprs {
+            oc.api
+                .console(expr)
+                .await
+                .with_context(|| format!("arming {}", oc.owner.user))?;
+        }
     }
 
     tracing::info!("parity bed 5/5: capture {} ticks from {start}", ticks);
@@ -613,31 +1190,33 @@ async fn run_bed(cfg: &KitConfig, v: &GoldenVector, opts: &BedOptions, trace_onl
         label: "parity driver off".into(),
     }];
     let label = if trace_only { "parity-bed" } else { "parity-capture" };
-    let artifacts = capture::run(
+    // Every owner's console is recorded: each bot prints `did` only for ITS OWN actors.
+    let extra: Vec<ConsoleIdentity<'_>> = owners[1..]
+        .iter()
+        .map(|oc| ConsoleIdentity {
+            label: &oc.owner.user,
+            endpoint: &oc.bot.endpoint,
+        })
+        .collect();
+    let captured = capture::run_with_consoles(
         cfg,
         (opts.lead_ticks + ticks + TAIL_TICKS + 2) as u64,
         &format!("{label}-{}", v.scenario),
         &spec,
+        &extra,
     )
-    .await?;
-    for oc in &owners {
+    .await;
+    for oc in owners {
         let _ = oc.api.console(&clear_expression()).await;
     }
-
-    let console = std::fs::read_to_string(artifacts.dir.join("console.jsonl"))
-        .with_context(|| format!("reading {}", artifacts.dir.join("console.jsonl").display()))?;
-    let trace = LiveTrace::from_lines(&parse_pv1(&console));
-    let db_creeps = server::parse_room_creeps(&cli.send(&server::cmd_room_creeps(&room)).await?)
+    let artifacts = captured?;
+    // The DB cross-check wants the bed's creeps still standing, so their rows are read here,
+    // before the cleanup takes the room back to its snapshot — a bed must not leave ANYTHING
+    // behind for the next one (a leftover tower-rampart tower at (20,25) blocked every later
+    // kite-r3 kiter's last step and looked like a movement divergence).
+    let db_creeps = server::parse_room_creeps(&cli.send(&server::cmd_room_creeps(room)).await?)
         .unwrap_or_default();
-    Ok(BedRun {
-        vector: v.clone(),
-        room,
-        run_dir: artifacts.dir,
-        trace,
-        start_tick: start,
-        ticks,
-        db_creeps,
-    })
+    Ok((artifacts, start, db_creeps))
 }
 
 /// Layer 1: capture a scripted golden vector from the live server and write it into the
@@ -1199,15 +1778,23 @@ mod tests {
     #[test]
     fn injection_arms_flag_and_script_for_one_user() {
         let v = load_catalog("melee-1v1").unwrap();
-        let expr = inject_expression(&v, "W8N7", Some(1234), false);
-        assert!(expr.starts_with("Memory.parity_script={"), "{expr}");
+        let parts = inject_expressions(&v, "W8N7", Some(1234), false);
+        assert!(parts.len() >= 3, "prelude + at least one chunk + the arm: {parts:?}");
+        assert!(parts.iter().all(|e| e.len() < 1000), "every arming expression stays under the console limit: {parts:?}");
+        assert_eq!(parts[0], "Memory._pv=\"\";");
+        assert!(parts.last().unwrap().starts_with("Memory.parity_script=JSON.parse(Memory._pv);delete Memory._pv;"), "{parts:?}");
+        let expr: String = parts[1..parts.len() - 1]
+            .iter()
+            .map(|e| serde_json::from_str::<String>(&e["Memory._pv+=".len()..e.len() - 1]).unwrap())
+            .collect();
+        assert!(expr.starts_with("{"), "{expr}");
         assert!(expr.contains(r#""scenario":"melee-1v1""#), "{expr}");
         assert!(expr.contains(r#""room":"W8N7""#), "{expr}");
         assert!(expr.contains(r#""start":1234"#), "{expr}");
         assert!(expr.contains(r#""trace":false"#), "{expr}");
         assert!(expr.contains(r#""roster":["pv-melee-1v1-0","pv-melee-1v1-1"]"#), "{expr}");
         assert!(expr.contains(r#""ticks":[{"t":0,"intents":[{"creep":"pv-melee-1v1-0","actions":[{"kind":"attack","target":"pv-melee-1v1-1"}]}]}"#), "{expr}");
-        assert!(expr.ends_with(r#"Memory._features.eval.parity_script="melee-1v1";"#), "{expr}");
+        assert!(parts.last().unwrap().ends_with(r#"Memory._features.eval.parity_script="melee-1v1";"#), "{parts:?}");
         let off = clear_expression();
         assert!(off.starts_with("delete Memory.parity_script;"));
         assert!(off.ends_with(r#"parity_script="";"#));
@@ -1216,6 +1803,308 @@ mod tests {
         let b = seed_creeps_for(&v, 1);
         assert_eq!((a.len(), b.len()), (1, 1));
         assert_eq!(a[0].body[0].part, "tough");
+    }
+
+    /// A creep line as the driver prints it, from either owner's console (`mine` = printed by the
+    /// owning bot, which is the only one that fills `did`).
+    fn creep_line(t: u32, n: &str, mine: bool, x: u8, hits: u32, fatigue: u32, did: &[&str]) -> Pv1Line {
+        Pv1Line::Creep(Pv1Creep {
+            g: 100 + t,
+            t,
+            n: n.into(),
+            mine,
+            x,
+            y: 25,
+            hits,
+            hits_max: 200,
+            fatigue,
+            parts: vec![("attack".into(), 100, None), ("move".into(), 100, None)],
+            did: did.iter().map(|d| d.to_string()).collect(),
+        })
+    }
+
+    fn tower_line(t: u32, label: &str, energy: u32, did: &[&str]) -> Pv1Line {
+        Pv1Line::Tower(Pv1Tower {
+            g: 100 + t,
+            t,
+            tw: label.into(),
+            hits: 3000,
+            energy,
+            did: did.iter().map(|d| d.to_string()).collect(),
+        })
+    }
+
+    /// THE root-cause pin for the first captures (kite-r3 / heal-race / tower-rampart): the acting
+    /// identity prints the other owner's actors with an empty `did` whether or not that bot acted,
+    /// so a trace built from ONE console cannot tell "the other bot moved" from "the other bot has
+    /// no code". The merge takes `did` from the owning bot's console (state fields must agree),
+    /// and the execution gate refuses a trace whose scripted actor stayed silent or whose intent
+    /// the API rejected. RED before the fix: the kite-r3 capture (pv-kite-r3-1 `did:[]`, x=25,
+    /// fatigue 0 on every tick) was written as server evidence.
+    #[test]
+    fn merge_takes_did_from_the_owning_bot_and_the_gate_rejects_a_silent_owner() {
+        let v = load_catalog("kite-r3").unwrap();
+        // The acting identity's console: its own kiter acts, the other owner's creep shows did:[].
+        let primary: Vec<Pv1Line> = (0..3)
+            .flat_map(|t| {
+                vec![
+                    creep_line(t, "pv-kite-r3-0", true, 22 - t as u8, 400, 0, &["ranged_attack:pv-kite-r3-1", "move:left"]),
+                    creep_line(t, "pv-kite-r3-1", false, 25, 180, 0, &[]),
+                ]
+            })
+            .collect();
+        let mut trace = LiveTrace::from_lines(&primary);
+        // Exactly what the first capture recorded: the other owner silent → the gate refuses.
+        let err = verify_script_executed(&v, &trace, 3).unwrap_err().to_string();
+        assert!(err.contains("owner \"ibex-2\" never executed its script"), "{err}");
+        assert!(err.contains("pv-kite-r3-1 (t=0,1,2)"), "{err}");
+        assert!(err.contains("deploy --user ibex-2"), "{err}");
+
+        // The other owner's console: the same state, its own creep with the issued move.
+        let theirs: Vec<Pv1Line> = (0..3)
+            .flat_map(|t| {
+                vec![
+                    creep_line(t, "pv-kite-r3-0", false, 22 - t as u8, 400, 0, &[]),
+                    creep_line(t, "pv-kite-r3-1", true, 25, 180, 0, &["move:left"]),
+                ]
+            })
+            .collect();
+        trace.merge_owner("ibex-2", &theirs).unwrap();
+        let c = &trace.ticks[&1].creeps["pv-kite-r3-1"];
+        assert!(!c.mine, "`mine` stays relative to the acting identity");
+        assert_eq!(c.did, vec!["move:left".to_string()]);
+        assert_eq!(trace.ticks[&1].creeps["pv-kite-r3-0"].did.len(), 2, "the acting identity's did is kept");
+        assert!(verify_script_executed(&v, &trace, 3).unwrap().is_empty());
+
+        // A creep intent the API refused (the real kite-r3 recapture: `move:left!Tired` while the
+        // kiter's target rests off the swamp step) is script semantics both engines model — kept
+        // as evidence, surfaced as a warning, never a failure.
+        let mut tired = trace.clone();
+        tired.ticks.get_mut(&2).unwrap().creeps.get_mut("pv-kite-r3-1").unwrap().did = vec!["move:left!Tired".into()];
+        let warnings = verify_script_executed(&v, &tired, 3).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("pv-kite-r3-1 t=2 move:left!Tired") && warnings[0].contains("recorded as evidence"), "{warnings:?}");
+
+        // A dead actor is exempt (no line at that tick), and ticks past the capture are ignored.
+        let mut dead = trace.clone();
+        dead.ticks.get_mut(&2).unwrap().creeps.remove("pv-kite-r3-1");
+        verify_script_executed(&v, &dead, 3).unwrap();
+        verify_script_executed(&v, &LiveTrace::from_lines(&primary[..2]), 1).unwrap_err();
+
+        // The two consoles must agree on the state they both print.
+        let disagree = vec![creep_line(1, "pv-kite-r3-1", true, 24, 180, 8, &["move:left"])];
+        let err = trace.merge_owner("ibex-2", &disagree).unwrap_err().to_string();
+        assert!(err.contains("not describing the same tick"), "{err}");
+    }
+
+    /// The tower half of the same pin: the tower-rampart capture showed t0 at 1000 energy on every
+    /// frame with no trace of the rejected `attack` — the driver's tower line carried no `did`.
+    /// Now a tower whose owner does not hold the room prints `tower:attack:<target>!` and the
+    /// gate names the controller rule; a silent tower (no did at all) is refused too.
+    #[test]
+    fn tower_execution_gate_sees_rejected_and_silent_towers() {
+        let v = load_catalog("tower-rampart").unwrap();
+        let mut trace = LiveTrace::from_lines(&[
+            creep_line(0, "pv-tower-rampart-0", false, 25, 600, 0, &[]),
+            tower_line(0, "t0", 1000, &["tower:attack:pv-tower-rampart-0!RclNotEnough"]),
+            creep_line(1, "pv-tower-rampart-0", false, 25, 600, 0, &[]),
+            tower_line(1, "t0", 1000, &["tower:attack:pv-tower-rampart-0!RclNotEnough"]),
+        ]);
+        let err = verify_script_executed(&v, &trace, 2).unwrap_err().to_string();
+        assert!(err.contains("owner \"private-server\": the game API REJECTED"), "{err}");
+        assert!(err.contains("t0 t=0 tower:attack:pv-tower-rampart-0!RclNotEnough"), "{err}");
+        assert!(err.contains("room controller"), "{err}");
+
+        // A pre-error-code driver's bare `!` is refused the same way.
+        fn set(trace: &mut LiveTrace, did: &[&str]) {
+            for t in 0..2 {
+                trace.ticks.get_mut(&t).unwrap().towers.get_mut("t0").unwrap().did = did.iter().map(|d| d.to_string()).collect();
+            }
+        }
+        set(&mut trace, &["tower:attack:pv-tower-rampart-0!"]);
+        assert!(verify_script_executed(&v, &trace, 2).unwrap_err().to_string().contains("REJECTED"));
+
+        set(&mut trace, &[]);
+        let err = verify_script_executed(&v, &trace, 2).unwrap_err().to_string();
+        assert!(err.contains("never executed its script") && err.contains("t0 (t=0,1)"), "{err}");
+
+        // Out of energy is the one refusal the sim models (`can_fire`): evidence, not a defect.
+        set(&mut trace, &["tower:attack:pv-tower-rampart-0!NotEnoughEnergy"]);
+        assert!(verify_script_executed(&v, &trace, 2).unwrap().is_empty());
+
+        set(&mut trace, &["tower:attack:pv-tower-rampart-0"]);
+        assert!(verify_script_executed(&v, &trace, 2).unwrap().is_empty());
+
+        // `!Missing` while the target still stands is a defect; once the target is dead (no line
+        // for it that tick — the real recapture killed the creep at t=9 and the script keeps
+        // naming it) the driver makes no call and neither does the sim: evidence.
+        set(&mut trace, &["tower:attack:pv-tower-rampart-0!Missing"]);
+        assert!(verify_script_executed(&v, &trace, 2).unwrap_err().to_string().contains("!Missing"));
+        trace.ticks.get_mut(&1).unwrap().creeps.remove("pv-tower-rampart-0");
+        let err = verify_script_executed(&v, &trace, 2).unwrap_err().to_string();
+        assert!(err.contains("t0 t=0") && !err.contains("t0 t=1"), "only the standing-target tick is refused: {err}");
+        trace.ticks.get_mut(&0).unwrap().creeps.remove("pv-tower-rampart-0");
+        assert!(verify_script_executed(&v, &trace, 2).unwrap().is_empty());
+        // The other owner's console carries the tower line without did; the merge keeps ours.
+        trace.merge_owner("ibex-2", &[tower_line(0, "t0", 1000, &[])]).unwrap();
+        assert_eq!(trace.ticks[&0].towers["t0"].did.len(), 1);
+        // The parser accepts a tower line without `did` (older driver) and with it.
+        let lines = parse_pv1(concat!(
+            r#"{"ts_ms":0,"tick":null,"kind":"log","line":"(INFO) screeps_ibex::eval_parity: PV1 {\"g\":1,\"t\":0,\"tw\":\"t0\",\"hits\":3000,\"energy\":1000}"}"#,
+            "\n",
+            r#"{"ts_ms":0,"tick":null,"kind":"log","line":"(INFO) screeps_ibex::eval_parity: PV1 {\"g\":1,\"t\":1,\"tw\":\"t0\",\"hits\":3000,\"energy\":990,\"did\":[\"tower:attack:pv-x-0\"]}"}"#,
+        ));
+        assert_eq!(lines.len(), 2);
+        assert!(matches!(&lines[0], Pv1Line::Tower(t) if t.did.is_empty()));
+        assert!(matches!(&lines[1], Pv1Line::Tower(t) if t.did == vec!["tower:attack:pv-x-0".to_string()]));
+    }
+
+    /// Tower beds hand the bed room's controller to the tower owner at the engine's
+    /// `CONTROLLER_STRUCTURES.tower` level for that many towers; two tower owners cannot share one
+    /// controller.
+    #[test]
+    fn tower_beds_need_the_controller_at_the_tower_ladder_level() {
+        assert_eq!(rcl_for_towers(0).unwrap(), None);
+        assert_eq!(rcl_for_towers(1).unwrap(), Some(3));
+        assert_eq!(rcl_for_towers(2).unwrap(), Some(5));
+        assert_eq!(rcl_for_towers(3).unwrap(), Some(7));
+        assert_eq!(rcl_for_towers(6).unwrap(), Some(8));
+        assert!(rcl_for_towers(7).is_err());
+        let v = load_catalog("tower-rampart").unwrap();
+        assert_eq!(tower_owner(&v).unwrap().unwrap().user, "private-server");
+        assert_eq!(tower_owner(&load_catalog("melee-1v1").unwrap()).unwrap(), None);
+        let mut two = v.clone();
+        two.towers.push(VecTower { id: "t1".into(), owner: 1, x: 30, y: 25, energy: 1000, hits: 3000, hits_max: 3000 });
+        assert!(tower_owner(&two).unwrap_err().to_string().contains("different owners"));
+    }
+
+    /// The "remove everything new" set: what the room holds at bed end minus the pre-bed snapshot,
+    /// by DB id — the seeded pv-* objects AND whatever the owning bot did with its ~60-tick
+    /// "colony" during a tower bed's controller claim. RED before: the bed's cleanup removed
+    /// only pv-* creeps and the seeded rampart/wall/tower tiles, so the first tower-rampart
+    /// capture left a spawn construction site, six extension sites + a completed extension and
+    /// two container sites standing in W9N7.
+    #[test]
+    fn bed_end_removes_every_object_not_in_the_pre_bed_snapshot() {
+        let obj = |id: &str, kind: &str| RoomObjectRef { id: id.into(), kind: kind.into() };
+        // Before the claim: the room's intrinsics + the primary bot's remote-mining container/creep.
+        let snapshot = vec![obj("c0", "controller"), obj("s0", "source"), obj("s1", "source"), obj("k0", "container"), obj("h0", "creep")];
+        // At bed end: the seeded pv-* creeps/tower, the bot's construction sites, a completed
+        // extension, its builder — and the remote hauler `h0` has left the room (nothing to do).
+        let current = vec![
+            obj("c0", "controller"),
+            obj("s0", "source"),
+            obj("s1", "source"),
+            obj("k0", "container"),
+            obj("pv0", "creep"),
+            obj("t0", "tower"),
+            obj("cs0", "constructionSite"),
+            obj("cs1", "constructionSite"),
+            obj("e0", "extension"),
+            obj("b0", "creep"),
+        ];
+        let doomed = objects_not_in(&snapshot, &current);
+        let ids: Vec<&str> = doomed.iter().map(|o| o.id.as_str()).collect();
+        assert_eq!(ids, ["pv0", "t0", "cs0", "cs1", "e0", "b0"], "everything new, in room order; nothing from the snapshot");
+        assert_eq!(summarize_kinds(&doomed), "constructionSitex2, creepx2, extensionx1, towerx1");
+        assert!(objects_not_in(&snapshot, &snapshot).is_empty(), "an untouched room removes nothing");
+        assert!(objects_not_in(&snapshot, &[]).is_empty(), "objects that left the room are not listed");
+        assert_eq!(objects_not_in(&[], &current).len(), current.len(), "the helper is a plain set difference — the EMPTY-snapshot refusal lives in run_bed and the builder");
+        // The removal builder gets exactly the snapshot ids as its keep set.
+        let keep: Vec<String> = snapshot.iter().map(|o| o.id.clone()).collect();
+        let cmd = server::cmd_remove_objects_not_in("W9N7", &keep);
+        assert!(cmd.contains(r#"new Set(["c0","s0","s1","k0","h0"])"#), "{cmd}");
+    }
+
+    /// The stale-claim rule (RED before: ANY controller held by a bed owner id was forced to
+    /// neutral — the primary bot's own colony rooms included, since `private-server` is a bed
+    /// owner): only a row carrying this harness's `parityClaim` marker with the claim's shape is
+    /// released, and to the row the marker saved (a reservation comes back, not a bare neutral);
+    /// an owned room without the marker is refused with the text that says so.
+    #[test]
+    fn only_a_marked_parity_claim_is_released_and_owned_rooms_are_refused() {
+        let saved = ControllerOwnership {
+            level: 0,
+            reservation: Some(serde_json::json!({"user": "u1", "endTime": 19131303})),
+            ..Default::default()
+        };
+        let live = ControllerOwnership {
+            user: Some("u1".into()),
+            level: 3,
+            progress: 0,
+            downgrade_time: Some(1_019_131_400),
+            reservation: None,
+            safe_mode: None,
+            safe_mode_cooldown: None,
+            safe_mode_available: Some(0),
+            parity_claim: Some(Box::new(saved.clone())),
+        };
+        assert_eq!(stale_claim(&live), StaleClaim::Release { holder: "u1", before: &saved });
+        // The release restores what was saved — the reservation included — not a bare neutral.
+        let StaleClaim::Release { holder, before } = stale_claim(&live) else { unreachable!() };
+        let restore = server::cmd_restore_controller("W9N7", holder, before);
+        assert!(restore.contains(r#""reservation":{"endTime":19131303,"user":"u1"}"#), "{restore}");
+        assert!(restore.contains(r#""$unset":{"downgradeTime":true,"parityClaim":true,"safeMode":true,"safeModeAvailable":true,"safeModeCooldown":true,"user":true}"#), "{restore}");
+
+        // A bed owner's REAL colony (no marker, a real downgrade timeline): refused, never released.
+        let colony = ControllerOwnership {
+            user: Some("u1".into()),
+            level: 6,
+            progress: 40_000,
+            downgrade_time: Some(19_200_000),
+            ..Default::default()
+        };
+        assert_eq!(stale_claim(&colony), StaleClaim::Owned { holder: "u1" });
+        let text = owned_room_refusal("W9N8", "u1");
+        assert!(text.contains("owned by user u1 and carries no parity claim marker"), "{text}");
+        assert!(text.contains("never touches a room a user holds"), "{text}");
+        assert!(text.contains("--room"), "{text}");
+        // Neutral (reserved or not): nothing to release.
+        assert_eq!(stale_claim(&saved), StaleClaim::Neutral);
+        assert_eq!(stale_claim(&ControllerOwnership::default()), StaleClaim::Neutral);
+        // A marker on a row that no longer has the claim's shape is not trusted either.
+        let mut odd = live.clone();
+        odd.downgrade_time = Some(19_200_000);
+        assert_eq!(stale_claim(&odd), StaleClaim::Owned { holder: "u1" });
+    }
+
+    /// The deployed-code gate: the second owner with only the kit's bootstrap `main` (what the
+    /// warm world had for ibex-2 when the first captures ran), a different build, or an inactive
+    /// runtime is refused with the deploy command; identical active builds pass.
+    #[test]
+    fn owner_code_gate_requires_the_same_active_build() {
+        let bot = |user: &str, fp: Option<&str>, modules: &[&str], active: u64| CodeFingerprint {
+            user: user.into(),
+            branch: Some("default".into()),
+            modules: modules.iter().map(|m| m.to_string()).collect(),
+            fingerprint: fp.map(str::to_string),
+            active,
+        };
+        let owners = vec![("private-server".to_string(), "u1".to_string()), ("ibex-2".to_string(), "u2".to_string())];
+        let wasm = ["main", "screeps_ibex", "screeps_ibex_bg"];
+        let ok = [bot("u1", Some("abc"), &wasm, 10000), bot("u2", Some("abc"), &wasm, 10000)];
+        assert!(verify_owner_code(&ok, &owners).unwrap().is_empty());
+        // Same modules, different bytes (a tree edited between the two deploys): a warning, not a refusal.
+        let differ = [bot("u1", Some("abc"), &wasm, 10000), bot("u2", Some("def"), &wasm, 10000)];
+        let warnings = verify_owner_code(&differ, &owners).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("different BUILD") && warnings[0].contains("def vs abc"), "{warnings:?}");
+
+        let empty = [bot("u1", Some("abc"), &wasm, 10000), bot("u2", Some("000"), &["main"], 0)];
+        let err = verify_owner_code(&empty, &owners).unwrap_err().to_string();
+        assert!(err.contains("\"ibex-2\" runs DIFFERENT code") && err.contains("deploy --user ibex-2"), "{err}");
+
+        let none = [bot("u1", Some("abc"), &wasm, 10000), bot("u2", None, &[], 0)];
+        let err = verify_owner_code(&none, &owners).unwrap_err().to_string();
+        assert!(err.contains("no active-world code") && err.contains("deploy --user ibex-2"), "{err}");
+
+        // An inactive runtime (the driver's no-objects rule) is not a code problem — the bed
+        // re-activates every owner after seeding — so it passes here.
+        let inactive = [bot("u1", Some("abc"), &wasm, 10000), bot("u2", Some("abc"), &wasm, 0)];
+        assert!(verify_owner_code(&inactive, &owners).unwrap().is_empty());
+
+        let bare = [bot("u1", Some("abc"), &["main"], 10000), bot("u2", Some("abc"), &["main"], 10000)];
+        assert!(verify_owner_code(&bare, &owners).unwrap_err().to_string().contains("not a bot build"));
     }
 
     /// The nightly lane (D6): `cargo test -p screeps-ibex-eval -- --ignored parity_nightly`. Needs the

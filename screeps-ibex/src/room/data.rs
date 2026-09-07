@@ -312,7 +312,13 @@ impl RoomDynamicVisibilityData {
     /// observation — safe mode runs on a fixed timer, so this stays accurate
     /// without fresh visibility.
     pub fn safe_mode_active(&self) -> bool {
-        self.safe_mode_end.map(|end| game::time() < end).unwrap_or(false)
+        self.safe_mode_active_at(game::time())
+    }
+
+    /// [`Self::safe_mode_active`] evaluated at an explicit tick — the `game::*`-free form a host-tested
+    /// caller (the F10 rally evidence adapter, which already carries `now`) reads.
+    pub fn safe_mode_active_at(&self, now: u32) -> bool {
+        self.safe_mode_end.map(|end| now < end).unwrap_or(false)
     }
 
     pub fn controller_level(&self) -> Option<u8> {

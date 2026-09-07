@@ -220,7 +220,13 @@ impl Mission for TowerMission {
         })?;
 
         let towers = structures.towers();
-        let my_towers: Vec<_> = towers.iter().filter(|t| t.my()).collect();
+        // Towers the H5 parity driver scripts this tick are its alone: the engine keeps one
+        // tower intent per tick (heal > repair > attack), so a mission repair/heal here would
+        // replace the script's shot and the capture would measure this mission, not the engine.
+        let my_towers: Vec<_> = towers
+            .iter()
+            .filter(|t| t.my() && !system_data.parity_reserved.reserves_tower(t.pos()))
+            .collect();
 
         if my_towers.is_empty() {
             return Ok(MissionResult::Running);

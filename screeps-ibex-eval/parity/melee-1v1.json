@@ -2,7 +2,7 @@
   "v": 1,
   "scenario": "melee-1v1",
   "room": "W9N7",
-  "owners": [ { "user": "ibex", "player": 0 }, { "user": "ibex-2", "player": 1 } ],
+  "owners": [ { "user": "private-server", "player": 0 }, { "user": "ibex-2", "player": 1 } ],
   "ticks": 6,
   "creeps": [
     { "name": "pv-melee-1v1-0", "owner": 0, "x": 24, "y": 25,

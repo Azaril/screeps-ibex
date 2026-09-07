@@ -62,8 +62,10 @@ pub fn standoff_one_tile(structure: Position, toward: Position) -> Position {
 /// `squad_ready_to_depart` (rally gate) + `should_hold_at_boundary` (boundary cohesion) — the pure P-OBJ
 /// #23 gates, lifted to the shared `screeps_combat_decision::rally` kernel (K0 / ADR 0028) so the bot and
 /// the offline lifecycle harness share ONE implementation. Re-exported here so existing call sites
-/// (`squad_manager`, `advance_squad_virtual_position`) are unchanged.
-pub use screeps_combat_decision::rally::{ready_to_depart_gate, should_hold_at_boundary, target_is_uncontested};
+/// (`squad_manager`, `advance_squad_virtual_position`) are unchanged. (The per-tick-view classifier
+/// `target_is_uncontested` is no longer re-exported: the manager reads the F10 evidence classifier
+/// `rally::target_is_uncontested_by_evidence` directly.)
+pub use screeps_combat_decision::rally::{ready_to_depart_gate, should_hold_at_boundary};
 
 pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Position) {
     // P-OBJ #23 invader no-engage ROOT CAUSE: count ONLY members with a resolved position. A still-

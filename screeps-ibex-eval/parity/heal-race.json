@@ -2,7 +2,7 @@
   "v": 1,
   "scenario": "heal-race",
   "room": "W9N7",
-  "owners": [ { "user": "ibex", "player": 0 }, { "user": "ibex-2", "player": 1 } ],
+  "owners": [ { "user": "private-server", "player": 0 }, { "user": "ibex-2", "player": 1 } ],
   "ticks": 12,
   "creeps": [
     { "name": "pv-heal-race-0", "owner": 0, "x": 25, "y": 25,

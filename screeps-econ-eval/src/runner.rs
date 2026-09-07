@@ -306,7 +306,7 @@ pub fn run_world(
     // harvesters across ALL sources so remotes are mined from t0 (the K4 spawn kernel already covers
     // every source over time; this just warm-starts the remote lanes).
     let home_room = world.spawns.first().map(|s| s.pos.room_name());
-    let has_remotes = home_room.map_or(false, |hr| world.sources.iter().any(|s| s.pos.room_name() != hr));
+    let has_remotes = home_room.is_some_and(|hr| world.sources.iter().any(|s| s.pos.room_name() != hr));
     let n_sources = world.sources.len().max(1);
     let mut next_harvester = 0usize;
     for (id, work, _carry) in initial {
@@ -2154,8 +2154,7 @@ mod tests {
             furniture_tiles: Vec::new(),
         };
         let terrain = w.movement.terrain.clone();
-        let mut cfg = crate::market::MarketArmCfg::default();
-        cfg.deposit_reselect = deposit_reselect;
+        let cfg = crate::market::MarketArmCfg { deposit_reselect, ..crate::market::MarketArmCfg::default() };
         let mut opts = RunOptions::new(PolicyConfig::market(cfg), RecoverConsts::default(), 400);
         opts.goal = RunGoal::Horizon; // run the full horizon regardless of lane recovery
         (w, terrain, info, opts)

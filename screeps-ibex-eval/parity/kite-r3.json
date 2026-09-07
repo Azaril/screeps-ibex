@@ -2,7 +2,7 @@
   "v": 1,
   "scenario": "kite-r3",
   "room": "W9N7",
-  "owners": [ { "user": "ibex", "player": 0 }, { "user": "ibex-2", "player": 1 } ],
+  "owners": [ { "user": "private-server", "player": 0 }, { "user": "ibex-2", "player": 1 } ],
   "ticks": 10,
   "creeps": [
     { "name": "pv-kite-r3-0", "owner": 0, "x": 22, "y": 25,

@@ -48,6 +48,8 @@ pub struct MissionSystemData<'a> {
     pathfinder: Write<'a, PathfinderService>,
     governor: Read<'a, GovernorSnapshot>,
     features: Read<'a, crate::features::Features>,
+    /// Objects the H5 parity driver has scripted this tick (empty outside a scripted bed).
+    parity_reserved: Read<'a, crate::eval_parity::ParityReserved>,
     squad_contexts: WriteStorage<'a, SquadContext>,
     mapping: Read<'a, EntityMappingData>,
     threat_data: ReadStorage<'a, RoomThreatData>,
@@ -85,6 +87,9 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub governor: GovernorSnapshot,
     /// The tick's feature flags (Copy — read freely).
     pub features: crate::features::Features,
+    /// Objects the H5 parity driver has scripted this tick — missions leave them alone
+    /// (`missions::tower` skips reserved towers; see `eval_parity::ParityReserved`).
+    pub parity_reserved: &'b crate::eval_parity::ParityReserved,
     pub squad_contexts: &'b mut WriteStorage<'a, SquadContext>,
     pub mapping: &'b Read<'a, EntityMappingData>,
     /// Per-room threat intelligence (`military::threatmap`). Used by the colony
@@ -241,6 +246,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 pathfinder: &mut data.pathfinder,
                 governor: *data.governor,
                 features: *data.features,
+                parity_reserved: &data.parity_reserved,
                 squad_contexts: &mut data.squad_contexts,
                 mapping: &data.mapping,
                 threat_data: &data.threat_data,
@@ -304,6 +310,7 @@ impl<'a> System<'a> for RunMissionSystem {
                 pathfinder: &mut data.pathfinder,
                 governor: *data.governor,
                 features: *data.features,
+                parity_reserved: &data.parity_reserved,
                 squad_contexts: &mut data.squad_contexts,
                 mapping: &data.mapping,
                 threat_data: &data.threat_data,

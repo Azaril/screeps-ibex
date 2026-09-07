@@ -22,7 +22,7 @@ see [`screeps-server-kit`'s README](../screeps-server-kit/README.md).
 Configuration is shared: credentials in the repo-root `.screeps.yaml`,
 stack settings in `../screeps-server-kit/config/local.yml`. `smoke` and
 `run` act as the kit's resolved identity — an explicit `--server-name`,
-otherwise the **first `bots:` entry** (so with `bots: [ibex, ibex-2]`
+otherwise the **first `bots:` entry** (so with `bots: [private-server, ibex-2]` (entry names — the `private-server` entry IS the ibex user)
 the smoke deploys and captures bot `ibex`).
 
 `smoke` is the one-command loop: **server up → bootstrap --reset →
@@ -73,6 +73,74 @@ absolute start tick, captures the per-tick `PV1 ` console lines
 (creeps, labelled structures/towers, the absent/gone roster), builds
 the frames, writes the vector with server provenance over the
 placeholder, and prints the immediate sim-vs-capture verdict.
+
+Three preconditions the capture VERIFIES (each refused loudly, none
+assumed — the first five captures were written with the second owner
+inert, which is indistinguishable from "the other side stood still" on
+one console):
+
+- **every owner runs the same build** — the driver ships in the bot's
+  wasm, so a bed owner with only the kit's bootstrap `main` (or a stale
+  build, or `users.active = 0`) never executes its script. The capture
+  fingerprints both owners' active-world code through the server CLI and
+  refuses a mismatch; deploy as EACH owner first
+  (`cargo run -p screeps-server-kit -- deploy --user private-server`,
+  then `... --user ibex-2`);
+- **every owner's console is recorded** — a bot prints `did` (the
+  intents it issued; `!<ErrorCode>` = the game API refused the call,
+  `!Missing` = the scripted target was not there to call on,
+  `!PipelineTaken` = a second action on one simultaneous-action pipeline)
+  only for its OWN actors, and the server delivers a user's console to
+  that user's socket
+  alone, so the run records `console-<owner>.jsonl` per extra owner and
+  merges the per-owner `did` into one trace (state fields must agree);
+- **the script actually executed** — every scripted creep intent / tower
+  action at a captured tick whose actor was standing must show an issued,
+  accepted intent in its owner's `did`; a silent owner or a rejected
+  intent fails the capture instead of becoming a golden vector.
+
+Tower beds: the engine only lets a tower act when its owner holds the
+room controller at a level allowing towers
+(`utils.checkStructureAgainstController` → `ERR_RCL_NOT_ENOUGH` in a
+neutral room), so the capture hands the bed room's controller to the
+tower owner (RCL 3/5/7/8 for 1/2/3/4–6 towers) for the run. What the
+harness guarantees afterwards is exactly this: the controller ROW goes
+back to the snapshot taken before the claim — owner, level, progress,
+downgrade time, reservation, `safeMode` / `safeModeCooldown` /
+`safeModeAvailable` — the room comes off the user's `rooms` list, and
+every object not present in the room before the bed is removed (see
+the cleanup paragraph below). It is NOT a promise that the world is
+untouched: the owning bot's ordinary systems see the room as its own
+for those ~60 ticks (the first tower-rampart capture had the bot plan
+the room, place a spawn site + six extension sites + two container
+sites and complete an extension — the cleanup now takes all of that
+out; per-tick side effects the bot leaves elsewhere, in its Memory or
+the other rooms, are its own). The engine also keeps ONE tower intent
+per tick (`heal` over `repair` over `attack`), so the driver RESERVES
+its scripted towers (`eval_parity::ParityReserved`, a per-tick World
+resource) and the bot's `TowerMission` leaves them alone — without
+that, a mission repair of a remote road silently replaced three of
+twelve scripted shots. The claim writes a `parityClaim` marker (the
+pre-claim row) into the controller: a run that dies before the restore
+leaves it behind, and the next bed releases ONLY a controller carrying
+that marker (restoring the row it saved); an owned bed room without it
+is someone's colony and a tower bed refuses it (pick a neutral room with
+`--room`).
+
+Every bed puts the room back to its pre-bed object set when it ends —
+a snapshot of every `rooms.objects` id is taken after the stale-seed
+sweep and before the claim, and at bed end (success, failure, or a
+panic in the bed body — the cleanup runs under `catch_unwind`) the
+claimed controller is restored, the seeded `pv-*` creeps and the seeded
+rampart/wall/tower tiles are removed, and then everything whose id is
+not in the snapshot is removed (construction sites, built structures,
+spawned creeps; room-intrinsic objects — controller, sources, mineral —
+are never touched, and an empty snapshot refuses to run). A leftover
+tower from one bed is an obstacle in the next (a tower-rampart tower at
+(20,25) blocked every later kite-r3 kiter's last step and looked like a
+movement divergence). The bed room is the primary bot's reserved
+remote, so its own creeps pass through; keep bed lanes off its mining
+paths.
 `--activate-rooms` flags frozen neutral rooms active and restarts the
 stack (the flag is read at boot) — prefer batching that into the one
 restart WS-CLOSE D8 already schedules. Nothing here wipes the world.

@@ -43,7 +43,7 @@ use std::collections::HashMap;
 use crate::creep::{spawning, CreepOwner};
 use crate::entitymappingsystem::EntityMappingData;
 use crate::jobs::squad_combat::{creep_to_dto, structure_to_dto};
-use crate::room::data::RoomData;
+use crate::room::data::{RoomData, RoomDynamicVisibilityData};
 use crate::room::visibilitysystem::{VisibilityQueue, VisibilityRequest, VisibilityRequestFlags, VISIBILITY_PRIORITY_HIGH};
 use crate::serialize::SerializeMarker;
 use crate::spawnsystem::*;
@@ -458,6 +458,66 @@ fn clear_departure_clock(traveling: bool, engaged_once: bool) -> bool {
 /// fix — see the kernel's `unwinnable_contact`). Pure so the empty-room protection is host-testable.
 fn lost_in_room_verdict(in_room_any: bool, hostile_threat_present: bool, present_wins_or_stalls: bool) -> bool {
     in_room_any && hostile_threat_present && !present_wins_or_stalls
+}
+
+/// F10 (2026-09-07 live — the rally-room FLAP): the target's SCOUTED RECORD as the rally classifier's
+/// evidence — `(last_updated, contested)` lifted off the mapped room's `RoomDynamicVisibilityData` (the
+/// persisted per-room observation `UpdateRoomDataSystem` refreshes EVERY tick the room is visible from ANY
+/// eye — member, scout, observer — and which outlives the loss of vision with its `update_tick` as the age).
+/// `contested` is the bot's ONE "militarised presence" notion (the claim-safety gate's): combat-capable
+/// hostile creeps / an active hostile spawn / any hostile tower (`militarily_active() ||
+/// tower_dps_at_edge().is_some()`), plus an enemy safe mode still running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScoutedThreat {
+    last_updated: u32,
+    contested: bool,
+}
+
+impl ScoutedThreat {
+    fn from_record(d: &RoomDynamicVisibilityData, now: u32) -> Self {
+        ScoutedThreat {
+            last_updated: d.last_updated(),
+            contested: d.militarily_active() || d.tower_dps_at_edge().is_some() || d.safe_mode_active_at(now),
+        }
+    }
+}
+
+/// F10: the LIVE-VIEW "militarised presence" read for a room that is visible this tick but has NO scouted
+/// record yet (unmapped — the arrival-tick mapping hole `build_room_combat_dtos`'s `LiveVisible` arm
+/// covers). The SAME notion as [`ScoutedThreat`] so the two evidence sources cannot disagree: a hostile
+/// creep with a working Attack/RangedAttack/Work part, a hostile spawn or tower, or the enemy safe mode.
+/// (A hostile spawn counts regardless of activity here — the DTO carries no `is_active`; the record takes
+/// over the tick the room is mapped, and this arm only ever fires with a member standing in the room.)
+fn live_view_contested(hostiles: &[CombatCreepDto], structures: &[CombatStructureDto], enemy_safe_mode: bool) -> bool {
+    let armed = hostiles
+        .iter()
+        .any(|c| c.has_working(Part::Attack) || c.has_working(Part::RangedAttack) || c.has_working(Part::Work));
+    let fortified = structures.iter().any(|s| {
+        s.ownership == screeps_combat_decision::Ownership::Hostile
+            && matches!(s.structure_type, StructureType::Tower | StructureType::Spawn)
+    });
+    armed || fortified || enemy_safe_mode
+}
+
+/// F10: compose the rally classifier's evidence ([`screeps_combat_decision::rally::TargetIntel`]) from the
+/// scouted record (preferred — it IS the live read on a visible tick, since `UpdateRoomDataSystem` runs
+/// before this system) or, for an unmapped-but-visible room, the live view at age 0; neither ⇒ `Unknown`.
+/// Pure over plain values so the mapping is host-pinned. The age is `now - last_updated`, monotone while
+/// the room is unseen and reset (not flipped) by any sighting — the stability the rally room turns on.
+fn target_intel_evidence(
+    scouted: Option<ScoutedThreat>,
+    live_unmapped: Option<bool>,
+    now: u32,
+) -> screeps_combat_decision::rally::TargetIntel {
+    use screeps_combat_decision::rally::TargetIntel;
+    match (scouted, live_unmapped) {
+        (Some(s), _) => TargetIntel::Observed {
+            age: now.saturating_sub(s.last_updated),
+            contested: s.contested,
+        },
+        (None, Some(contested)) => TargetIntel::Observed { age: 0, contested },
+        (None, None) => TargetIntel::Unknown,
+    }
 }
 
 /// REC-017 — the renew-to-SUFFICIENCY TTL target for a member held/forming at a home room, from its
@@ -2999,8 +3059,13 @@ fn build_room_combat_dtos(
 ) -> (Vec<CombatCreepDto>, Vec<CombatStructureDto>, CombatIntelSource) {
     // The cached path: the room has a RoomData ECS entity (registered in the mapping). `get_creeps`/
     // `get_structures` self-refresh from `game::rooms()` when stale, so this returns the live state.
-    // Cached intel persists even when the room is not CURRENTLY live-visible — RELIABLE, and stable as a
-    // member crosses the room boundary (the rally-oscillation fix relies on this stability).
+    // F10 CAVEAT: `Cached` names the PROVENANCE (a mapped, scouted room), NOT persistence of these DTOs —
+    // the creep/structure caches are PER-TICK (`RoomData::get_creeps/get_structures` expire on every tick
+    // change and refill ONLY from `game::rooms()`), so with no eye in the room this arm returns EMPTY
+    // DTOs. Anything that must be stable across a member stepping over the seam reads the room's
+    // persisted scouted record (`RoomDynamicVisibilityData`, see `ScoutedThreat`) — never these DTOs'
+    // emptiness. (That emptiness is what re-created the rally-room flap one layer below the raw
+    // `game::rooms()` read the rally-oscillation fix removed.)
     if let Some(rd) = mapping.get_room(&room).and_then(|e| room_data.get(e)) {
         let hostiles = rd
             .get_creeps()
@@ -3447,44 +3512,60 @@ fn compute_squad_orders(
     // all-or-nothing gate forever, the live W7N7 stall). An oversized force advancing + dismantling an
     // undefended core as members arrive is harmless, so deploy at the min-viable quorum.
     //
-    // RALLY-OSCILLATION FIX: feed INTEL-RELIABILITY, not raw live vision. The pre-fix code passed
-    // `room_visible = game::rooms().get(target_room).is_some()` — raw CURRENT live vision, which FLAPS as a
-    // solo squad's member crosses the W6N5↔W7N5 boundary → `uncontested` flaps → `shared_rally_point` flips
-    // the rally ROOM between the target and one-room-short → the squad chases a moving rally (a feedback loop:
-    // rally depends on the squad's own vision, which depends on its position, which depends on the rally). We
-    // now pass `intel_source.is_reliable()` (Cached OR LiveVisible). A MAPPED offense target (an assault
-    // objective is ALWAYS mapped — it came from the war.rs offense scan over scouted threat rooms) has STABLE
-    // reliable cached intel, so `uncontested` is stable as a member crosses the boundary — the loop is broken.
-    // Still LOAD-BEARING for the trickle-guard: a GENUINELY-UNKNOWN room (source `None`: unmapped AND no live
-    // vision) is NOT reliable → NOT uncontested → keep the hard full-roster rally (never trust no-vision
-    // emptiness). The fix ONLY relaxes the requirement from CURRENT live vision to RELIABLE intel (cache counts).
-    // ADR 0035 D3 (the C7 fix — RC-11 parity). The pre-fix uncontested classifier passed
-    // `intel_source.is_reliable()` (Cached || LiveVisible) as the intel arg. But an empty-CACHED towered
-    // room is RELIABLE-yet-VACUOUS: `is_reliable()=true` while the cache shows no towers because none were
-    // VISIBLE last scout, not because there are none — so `uncontested` flipped true, `shared_rally_point`
-    // staged AT the target centre, and the squad walked into the towers (the live W4N5 reach↔retreat
-    // spiral). D9 already gated the win-or-stall FAST-PATH on `== LiveVisible` (deliberately NOT
-    // `is_reliable()`), but the uncontested classifier on the SAME path still trusted `is_reliable()` — the
-    // two intel predicates disagreed about what "real intel" means. Fix: feed the uncontested classifier the
-    // SAME real-intel notion as the fast-path (`have_target_intel`, computed below) — a non-empty DTO set
-    // (we actually SEE a hostile/structure) OR an on-arrival LIVE read. An empty-Cached towered room then
-    // classifies CONTESTED → the rally stages ONE ROOM SHORT (out of tower range) → the squad masses + only
-    // advances on the gather quorum, instead of trickling into tower range. A LEGITIMATE LiveVisible-empty
-    // room (a member stands in it and SEES it clear) still classifies uncontested. `rally_intel_reliable`
-    // (`is_reliable()`) is RETAINED for its legacy boundary-oscillation concern but is no longer the gate the
-    // uncontested classifier reads — the two were conflated; this decouples them. Pure per-tick recompute of
-    // the ephemeral DTOs + the existing `intel_source` — no serialized state, no WORLD_FORMAT_VERSION bump.
-    let uncontested_intel =
-        !hostiles.is_empty() || !structures.is_empty() || intel_source == CombatIntelSource::LiveVisible;
+    // HISTORY of this classifier's INTEL input (each fix moved the coupling one layer down; F10 removes it):
+    //   1. RALLY-OSCILLATION FIX: the input was `room_visible = game::rooms().get(target_room).is_some()` —
+    //      raw CURRENT live vision, which FLAPPED as a solo member crossed the W6N5↔W7N5 boundary →
+    //      `uncontested` flapped → `shared_rally_point` flipped the rally ROOM between the target and
+    //      one-room-short → the squad chased a moving rally (a feedback loop: rally ← the squad's own
+    //      vision ← its position ← the rally). Replaced by `intel_source.is_reliable()` (Cached || Live).
+    //   2. ADR 0035 D3 (the C7 fix — RC-11 parity): `is_reliable()` was RELIABLE-yet-VACUOUS for an
+    //      empty-Cached towered room (no towers in the per-tick cache because none were VISIBLE, not because
+    //      there are none) → uncontested → staged AT the target centre → walked into the towers (the live
+    //      W4N5 reach↔retreat spiral). Replaced by the fast-path's real-intel notion: a non-empty DTO set OR
+    //      an on-arrival `LiveVisible` read (`have_target_intel`, below).
+    //   3. F10 (2026-09-07 live — the rally-room FLAP, WS-CLOSE Phase C): (2) re-created (1) one layer down.
+    //      The `Cached` DTOs are a PER-TICK cache refilled ONLY from live vision (see the caveat on
+    //      `build_room_combat_dtos`), so "non-empty DTO set" ⇔ "an eye in the room THIS tick": a member in
+    //      W5N7 saw the core → uncontested → rally=(W5N7,25,25); the eye stepped out → empty DTOs →
+    //      contested → rally=(W4N7,25,25); members shuttled across the seam, `gathered` never held, the
+    //      squad acquired FOCUS on the core and left again, and the undefended L0 core sat at 100000/100000
+    //      through three squad generations (the "objective creeps idling in rooms" class).
+    //
+    // F10 FIX — an EVIDENCE judgement, not a per-tick view and not a latch (per-tick optimal, EP; no
+    // hysteresis): the classifier reads the target's PERSISTED SCOUTED RECORD with its AGE
+    // (`RoomDynamicVisibilityData`, refreshed every visible tick by `UpdateRoomDataSystem` — which runs
+    // BEFORE this system, so on a visible tick the record IS the live read at age 0) through the shared
+    // `rally::target_is_uncontested_by_evidence` kernel: a clear record no older than
+    // `RALLY_INTEL_FRESHNESS_TICKS` ⇒ uncontested; a militarised record (however old) ⇒ contested; no
+    // record and no live vision ⇒ Unknown ⇒ contested (never trust no-vision emptiness — the trickle-guard
+    // is preserved). A member stepping over the seam toggles CURRENT vision but not the record's content
+    // (a sighting REPLACES the record; losing vision leaves it), and the age is monotone while unseen, so
+    // the verdict — and the rally room — changes at most once per unseen stretch (fresh → stale), never
+    // per tick. The D3 property is KEPT and strengthened: a towered room's record carries
+    // `hostile_towers`/`tower_dps_at_edge` from the scout that SAW the towers, independent of the per-tick
+    // DTO cache, so it classifies contested with or without current vision. The unmapped-but-visible
+    // arrival-tick hole (`LiveVisible`) reads the live view through the SAME militarised notion
+    // (`live_view_contested`) at age 0. `have_target_intel` (the RC-11 vacuous-win gate on the P(win)
+    // fast-path) stays on the DTO view — that gate is about whether the VIEW the Lanchester assessment
+    // ran over is real, a different question from whether the ROOM is defended; the two may now differ
+    // (fresh clear record + no eye ⇒ uncontested quorum release without a vacuous-win fast-path), which
+    // is the intended composition. Pure per-tick recompute — no serialized state, no WFV bump.
+    let scouted_threat = mapping
+        .get_room(&target_room)
+        .and_then(|entity| room_data.get(entity))
+        .and_then(|rd| rd.get_dynamic_visibility_data())
+        .map(|d| ScoutedThreat::from_record(d, now));
+    let live_unmapped = (intel_source == CombatIntelSource::LiveVisible)
+        .then(|| live_view_contested(&hostiles, &structures, enemy_safe_mode));
+    let target_intel = target_intel_evidence(scouted_threat, live_unmapped, now);
+    let uncontested = screeps_combat_decision::rally::target_is_uncontested_by_evidence(
+        target_intel,
+        screeps_combat_decision::rally::RALLY_INTEL_FRESHNESS_TICKS,
+    );
+    // Still read by the lost-in-room verdict carrier below (a REAL hostile threat in the in-room view).
     let no_hostile_towers = !structures
         .iter()
         .any(|s| s.structure_type == StructureType::Tower && s.ownership == screeps_combat_decision::Ownership::Hostile);
-    let uncontested = crate::military::formation::target_is_uncontested(
-        uncontested_intel,
-        hostiles.is_empty(),
-        no_hostile_towers,
-        !enemy_safe_mode,
-    );
     // REACH BUG #2 — the PROCEED gate is Lanchester P(win)-driven (win-or-stall), NOT composition-
     // completeness (operator: combat-ev-economic-and-pwin-gating). The composition COUNT gate below
     // (`ready_to_depart_gate`) still SIZES the spawn and is the legacy/uncontested proceed path. But the
@@ -3511,10 +3592,13 @@ fn compute_squad_orders(
     // re-enables the instant real DTOs arrive (room visible/cached non-empty). This PRESERVES the P(win)
     // win-or-stall for REAL-intel targets (operator directive, D7) but stops it firing on vacuous no-intel
     // wins. Pure read of the ephemeral DTOs + the existing `intel_source` — no serialized state, no WFV bump.
-    // ADR 0035 D3: this is the SAME real-intel predicate the uncontested classifier now reads
-    // (`uncontested_intel`, above) — ONE source of truth for "real intel" on this path (the C7 inconsistency
-    // between the fast-path gate and the uncontested classifier is closed; they can no longer disagree).
-    let have_target_intel = uncontested_intel;
+    // ADR 0035 D3 → F10: this is the REAL-VIEW predicate (a non-empty DTO set, or an on-arrival live read).
+    // D3 had the uncontested classifier share it; F10 moved that classifier onto the persisted scouted
+    // record (see above) because "the view is real" ⇔ "an eye is in the room this tick", which is exactly
+    // the per-tick coupling that flapped the rally. This gate KEEPS the view predicate: it exists to stop a
+    // Lanchester "win" computed over an EMPTY view (RC-11), and only the view can answer that.
+    let have_target_intel =
+        !hostiles.is_empty() || !structures.is_empty() || intel_source == CombatIntelSource::LiveVisible;
     let fast_path_allowed = screeps_combat_decision::winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel);
     // DEPLOY-THEN-RETREAT (the no-intel roster-completion deadlock valve). A no-intel/contested target
     // otherwise falls to the FULL-ROSTER `ready_to_depart_gate`; if the last member never spawns or an
@@ -4368,11 +4452,11 @@ mod tests {
 
         clear_member_trackers(&mut fp, a);
 
-        assert!(fp.member_rally_dist.get(&(a, 100)).is_none(), "obj A rally tracker dropped");
+        assert!(!fp.member_rally_dist.contains_key(&(a, 100)), "obj A rally tracker dropped");
         assert_eq!(fp.member_rally_dist.get(&(b, 100)).copied(), Some(5), "obj B rally tracker retained");
-        assert!(fp.member_target_dist.get(&(a, 101)).is_none(), "obj A target tracker dropped");
+        assert!(!fp.member_target_dist.contains_key(&(a, 101)), "obj A target tracker dropped");
         assert_eq!(fp.member_target_dist.get(&(b, 102)).copied(), Some(4), "obj B target tracker retained");
-        assert!(fp.member_solo_stall.get(&(a, 100)).is_none(), "obj A stall tracker dropped");
+        assert!(!fp.member_solo_stall.contains_key(&(a, 100)), "obj A stall tracker dropped");
         assert_eq!(fp.member_solo_stall.get(&(b, 103)).copied(), Some(10), "obj B stall tracker retained");
     }
 
@@ -4645,24 +4729,99 @@ mod tests {
     }
 
     #[test]
-    fn rally_gate_picks_quorum_only_for_visible_clear_rooms() {
-        // FIX 1: the manager composes `target_is_uncontested` (with the live `game::rooms()` visibility
-        // flag) with `ready_to_depart_gate`. This test exercises that exact composition for the four cases:
-        // visible+clear deploys at quorum, contested/unseen holds for the full roster.
+    fn rally_gate_picks_quorum_only_for_fresh_clear_evidence() {
+        // FIX 1 → F10: the manager composes `target_intel_evidence` → `target_is_uncontested_by_evidence`
+        // (the scouted record with its age) with `ready_to_depart_gate`. This test exercises that exact
+        // composition: a FRESH clear record deploys at quorum; an unknown room, a stale clear record, and
+        // a militarised record (a scout that SAW creeps/towers/safe-mode, however long ago) hold for the
+        // full roster.
+        use screeps_combat_decision::rally::{target_is_uncontested_by_evidence, RALLY_INTEL_FRESHNESS_TICKS};
         let p = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), room("W7N7"));
         let three_of_five = [Some(p), Some(p), Some(p), None, None];
-        let gate = |room_visible: bool, no_hostiles: bool, no_towers: bool, no_safe: bool| {
-            let uncontested = crate::military::formation::target_is_uncontested(room_visible, no_hostiles, no_towers, no_safe);
+        let now = 10_000;
+        let gate = |scouted: Option<ScoutedThreat>, live_unmapped: Option<bool>| {
+            let intel = target_intel_evidence(scouted, live_unmapped, now);
+            let uncontested = target_is_uncontested_by_evidence(intel, RALLY_INTEL_FRESHNESS_TICKS);
             crate::military::formation::ready_to_depart_gate(&three_of_five, 5, uncontested)
         };
-        // Visible + clear + no towers + no safe mode → uncontested → deploy at quorum with 3/5.
-        assert!(gate(true, true, true, true), "visible + clear → quorum deploys 3/5");
-        // UNSEEN room (empty DTOs, no_hostiles/no_towers read true) → full roster → hold at 3/5.
-        assert!(!gate(false, true, true, true), "unseen room (empty DTOs) → full-roster gate holds 3/5");
-        // Visible but a hostile creep / tower / safe mode → contested → full roster → hold at 3/5.
-        assert!(!gate(true, false, true, true), "hostiles present → full-roster gate holds 3/5");
-        assert!(!gate(true, true, false, true), "hostile tower present → full-roster gate holds 3/5");
-        assert!(!gate(true, true, true, false), "enemy safe mode → full-roster gate holds 3/5");
+        let record = |age: u32, contested: bool| Some(ScoutedThreat { last_updated: now - age, contested });
+        // Seen clear this tick (a member/scout in the room) → uncontested → deploy at quorum with 3/5.
+        assert!(gate(record(0, false), None), "seen clear now → quorum deploys 3/5");
+        // Seen clear inside the freshness window, no eye now → STILL uncontested (the F10 stability).
+        assert!(gate(record(RALLY_INTEL_FRESHNESS_TICKS, false), None), "fresh clear record, no eye → quorum deploys 3/5");
+        // A clear sighting older than the window → stale → full roster → hold at 3/5.
+        assert!(!gate(record(RALLY_INTEL_FRESHNESS_TICKS + 1, false), None), "stale clear record → full-roster gate holds 3/5");
+        // NEVER-SEEN room (no record, no vision) → full roster → hold at 3/5 (no-vision emptiness is not clear).
+        assert!(!gate(None, None), "unknown room → full-roster gate holds 3/5");
+        // A militarised record (creeps / towers / safe mode seen) → contested however old → hold at 3/5.
+        assert!(!gate(record(0, true), None), "militarised now → full-roster gate holds 3/5");
+        assert!(!gate(record(5_000, true), None), "militarised long ago, never seen clear since → holds 3/5");
+        // The unmapped-but-visible arrival hole reads the live view at age 0 through the same notion.
+        assert!(gate(None, Some(false)), "unmapped + live-visible clear → quorum deploys 3/5");
+        assert!(!gate(None, Some(true)), "unmapped + live-visible militarised → holds 3/5");
+        // A record always wins over the unmapped live read (it IS the live read on a visible tick).
+        assert!(!gate(record(0, true), Some(false)), "the scouted record is the evidence when one exists");
+    }
+
+    /// F10 — the evidence adapter over plain values: the record's age is `now - last_updated` (monotone
+    /// while unseen, reset by any sighting), the unmapped live read is age 0, neither is `Unknown`.
+    #[test]
+    fn f10_target_intel_evidence_maps_record_age_and_live_hole() {
+        use screeps_combat_decision::rally::TargetIntel;
+        assert_eq!(
+            target_intel_evidence(Some(ScoutedThreat { last_updated: 900, contested: false }), None, 1000),
+            TargetIntel::Observed { age: 100, contested: false }
+        );
+        assert_eq!(
+            target_intel_evidence(Some(ScoutedThreat { last_updated: 1000, contested: true }), Some(false), 1000),
+            TargetIntel::Observed { age: 0, contested: true },
+            "a mapped record wins over the unmapped live arm"
+        );
+        assert_eq!(target_intel_evidence(None, Some(true), 1000), TargetIntel::Observed { age: 0, contested: true });
+        assert_eq!(target_intel_evidence(None, None, 1000), TargetIntel::Unknown);
+        // A record stamped in the future (a VM reload with a rewound clock) never underflows.
+        assert_eq!(
+            target_intel_evidence(Some(ScoutedThreat { last_updated: 2000, contested: false }), None, 1000),
+            TargetIntel::Observed { age: 0, contested: false }
+        );
+    }
+
+    /// F10 — the live-view "militarised presence" read for the unmapped arrival hole: an armed hostile
+    /// creep, a hostile tower or spawn, or the enemy safe mode; a bare core / neutral walls / a pure-Move
+    /// scout are NOT contested (nothing shoots back), matching the scouted record's notion.
+    #[test]
+    fn f10_live_view_contested_matches_the_militarised_notion() {
+        use screeps_combat_decision::{CombatBodyPart, Ownership};
+        let at = Position::new(RoomCoordinate::new(20).unwrap(), RoomCoordinate::new(20).unwrap(), room("W5N7"));
+        let creep = |parts: &[Part]| CombatCreepDto {
+            id: None,
+            pos: at,
+            hits: 100,
+            hits_max: 100,
+            body: parts.iter().map(|&p| CombatBodyPart { part: p, hits: 100, boost_mult: 1 }).collect(),
+        };
+        let structure = |ty: StructureType, ownership: Ownership| CombatStructureDto {
+            pos: at,
+            structure_type: ty,
+            hits: 1000,
+            hits_max: 1000,
+            ownership,
+            energy: 0,
+        };
+        let core = structure(StructureType::InvaderCore, Ownership::Hostile);
+        let wall = structure(StructureType::Wall, Ownership::Neutral);
+        assert!(!live_view_contested(&[], &[core.clone(), wall.clone()], false), "an undefended core is not contested");
+        assert!(
+            !live_view_contested(&[creep(&[Part::Move, Part::Move])], std::slice::from_ref(&core), false),
+            "a pure-Move scout is not contested"
+        );
+        assert!(live_view_contested(&[creep(&[Part::Move, Part::Attack])], &[], false), "an armed hostile creep is contested");
+        assert!(live_view_contested(&[creep(&[Part::Move, Part::RangedAttack])], &[], false), "a ranged hostile creep is contested");
+        assert!(live_view_contested(&[creep(&[Part::Move, Part::Work])], &[], false), "a hostile dismantler is contested");
+        assert!(live_view_contested(&[], &[structure(StructureType::Tower, Ownership::Hostile)], false), "a hostile tower is contested");
+        assert!(live_view_contested(&[], &[structure(StructureType::Spawn, Ownership::Hostile)], false), "a hostile spawn is contested");
+        assert!(!live_view_contested(&[], &[structure(StructureType::Tower, Ownership::Mine)], false), "our own tower is not");
+        assert!(live_view_contested(&[], &[], true), "an enemy safe mode is contested");
     }
 
     #[test]
@@ -4966,8 +5125,8 @@ mod tests {
     ///   2. carry each member's drain goal as its `tick_orders.squad_movement == Advance{goal, range:0}`
     ///      (the directive the anchorless `decide_movement` reads → tank closes to standoff, healers hold a
     ///      tile back) — exactly what the sim proves.
-    /// Control: a NON-drain Dismantle (`movement = Advance`, anchor set) KEEPS its anchor (formation slots
-    /// byte-unchanged). The single-member drain is also covered (the anchor-drop is harmless there).
+    ///      Control: a NON-drain Dismantle (`movement = Advance`, anchor set) KEEPS its anchor (formation slots
+    ///      byte-unchanged). The single-member drain is also covered (the anchor-drop is harmless there).
     #[test]
     fn drain_reconcile_drops_anchor_and_routes_member_goals_live() {
         use crate::military::squad::SquadPath;
@@ -5120,11 +5279,11 @@ mod tests {
     ///   2. D3 STAMP: every present member's `tick_orders.attack_target == AttackTarget::Structure(pos)` —
     ///      the position-only (`id: None`) focus the job's `resolve_focus` keeps + `translate_intents`
     ///      focus-fires by position (NOT the old `resolve_creep()` drop → undirected fire).
-    /// RED-ability (both revert to master's 0-damage bug): (1) delete the `should_drop_anchor_for_structure_
-    /// siege` block at squad_manager.rs:2537-2539 → `squad_path` stays `Some(anchor)` → the first assert
-    /// fails (the formation parks short of range). (2) revert the D3 stamp so a structure focus stamps a
-    /// creep target / no target → the `attack_target` assert fails. CONTROL: a CREEP focus keeps its anchor
-    /// (formation slots byte-unchanged) and stamps `AttackTarget::Creep`.
+    ///      RED-ability (both revert to master's 0-damage bug): (1) delete the `should_drop_anchor_for_structure_
+    ///      siege` block at squad_manager.rs:2537-2539 → `squad_path` stays `Some(anchor)` → the first assert
+    ///      fails (the formation parks short of range). (2) revert the D3 stamp so a structure focus stamps a
+    ///      creep target / no target → the `attack_target` assert fails. CONTROL: a CREEP focus keeps its anchor
+    ///      (formation slots byte-unchanged) and stamps `AttackTarget::Creep`.
     ///
     /// The `game::*` BOUNDARY documented (what stays live-only): `apply_squad_decision` needs only a `World`
     /// (for the entities), a `CreepOwner` storage (read as `None` here → heal targets resolve to `None`, fine

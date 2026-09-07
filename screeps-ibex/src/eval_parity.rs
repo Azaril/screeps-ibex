@@ -205,7 +205,10 @@ struct Pv1Structure<'a> {
     hits: u32,
 }
 
-/// A labelled tower still standing at its tile (tick-START hits + energy).
+/// A labelled tower still standing at its tile (tick-START hits + energy) plus the tower intents
+/// this driver issued for it this tick (own towers only; `!` = the game API REJECTED the call —
+/// e.g. `ERR_RCL_NOT_ENOUGH` for a tower whose room controller its owner does not hold — so a
+/// capture shows a tower that was told to fire but could not).
 #[derive(Serialize)]
 struct Pv1Tower<'a> {
     g: u32,
@@ -213,6 +216,7 @@ struct Pv1Tower<'a> {
     tw: &'a str,
     hits: u32,
     energy: u32,
+    did: Vec<String>,
 }
 
 /// The roster line: scripted creeps not visible (`absent`) and labelled structures/towers not
@@ -224,6 +228,36 @@ struct Pv1Roster<'a> {
     t: u32,
     absent: Vec<&'a str>,
     gone: Vec<&'a str>,
+}
+
+/// The objects the scripted driver has RESERVED this tick — the bot's ordinary systems must not
+/// act on them, or the capture measures the bot instead of the engine. Towers: the engine keeps
+/// ONE tower intent per tick with `heal` over `repair` over `attack` (`towers/intents.js`), so a
+/// `TowerMission` repair on a scripted tower silently replaces the script's shot (the first
+/// tower-rampart recapture lost three of twelve shots that way). A World resource, refreshed by
+/// [`run`] every tick (empty whenever the driver is off or tracing, so a stale reservation cannot
+/// outlive a bed), read by `missions::tower`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParityReserved {
+    /// Labelled tower tiles of the active scripted bed (`(room, x, y)`).
+    pub tower_tiles: Vec<(RoomName, u8, u8)>,
+}
+
+impl ParityReserved {
+    /// Is the tower standing at `pos` scripted this tick?
+    pub fn reserves_tower(&self, pos: screeps::Position) -> bool {
+        self.tower_tiles
+            .iter()
+            .any(|(room, x, y)| pos.room_name() == *room && pos.x().u8() == *x && pos.y().u8() == *y)
+    }
+}
+
+/// Publish this tick's reservation (empty = nothing reserved).
+fn publish_reserved(world: &mut World, reserved: ParityReserved) {
+    let mut slot = world.entry::<ParityReserved>().or_insert_with(Default::default);
+    if *slot != reserved {
+        *slot = reserved;
+    }
 }
 
 fn part_name(part: Part) -> &'static str {
@@ -259,6 +293,7 @@ fn direction_from_name(name: &str) -> Option<Direction> {
 pub fn run(world: &mut World, features: &Features) {
     let flag = features.eval.parity_script;
     if flag.is_empty() {
+        publish_reserved(world, ParityReserved::default());
         return;
     }
     let root = crate::memory_helper::root();
@@ -301,6 +336,18 @@ pub fn run(world: &mut World, features: &Features) {
         return;
     };
     let prefix = format!("pv-{}-", script.scenario);
+
+    // Reserve the scripted towers for the driver (none while tracing — the bot decides then).
+    publish_reserved(
+        world,
+        ParityReserved {
+            tower_tiles: if script.trace {
+                Vec::new()
+            } else {
+                script.towers.iter().map(|l| (room_name, l.x, l.y)).collect()
+            },
+        },
+    );
 
     // Visible scripted creeps: mine (from Game.creeps) + hostile (a room find), name-sorted.
     let mut visible: BTreeMap<String, (Creep, bool)> = BTreeMap::new();
@@ -352,63 +399,70 @@ pub fn run(world: &mut World, features: &Features) {
                 let mut flags = SimultaneousActionFlags::UNSET;
                 let mut done = Vec::new();
                 for a in &si.actions {
-                    let ok = match a {
-                        ScriptAction::Attack { target } => visible.get(target).is_some_and(|(tc, _)| {
-                            intents::attack(creep, &mut flags, &mut recorder, tc, tc.pos())
-                        }),
-                        ScriptAction::RangedAttack { target } => visible.get(target).is_some_and(|(tc, _)| {
-                            intents::ranged_attack(creep, &mut flags, &mut recorder, tc, tc.pos())
-                        }),
+                    // Sink-routed actions yield `Option<bool>` — `None` = nothing to call on,
+                    // `Some(issued)` = the sink's answer — and `sink_mark` turns that into the
+                    // `did` suffix; the raw controller call carries the API's own verdict.
+                    let suffix = match a {
+                        ScriptAction::Attack { target } => sink_mark(
+                            visible
+                                .get(target)
+                                .map(|(tc, _)| intents::attack(creep, &mut flags, &mut recorder, tc, tc.pos())),
+                        ),
+                        ScriptAction::RangedAttack { target } => sink_mark(
+                            visible
+                                .get(target)
+                                .map(|(tc, _)| intents::ranged_attack(creep, &mut flags, &mut recorder, tc, tc.pos())),
+                        ),
                         ScriptAction::RangedMassAttack => {
-                            intents::ranged_mass_attack(creep, &mut flags, &mut recorder)
+                            sink_mark(Some(intents::ranged_mass_attack(creep, &mut flags, &mut recorder)))
                         }
-                        ScriptAction::Heal { target } => visible.get(target).is_some_and(|(tc, _)| {
-                            intents::heal(creep, &mut flags, &mut recorder, tc, tc.pos())
-                        }),
-                        ScriptAction::RangedHeal { target } => visible.get(target).is_some_and(|(tc, _)| {
-                            intents::ranged_heal(creep, &mut flags, &mut recorder, tc, tc.pos())
-                        }),
-                        ScriptAction::Dismantle { target } => structure_at(target)
-                            .and_then(|s| {
-                                s.as_dismantleable()
-                                    .map(|d| intents::dismantle(creep, &mut flags, &mut recorder, d, s.pos()))
-                            })
-                            .unwrap_or(false),
-                        ScriptAction::AttackStructure { target } => structure_at(target)
-                            .or_else(|| tower_at(target))
-                            .and_then(|s| {
+                        ScriptAction::Heal { target } => sink_mark(
+                            visible
+                                .get(target)
+                                .map(|(tc, _)| intents::heal(creep, &mut flags, &mut recorder, tc, tc.pos())),
+                        ),
+                        ScriptAction::RangedHeal { target } => sink_mark(
+                            visible
+                                .get(target)
+                                .map(|(tc, _)| intents::ranged_heal(creep, &mut flags, &mut recorder, tc, tc.pos())),
+                        ),
+                        ScriptAction::Dismantle { target } => sink_mark(structure_at(target).and_then(|s| {
+                            s.as_dismantleable()
+                                .map(|d| intents::dismantle(creep, &mut flags, &mut recorder, d, s.pos()))
+                        })),
+                        ScriptAction::AttackStructure { target } => {
+                            sink_mark(structure_at(target).or_else(|| tower_at(target)).and_then(|s| {
                                 s.as_attackable()
                                     .map(|a| intents::attack(creep, &mut flags, &mut recorder, a, s.pos()))
-                            })
-                            .unwrap_or(false),
-                        ScriptAction::RangedAttackStructure { target } => structure_at(target)
-                            .or_else(|| tower_at(target))
-                            .and_then(|s| {
+                            }))
+                        }
+                        ScriptAction::RangedAttackStructure { target } => {
+                            sink_mark(structure_at(target).or_else(|| tower_at(target)).and_then(|s| {
                                 s.as_attackable()
                                     .map(|a| intents::ranged_attack(creep, &mut flags, &mut recorder, a, s.pos()))
-                            })
-                            .unwrap_or(false),
+                            }))
+                        }
                         // No sink category exists for attackController (it is not in the
                         // IntentRecorder's table); a raw call, like movement.
                         ScriptAction::AttackController => room
                             .as_ref()
                             .and_then(|r| r.controller())
-                            .is_some_and(|c| creep.attack_controller(&c).is_ok()),
+                            .map(|c| mark(creep.attack_controller(&c)))
+                            .unwrap_or_else(|| MISSING.into()),
                     };
-                    done.push(format!("{}{}", action_label(a), if ok { "" } else { "!" }));
+                    done.push(format!("{}{suffix}", action_label(a)));
                 }
                 if let Some(dir) = &si.mv {
                     match direction_from_name(dir) {
                         Some(d) => {
-                            let ok = creep.move_direction(d).is_ok();
-                            done.push(format!("move:{dir}{}", if ok { "" } else { "!" }));
+                            done.push(format!("move:{dir}{}", mark(creep.move_direction(d))));
                         }
                         None => warn!("parity: unknown direction {dir:?} for {}", si.creep),
                     }
                 }
                 if let Some(target) = &si.pull {
-                    let ok = visible.get(target).is_some_and(|(tc, _)| creep.pull(tc).is_ok());
-                    done.push(format!("pull:{target}{}", if ok { "" } else { "!" }));
+                    let m = visible.get(target).map(|(tc, _)| mark(creep.pull(tc))).unwrap_or_else(|| MISSING.into());
+                    done.push(format!("pull:{target}{m}"));
                 }
                 did.insert(si.creep.clone(), done);
             }
@@ -419,20 +473,19 @@ pub fn run(world: &mut World, features: &Features) {
                 if !tower.my() {
                     continue;
                 }
-                let ok = match &ts.action {
-                    TowerScriptAction::Attack { target } => {
-                        visible.get(target).is_some_and(|(tc, _)| tower.attack(tc).is_ok())
+                // Raw game-API calls carry the API's verdict: `!<ErrorCode>` on rejection (e.g.
+                // `!RclNotEnough` for a tower whose owner does not hold the room controller).
+                let m = match &ts.action {
+                    TowerScriptAction::Attack { target } => visible.get(target).map(|(tc, _)| mark(tower.attack(tc))),
+                    TowerScriptAction::Heal { target } => visible.get(target).map(|(tc, _)| mark(tower.heal(tc))),
+                    TowerScriptAction::Repair { target } => {
+                        structure_at(target).and_then(|s| s.as_repairable().map(|r| mark(tower.repair(r))))
                     }
-                    TowerScriptAction::Heal { target } => {
-                        visible.get(target).is_some_and(|(tc, _)| tower.heal(tc).is_ok())
-                    }
-                    TowerScriptAction::Repair { target } => structure_at(target)
-                        .and_then(|s| s.as_repairable().map(|r| tower.repair(r).is_ok()))
-                        .unwrap_or(false),
-                };
+                }
+                .unwrap_or_else(|| MISSING.into());
                 did.entry(ts.tower.clone())
                     .or_default()
-                    .push(format!("tower:{}{}", tower_label(&ts.action), if ok { "" } else { "!" }));
+                    .push(format!("tower:{}{m}", tower_label(&ts.action)));
             }
         }
     }
@@ -498,6 +551,7 @@ pub fn run(world: &mut World, features: &Features) {
                         tw: &l.id,
                         hits: tower.hits(),
                         energy: tower.store().get_used_capacity(Some(ResourceType::Energy)),
+                        did: did.remove(l.id.as_str()).unwrap_or_default(),
                     };
                     if let Ok(json) = serde_json::to_string(&line) {
                         info!("{PV1_MARKER}{json}");
@@ -518,6 +572,37 @@ pub fn run(world: &mut World, features: &Features) {
     }
     if room.is_none() {
         debug!("parity: no vision of {} at t={t}", script.room);
+    }
+}
+
+/// The `did` suffix for a raw game-API call: empty when accepted, `!<ErrorCode>` when rejected
+/// (the code's Debug name — `Tired`, `RclNotEnough`, `NotEnoughEnergy`, ...), so a capture says
+/// WHY an intent never reached the engine.
+fn mark<E: std::fmt::Debug>(r: Result<(), E>) -> String {
+    match r {
+        Ok(()) => String::new(),
+        Err(e) => format!("!{e:?}"),
+    }
+}
+
+/// The `did` suffix when the scripted target is not visible at all (no call was made).
+const MISSING: &str = "!Missing";
+
+/// The `did` suffix when the guarded intent sink refused the call because an earlier scripted
+/// action on the same creep already took that simultaneous-action pipeline this tick (a script
+/// defect — the engine keeps one action per pipeline; no call was made).
+const PIPELINE_TAKEN: &str = "!PipelineTaken";
+
+/// The `did` suffix for an action routed through the guarded sink (`crate::intents`), whose `bool`
+/// says only whether it ISSUED the call — the sink discards the game API's own verdict — so the
+/// suffix names the one reason the driver itself knows: `None` = the scripted target was not
+/// there to call on (`!Missing`, as for towers), `Some(false)` = the sink refused
+/// (`!PipelineTaken`), `Some(true)` = issued (empty, like an accepted raw call). Never a bare `!`.
+fn sink_mark(issued: Option<bool>) -> String {
+    match issued {
+        Some(true) => String::new(),
+        Some(false) => PIPELINE_TAKEN.into(),
+        None => MISSING.into(),
     }
 }
 
@@ -546,6 +631,24 @@ fn tower_label(a: &TowerScriptAction) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `did` suffix is `!<Reason>` or empty — never a bare `!`: raw calls carry the API's
+    /// error code, sink-routed actions carry the one reason the driver knows (no target / pipeline
+    /// already taken). RED before: a sink-routed action with a dead target printed `attack:pv-x-1!`
+    /// while the same situation on a tower printed `tower:attack:pv-x-1!Missing`.
+    #[test]
+    fn did_suffixes_are_never_a_bare_bang() {
+        assert_eq!(mark::<screeps::ErrorCode>(Ok(())), "");
+        assert_eq!(mark(Err(screeps::ErrorCode::Tired)), "!Tired");
+        assert_eq!(mark(Err(screeps::ErrorCode::RclNotEnough)), "!RclNotEnough");
+        assert_eq!(sink_mark(Some(true)), "");
+        assert_eq!(sink_mark(None), MISSING);
+        assert_eq!(sink_mark(None), "!Missing");
+        assert_eq!(sink_mark(Some(false)), "!PipelineTaken");
+        for s in [mark(Err(screeps::ErrorCode::Busy)), sink_mark(None), sink_mark(Some(false))] {
+            assert!(s.len() > 1 && s.starts_with('!'), "{s:?}");
+        }
+    }
 
     /// The flag type: `Copy`, string-shaped in Memory, empty = off, over-cap names truncated at a
     /// char boundary (never a deserialize error, which would reset EVERY feature to default).
@@ -590,6 +693,24 @@ mod tests {
         assert_eq!(part_name(Part::RangedAttack), "ranged_attack");
     }
 
+    /// The reservation seam the tower mission honours: a scripted tower's tile is reserved, any
+    /// other tile (or the same tile in another room) is not, and the default reserves nothing —
+    /// the state the driver publishes whenever it is off or tracing.
+    #[test]
+    fn reserved_towers_match_by_room_and_tile_only() {
+        use screeps::{Position, RoomCoordinate};
+        let room: RoomName = "W9N7".parse().unwrap();
+        let other: RoomName = "W9N8".parse().unwrap();
+        let at = |r: RoomName, x: u8, y: u8| {
+            Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), r)
+        };
+        let reserved = ParityReserved { tower_tiles: vec![(room, 20, 25)] };
+        assert!(reserved.reserves_tower(at(room, 20, 25)));
+        assert!(!reserved.reserves_tower(at(room, 21, 25)));
+        assert!(!reserved.reserves_tower(at(other, 20, 25)));
+        assert!(!ParityReserved::default().reserves_tower(at(room, 20, 25)));
+    }
+
     /// The structure / tower / roster line shapes `screeps-ibex-eval::parity::parse_pv1` tells
     /// apart by their required keys (`s` / `tw` / `absent`+`gone`) — pinned here as the wire
     /// text so a rename on either side is loud.
@@ -597,10 +718,10 @@ mod tests {
     fn structure_tower_and_roster_lines_have_the_pinned_wire_shape() {
         let s = Pv1Structure { g: 100, t: 3, s: "r0", hits: 4400 };
         assert_eq!(serde_json::to_string(&s).unwrap(), r#"{"g":100,"t":3,"s":"r0","hits":4400}"#);
-        let tw = Pv1Tower { g: 100, t: 3, tw: "t0", hits: 3000, energy: 990 };
+        let tw = Pv1Tower { g: 100, t: 3, tw: "t0", hits: 3000, energy: 990, did: vec!["tower:attack:pv-x-1!RclNotEnough".into()] };
         assert_eq!(
             serde_json::to_string(&tw).unwrap(),
-            r#"{"g":100,"t":3,"tw":"t0","hits":3000,"energy":990}"#
+            r#"{"g":100,"t":3,"tw":"t0","hits":3000,"energy":990,"did":["tower:attack:pv-x-1!RclNotEnough"]}"#
         );
         let r = Pv1Roster { g: 100, t: 3, absent: vec!["pv-x-1"], gone: vec!["r0"] };
         assert_eq!(

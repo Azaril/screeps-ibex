@@ -26,8 +26,8 @@ fn pos(x: u8, y: u8) -> Position {
     Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), room)
 }
 
-/// A fixture with a real refill deficit (spawn under-full), a controller container (Low deposit
-/// + Use withdraw), a provider container (Medium withdraw), storage, and a dropped pile — the
+/// A fixture with a real refill deficit (spawn under-full), a controller container (Low deposit +
+/// Use withdraw), a provider container (Medium withdraw), storage, and a dropped pile — the
 /// same shape the demand-registration tests use.
 fn fixture() -> (EconWorld, LayoutInfo) {
     let mut w = EconWorld::default();

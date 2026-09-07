@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn scout_bid_is_the_declared_intel_floor() {
         assert_eq!(SCOUT_INTEL_BID, 33);
-        assert!(SCOUT_INTEL_BID >= W_BID_MIN && SCOUT_INTEL_BID <= W_BID_MAX);
+        const _: () = assert!(SCOUT_INTEL_BID >= W_BID_MIN && SCOUT_INTEL_BID <= W_BID_MAX);
         assert!(SCOUT_INTEL_BID < quantized_worker_w(1, screeps::UPGRADE_CONTROLLER_POWER));
     }
 

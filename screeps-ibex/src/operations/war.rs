@@ -2555,9 +2555,8 @@ mod tests {
 
         // Simulate fielding N=5 fresh lvl0 cores one after another: each is allowed despite the
         // count already being at/over the cap.
-        let mut offense_count = 0u32;
         let mut fielded = 0u32;
-        for _ in 0..5 {
+        for offense_count in 0..5u32 {
             assert!(
                 offense_cap_allows_new(&lvl0, offense_count, cap),
                 "lvl0 core #{} blocked by cap {} at count {}",
@@ -2565,7 +2564,6 @@ mod tests {
                 cap,
                 offense_count
             );
-            offense_count += 1;
             fielded += 1;
         }
         assert_eq!(fielded, 5, "all 5 lvl0 cores must be fieldable concurrently under cap=1");
@@ -2753,11 +2751,11 @@ mod tests {
 
     /// ADR 0031 §5 #38 PIN — ESCALATE-vs-ABANDON on `assemble_force` = None. The offense loop needs `game::*`
     /// + a full SystemData, so the loop itself is not unit-testable; this pins the CONTRACT the loop's abandon
-    /// branch relies on: after `mark_unwinnable(room)` (the counted, backed-off ABANDON the None site now
-    /// records instead of silently re-trying every scan), the SAME `is_unwinnable_now` check at the TOP of the
-    /// loop SUPPRESSES re-selection of that room (no re-field spin) — and `clear_unwinnable` on a later winnable
-    /// re-scan drops the record so a genuinely-winnable room RECOVERS (the escalate hedge closes the loop). The
-    /// backoff math itself is pinned in `objective_queue.rs`; this pins that the war.rs site closes the spin.
+    ///   branch relies on: after `mark_unwinnable(room)` (the counted, backed-off ABANDON the None site now
+    ///   records instead of silently re-trying every scan), the SAME `is_unwinnable_now` check at the TOP of the
+    ///   loop SUPPRESSES re-selection of that room (no re-field spin) — and `clear_unwinnable` on a later winnable
+    ///   re-scan drops the record so a genuinely-winnable room RECOVERS (the escalate hedge closes the loop). The
+    ///   backoff math itself is pinned in `objective_queue.rs`; this pins that the war.rs site closes the spin.
     #[test]
     fn abandon_on_unfieldable_force_suppresses_respin_and_recovers() {
         use crate::military::objective_queue::CombatObjectiveQueue;

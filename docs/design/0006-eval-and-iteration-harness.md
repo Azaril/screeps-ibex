@@ -214,6 +214,28 @@ This is the verification substrate every later increment validates against. **Pa
   them if a schema bump wants them). A label resolves to the structure on its tile — the towers
   table only matches towers and the structures table only non-towers, so a rampart sharing a
   tower's tile is addressable.
+- **A tower bed claims the bed room's controller; what it restores is a defined set, not "the
+  world as found".** The engine only lets a tower act when its owner holds the room controller
+  at a level allowing towers (`utils.checkStructureAgainstController`), so `parity capture` /
+  `report` of a tower bed hands the neutral bed room's controller to the tower owner
+  (`screeps-server-kit::server::cmd_claim_controller`: owner + `rcl_for_towers(n)` level +
+  far-future `downgradeTime`, safe mode cleared, `users.rooms` updated) for the run. The
+  harness's guarantee at bed end — on success, failure, or a panic in the bed body (the body
+  runs under `catch_unwind`; `BedCleanup::run` follows it) — is exactly: (1) the controller row
+  goes back to the pre-claim snapshot (owner, level, progress, downgrade time, reservation,
+  `safeMode` / `safeModeCooldown` / `safeModeAvailable`) and the room comes off the user's
+  `rooms` list; (2) the seeded `pv-*` creeps and seeded structure tiles are removed; (3) every
+  `rooms.objects` row whose id was not in the snapshot taken before the claim is removed
+  (`cmd_room_object_ids` / `cmd_remove_objects_not_in` — the `$nin` is evaluated in the CLI
+  sandbox over `String(_id)`, room-intrinsic types are never removed, an empty snapshot refuses
+  to run). It is not a guarantee that nothing else happened: during the ~60-tick claim the owning
+  bot treats the room as a new colony (the first tower-rampart capture: room planning, a spawn
+  site + six extension sites + two container sites, one extension completed) — (3) is what takes
+  that out; the bot's Memory and other rooms are its own. The claim also writes a `parityClaim`
+  marker (the pre-claim row) into the controller; the stale-claim path releases ONLY a
+  controller carrying that marker with the claim's shape, restoring the row it saved, and
+  refuses any other owned bed room (an earlier version forced any controller held by a bed
+  owner id to neutral — the primary bot's real colonies qualified).
 - **Q1 is closed** (recorded in `docs/implementation/ws-closeout-2026-09.md`, 2026-09-07): the
   engine does tick `storage.db['rooms.objects']`-inserted creeps (persisted, in `Game.creeps`,
   moved by the runtime). The spawn-through-the-bot fallback above is history, not a live option.
