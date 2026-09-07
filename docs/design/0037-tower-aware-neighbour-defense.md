@@ -90,3 +90,25 @@ ADR 0027 (objective/defense lifecycle), 0031 (force-sizing/winnability oracle), 
 - `ebfdd5a` T1 — `tower_danger` signal on the neighbour observation (2026-07-01)
 - `2c66423` T2 — suppress bare Secure + count-quorum advance gate (2026-07-01)
 - `cc168ff` T3 — towered-neighbour offense routing seam (2026-07-01)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+- **T3 candidate emission — CLOSED BY RULING, no code (WvC-2, 2026-08-23).** Emitting attack candidates
+  from the T3 seam, or feeding `observe_neighbours` / `neighbour_threats` into offense, would contradict
+  BOTH this ADR's T3 design of record (the seam "must remain structurally incapable of opening a new attack
+  path" — `war.rs::towered_neighbour_offense_reason` only decides CANDIDACY for rooms the offense already
+  considers worthwhile: an invader core, or a hostile-owned room with controllable ROI under
+  `attack_players`) AND the D27 operator decision (bare armed neighbours are ignored — the standing-intercept
+  drain class, combat review §7). The worthwhile towered cases already emit through the EV+winnability-gated
+  `InvaderCore` / `ResourceDenial` arms. The seam stays as landed (`cc168ff`).
+- **T1/T2 kernels are RETAINED BY DESIGN** (Wave B ruling, 2026-08-23; the reconciliation's "orphaned"
+  framing was too strong). `war_decision.rs` carries `tower_danger` on `ObservedRoom` / `Threat` UNGATED
+  (T1) and consumes it in the T2 suppression of the bare `danger == 0 && tower_danger > 0` Secure; they are
+  sim/harness-covered decision code (the `run_v1_flow` proofs) and the input a future offense-side
+  candidate feed would read. On the live OWNED-room path `tower_danger: 0.0` is deliberate
+  (`war.rs:529-531`): an owned room's towers are ours and a defender there is sized to the creep dps —
+  `tower_danger` is the neighbour-only signal. Not dead code.
+- **A stale figure in §0:** "ties up 1 of 4 concurrent squad slots" described the flat
+  `MAX_CONCURRENT_SQUADS = 4`; the cap is now empire-scaled (`claim_pacing::max_concurrent_squads(owned)`,
+  floor 2 / +1 per 2 rooms / ceiling 8, with a defense surge of 2 — S5-CAP, ADR 0028). The problem
+  statement is historical and otherwise stands.

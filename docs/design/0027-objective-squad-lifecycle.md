@@ -384,3 +384,22 @@ asserting). Kernel: `lifecycle::reconcile`; the evidence is manager-computed
 - d3352f2 scout/offense reach unblock — priority-driven Chebyshev reach, no slot truncation (2026-06-28)
 - 4f41da8 whole-squad Reassign + threat-centric defense (`Secure{threat_room}`) (2026-06-28)
 - d301324 stronghold rescout interval derived from `THREAT_DATA_MAX_AGE` + compile-time assert (2026-06-28)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+- **D28 confirmed in code (Wave B, `b26eba4`).** `lifecycle::reconcile` computes `resolved = (engaged_once
+  || (vacuous_clear && !is_defend)) && in_target_room && !has_focus && has_members && !declaiming &&
+  !retreated_from_contact` (`lifecycle.rs:333`); `ReconcileSnapshot.vacuous_clear` is manager-computed =
+  live visibility this tick + zero hostile creeps. The Resolved-gate paragraph above is the design of
+  record; nothing further was added. (The harness-side `live_visible_clear` churn knob that exercises it —
+  parity M21 — is ADR 0028's.)
+- **The sim driver's Retreating decay, and what it costs.** `screeps-combat-agent::squad::ManagedSimSquad`
+  re-forms (`state = Forming`) the moment NO member stands in the objective room: with nobody in the room
+  there is nothing to retreat FROM, and a latched `Retreating` there deadlocked the whole squad forever after
+  a vanguard withdrawal (the travel arm gates on it) — the WS-VAL crossing fix. Consequence (ADR 0034 F7):
+  after a rout carries the crossers back across the seam the state decays, the bloc gate re-releases nobody,
+  and the survivors idle un-rallied; the rally is a direction, not a destination, until a re-entry/give-up
+  terminal exists — the M23 economic give-up (`EconomicGiveUp`, shared with `screeps-econ-decision`) is the
+  designed answer, joining the terminator composition in ADR 0035 §2.1 FU2. The LIVE manager has no such
+  decay: its `Retreating` arm stamps the kernel's kite goal for in-room members and `Flee` for members
+  already out of the room (REC-016).

@@ -45,7 +45,8 @@ from the verified audit output).
    OTHER direction: live `friendly_creep_distance` 15→5 — the 15 was a pre-tournament hand-tune,
    and matching sim to it made the cross-border assault bed arrive strung out and DIE; 5 is the
    value the whole validated envelope runs at. M14 (per-squad vs global resolver pass) REMAINS —
-   architectural, queued with the multi-squad doctrine (Phase 4.5 item 8).
+   architectural; **owned by ADR 0048 D3 (parked Draft)** — distinct lanes/arcs make the sim run one
+   resolver pass per side, which is the design that closes it (WS-CLOSE triage 2026-09-07).
 5. ~~**H8**~~ **FIXED 2026-08-24** (live tower.rs + decision `heal_reaching` export): the no-squad
    path prices sustain with the KERNEL's `heal_reaching` (adjacent healers + hostile towers,
    boost-aware) and the no-net-damage weakest-hostile chip fallback is DELETED (hold fire — the
@@ -60,7 +61,9 @@ from the verified audit output).
    FIXED 2026-09-07** (WS-CLOSE lane (b1), RULING-10 (iv), D3 — see the M20–M23 entries): each Seam-7
    input is now computed by BOTH sides from one shared kernel (no mirrored constants) and driven
    end-to-end through a lifecycle-harness flow with RED-verified pins.
-7. **M4 / M6** — live `room_callback` returns the TARGET room's matrix for every requested room.
+7. ~~**M4 / M6** — live `room_callback` returns the TARGET room's matrix for every requested room.~~
+   **FIXED 2026-08-24** with the threat/traversal cluster (item 2 above: the decide room-callback
+   honors the requested room) — this line was a stale leftover (struck in the WS-CLOSE triage 2026-09-07).
 
 ---
 
@@ -214,6 +217,9 @@ SIM: C:\code\screeps-ibex\screeps-combat-agent\src\pathing.rs:407-420 computes `
 CONSEQUENCE: Sim members' executed step paths route around tower/hostile kill-zones (add up to +8/tile); live rover-resolved paths (approach into the room, rejoin, retreat, any MoveTo) ignore threat entirely and can thread straight through kill-zones the sim's validated trajectories avoided — en-route pick-off risk live that sim soaks never measured.
 
 ### [M14] Seam 4 — resolver pass scope: per-squad vs global (from movement)
+**OPEN — owned by ADR 0048 D3 (parked Draft, WS-CLOSE triage 2026-09-07):** the multi-squad doctrine's
+distinct-lanes coordination point is the design that gives the sim one resolver pass per side; not a
+harness or parity-lane fix.
 CLAIM: Live resolves ALL movement (every squad + all economy traffic) in one MovementSystem pass, while each sim squad runs its own resolve_moves_via_system pass with its own cache, in which other squads' members are registered as shoveable idles rather than their real Immovable holds / High movers.
 LIVE: C:\code\screeps-ibex\screeps-ibex\src\pathing\movementsystem.rs:437-548 — one `system.process(&mut external, movement_data)` per tick over the whole bot's MovementData, with unrequested military creeps injected as `MovementPriority::Immovable` holds (lines 404-411)
 SIM: C:\code\screeps-ibex\screeps-combat-agent\src\squad.rs:895-899 and 416-421 — each ManagedSimSquad/SimSquad calls `resolve_moves_via_system_with(world, self.owner, &move_reqs, &mut self.move_cache, ...)` for its members only; the kernel driver then registers any unrequested same-owner creep (i.e. another squad's members) as a SHOVEABLE idle (C:\code\screeps-ibex\screeps-sim-core\src\rover_driver.rs

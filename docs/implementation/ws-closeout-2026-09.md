@@ -15,9 +15,31 @@ live tree: offense/attack_invaders/debug_log ON, boost_military OFF, auth mod 2.
 route present). **H5 Q1 answered empirically 2026-09-07: a creep inserted via
 `storage.db['rooms.objects'].insert` (type/user/room/x/y/name/body/hits/hitsMax/fatigue/
 spawning/ageTime/actionLog) persists, appears in the bot's `Game.creeps`, and the engine ticks
-it — two `move(TOP)` from the runtime moved it (25,25)→(25,23).** Phase A build lanes are running
-(workflow `wf_86ab5f71-3f7`); then Phase B, then the ONE Docker refresh + provocation pass, then
-the doc close-out and the MMO hot swap.
+it — two `move(TOP)` from the runtime moved it (25,25)→(25,23).** **Phase A+B COMMITTED
+`7dde003` (six submodules pushed) on a fully green battery** (eval 154/154, six gates, ladder
+unchanged L1 T3 open 231 / choke 355, fence spread 0, workspace 1621/1621, clippy-wasm + host
+clippy clean). RUNNING NOW: the RULING-11 roots A+B fix lane (`wf_0b4c6f70-f06`: rover ops refund
++ shoveable-on-budget-miss + rotation; miners CRITICAL + need-scaled hauler bid + starvation
+sizing) and the Phase D ADR write-back lane (`wf_dfd300a9-8b2`, doc-only). Six T3 compounds
+(3000 each) seeded into W9N8's private storage; `ibex-2` exists for the H5 two-owner beds.
+**The private world is the roots-fix BEFORE/AFTER bed: on the July build it sits in the SAME
+collapse** (tick 19054699: 30 creeps over 9 rooms, GCL 13, every storage at 0 energy, 417 of 458
+extensions empty, spawns idle at 30–300e, cpu 11/100) — deploy the batch there first and grade
+recovery (ops_used ≪ pool, lanes leave 300, creeps climb) before the MMO hot swap. MMO after the
+flips: creeps 46→78 in ~500 ticks, but the 50k pool RE-SATURATES at 78 creeps (48k/50k used,
+repaths 8, move_failures 36) — the reservation-not-refund root is structural; the flip only bought
+headroom. **Roots A+B LANDED + VERIFIED (PASS-WITH-NOTES both; must-fixes applied: controller-side
+links excluded from lane-reachable energy, test-comment arithmetic)** — root A: rover pool
+reserve-then-REFUND (`PathfindingResult.ops`), `PathBudgetExhausted` vs `PathNotFound` split with
+a displaceable `budget_missed_occupant`, per-layer round-robin first-path cursor, seg-57
+`move_failed_budget`/`move_failed_nopath`; rover-eval H 0.9625 unchanged, six gates + fence green.
+Root B: `SPAWN_BID_MINER = CRITICAL`, bootstrap floors CRITICAL+1000/+2000 (available-sized, never
+bank), need-scaled `hauler_bid` (w = min(body throughput, unmet − roster throughput)), per-tick
+`replacement_body_energy` starvation sizing over `spawn_lane_reachable_energy`. **Phase D
+write-backs LANDED + VERIFIED** (0025 A–G, 0008a/0035/0026/0026a/0034/0027/0031/0031b/0024/0019/
+0032/0037, 0041/0010/0020/0023a, eval README, parity audit; must-fixes applied). Battery #2 running
+(`battery2.txt`). Next: commit (rover submodule + super) → Phase C Docker refresh (private world =
+the before/after bed) → provocation pass → deletions + tracker collapse → MMO hot swap.
 
 ## Target
 

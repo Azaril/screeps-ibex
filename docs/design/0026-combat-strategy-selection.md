@@ -267,7 +267,7 @@ Ordered, minimal-debt increments. Each leaves the workspace compiling with the r
 
 | Objective class | Mode | Profile (`KernelParams`: approach/incumbency/discoh/K/spacing) | Basis |
 |---|---|---|---|
-| OpenCombat | — | `open_combat()` = **a1/i6/d20/K2/s2** (`a1-i6-tight-s2`) | the spacing sweep's winner: best mean payoff against the real-opponent field, beating the otherwise-identical spacing-1 profile at equal exploitability. Spacing was the axis the original grid fixed at 1 — Screeps AoE is pure Chebyshev, so a tight blob eats stacked RMA and overlapping tower fire; spacing 2 sheds it (see ADR 0026a) |
+| OpenCombat | — | `open_combat()` = **a2/i6/d20/K2/s1** (`a2-i6-tight`, Phase 4.5 item 6, 2026-08-24) | the joint boost-tier × terrain maximin re-tune's adoption (`joint_boosted_terrain_retune`) under the RULING-9 one-currency EV: moderate approach, strong incumbency, tight cohesion, default spacing. History: the June spacing-sweep winner `a1-i6-tight-s2` (spacing was the axis the original grid fixed at 1 — see ADR 0026a) → the WS-4 R19 chokepoint winner `a0-i3-d14-K3-s2` (2026-08-23) → this; each era's verdict stands for its kernel (ADR 0026a, and the Design deltas below) |
 | StructureBreach | Breach / unknown | `breach()` = **a1/i4/d10/K3/s1** (`a1-i4-def`) | low approach (don't over-commit — a winnable force breaches anyway) + LOWER incumbency than open ⇒ move in to range 1 and dismantle. It is the dismantle-needs-range-1 variant of the open winner |
 | StructureBreach | Drain | `breach_drain()` = **a1/i6/d10/K3/s1** | breach, but hold longer through the tower-drain soak (incumbency 6) |
 | StructureBreach | + safe mode | `open_combat()` (veto) | a shielded base takes zero damage — never spend approach risk |
@@ -469,3 +469,25 @@ The rules each named doctrine encodes, beyond the one-line summaries in §9.5. T
 - `8efa32e` doctrine registry + `decide_doctrine` in the decision crate (2026-06-26)
 - `da0756d` bot force producers route through the registry (2026-06-26)
 - `c574bc3` per-doctrine harness beds + gate (2026-06-26)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+- **L8 as built (WvC-1, `0455298`).** `war.rs::classify_coordination(candidate, observed)` consults
+  `coordination_from_observed(&threat.hostile_creeps)` FIRST: with scouted hostiles present, all owners NPC
+  (`military::is_npc_owner`) ⇒ `Individual`, any player-owned body ⇒ `Coordinated`; only a room with nothing
+  observed falls through to the Q1 source prior (`InvaderCore` / `InvaderCreeps` / `PowerBank` ⇒
+  Individual, else Coordinated). §9.10 L8 already reads this way; the earlier "until it is" caveat is gone.
+  RED-verified pin.
+- **The `open_combat` profile moved twice since §8's adoption table was written** — the table row was
+  corrected in place: `a1-i6-tight-s2` (June spacing sweep) → `a0-i3-d14-K3-s2` (WS-4 R19 chokepoint
+  re-tune, decision `a7acb0b`, 2026-08-23) → **`a2-i6-tight` = `{approach 2, incumbency 6, discohesion 20,
+  K 2, spacing 1}`** (Phase 4.5 item 6 under the RULING-9 currency, 2026-08-24; `strategy.rs::open_combat`
+  carries the values and the history note). The selector, the activators and the breach / breach_drain
+  profiles (`{1,4,10,3,1}` / `{1,6,10,3,1}`) are unchanged; only the open profile's constants moved —
+  exactly the §4 pattern (discrete profiles, tuned `KernelParams` within). The three-era reconciliation is
+  in ADR 0026a.
+- **L6c stays deferred by its own rule.** `DoctrineParams` (§9.8) does not exist in code —
+  `coordination_dps_threshold`, `blob_escalation_parts` and `defend_size_curve` have no consumer (sizing
+  reads the constants `HOLD_MARGIN` / `COORDINATED_DPS_MARGIN` through `CompositionParams`, whose Tier-1
+  sweep is ADR 0031b) — so there is nothing to sweep over; the WS-4 downstream pass checked it and the
+  tracker re-tagged it →P6, which is the same statement. No sentence above is false.

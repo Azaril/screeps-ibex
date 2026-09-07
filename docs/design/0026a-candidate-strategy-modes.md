@@ -1,10 +1,10 @@
 # ADR 0026a — Candidate strategy modes (ideation catalog)
 
 - **Status:** Catalog
-- **What this is:** an ideation catalog of candidate situational strategy modes (6-lens proposal → dedup → exploitability/testability vet), companion to [ADR 0026](0026-combat-strategy-selection.md), together with the tournament verdicts measured against it (§Validation results). Net of those verdicts AS REVISED by the WS-4 R19 chokepoint re-tune (2026-08-23): **`ranged_duel_kite` `{0,3,14,3,2}` is now THE `open_combat` profile** (the June rejection reversed — see its row); the June spacing-lever adoption (`a1-i6-tight-s2`) is superseded (it measured negative vs default on the post-Wave-A/B kernel over chokepoint terrain, though its spacing-2 half SURVIVES inside the new profile); **`anti_aoe_spread` remains superseded** by spacing-2; the remaining six modes (`focus_ball`, `anti_kite_chase`, `defensive_hold`, `drain_spread`, `drain_breach_handoff`, `safe_mode_countdown`) are **deferred** pending new signals/beds.
+- **What this is:** an ideation catalog of candidate situational strategy modes (6-lens proposal → dedup → exploitability/testability vet), companion to [ADR 0026](0026-combat-strategy-selection.md), together with the tournament verdicts measured against it (§Validation results). Net of those verdicts, AS REVISED TWICE: by the WS-4 R19 chokepoint re-tune (2026-08-23 — `ranged_duel_kite` `{0,3,14,3,2}` became the `open_combat` profile, reversing the June rejection) and then by the Phase 4.5 item 6 boosted re-tune under the RULING-9 one-currency EV (2026-08-24 — **`a2-i6-tight` `{2,6,20,2,1}` is now THE `open_combat` profile**; `ranged_duel_kite` regressed hard in the boosted cells and was superseded — see its row and the Design deltas). The June spacing-lever adoption (`a1-i6-tight-s2`) stays superseded (it measured negative vs default on the post-Wave-A/B kernel over chokepoint terrain); **`anti_aoe_spread` remains superseded** (the current profile carries spacing 1 — see the deltas for why); the remaining six modes (`focus_ball`, `anti_kite_chase`, `defensive_hold`, `drain_spread`, `drain_breach_handoff`, `safe_mode_countdown`) are **deferred** pending new signals/beds.
 - **Prereq for any re-validation:** the edge-exit two-creeps-on-a-tile engine fix changes cross-room/base-attack dynamics, so it precedes a re-tune of the general profiles, and each situational mode is then validated on its target bed under the `exploitability` ship-gate.
 
-`KernelParams = {approach, incumbency, discohesion, cohesion_k, spacing}`. Profiles as authored: `default {2,3,10,3,1}`, `open_combat {1,6,20,2,1}`, `breach {1,4,10,3,1}`, `breach_drain {1,6,10,3,1}`. *(`open_combat` carries the validated spacing-2 value: `{1,6,20,2,2}`; the others are as authored — `strategy.rs`.)*
+`KernelParams = {approach, incumbency, discohesion, cohesion_k, spacing}`. Profiles as authored: `default {2,3,10,3,1}`, `open_combat {1,6,20,2,1}`, `breach {1,4,10,3,1}`, `breach_drain {1,6,10,3,1}`. *(Historical: `open_combat` was `{1,6,20,2,2}` (June spacing-2), then `{0,3,14,3,2}` (R19); it is `{2,6,20,2,1}` today — `strategy.rs`; the others are as authored.)*
 
 ## Catalog (ranked by the vetting agent)
 
@@ -51,3 +51,24 @@ The catalog was tested by **per-situation discovery**: build a situational comp 
 | `drain_spread`, `drain_breach_handoff`, `safe_mode_countdown` | **deferred** (no bed) | Need a tower-energy-bounded drain base + scripted safe-mode-expiry beds. Base-attack is non-discriminating in the current bed set, so breach-side modes can't be measured. |
 
 **Meta-result:** for this kernel, **the highest-value missing knob was one the original 48-config sweep's grid excluded by construction** (it fixed `spacing=1`). The hand-designed modes mostly under-performed a data sweep; the durable deliverable is the spacing-2 base change + the per-situation discovery harness for future modes. The deferred situational modes are real but need (a) new info-signals and (b) asymmetric/scripted beds — a clean follow-on increment, not blocked work.
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+**Three eras of the `open_combat` profile, each verdict standing for its kernel** (`strategy.rs::open_combat`
+carries the current values and the item-6 history note):
+
+| Era | Profile | Measured on | Verdict |
+|---|---|---|---|
+| June 2026 (this catalog's §Validation) | `a1-i6-tight-s2` `{1,6,20,2,2}` | pre-Wave-A/B kernel, open-terrain single beds, real-opponent field | spacing 2 ADOPTED; `ranged_duel_kite` REJECTED (−329 on the ranged mirror) |
+| WS-4 R19 (2026-08-23, eval `940f739` + decision `a7acb0b`) | `ranged_duel_kite` `{0,3,14,3,2}` | `chokepoint_comp_basket` (synthetic + imported + 6 cave seeds), maximin over regimes vs the untuned default, unboosted | the ONLY config positive in all regimes ([+513/+315/+131], maximin +131, mean +319); the June profile measured NEGATIVE ([−839/+556/−6], rank 49/54) — R19 quantified |
+| Phase 4.5 item 6 (2026-08-24, RULING-9 currency, `joint_boosted_terrain_retune`) | **`a2-i6-tight` `{2,6,20,2,1}`** (current) | joint boost tier × terrain (3 tiers × synthetic / imported / generated) under the one-currency EV | the R19 winner regressed in the boosted cells ([T2:syn −645, T3:gen −852], worst −852, mean +39, rank 16/57); no config is positive in all 9 cells (the literal maximin winner is the untuned default), so adoption used maximin-with-a-noise-band: `a2-i6-tight`'s two negatives are noise-scale (T0:imported −26, T0:generated −18 on a ±1000 scale) against [T0:syn +682 \| T2 +132/+887/+1328 \| T3 +982/+760/+1147], mean +652 |
+
+What this means for the catalog: the reversal-with-reconciliation principle (both verdicts stand — the
+landscape moved) now has three points, and each move was a KERNEL re-tune, not a wire-in of a situational
+mode — `ranged_duel_kite` was adopted as the generic profile in the R19 era rather than behind an
+`enemy_has_ranged` activator, and it lost that seat once boosted fights entered the basket. The spacing-2
+half that "survived inside the new profile" in the R19 era does NOT survive in `a2-i6-tight` (spacing 1):
+under boosted fights the tight-cohesion pressure (discohesion 20, K 2) outweighed the AoE-shedding value of
+spacing. The eight situational modes' status is otherwise unchanged (six deferred; `anti_aoe_spread`
+superseded; `ranged_duel_kite` superseded as a profile but still a valid candidate mode behind a signal, if
+a ranged-mirror bed ever discriminates it again). The prereq for any re-validation stands as written.

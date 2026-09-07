@@ -73,3 +73,36 @@ Two of the lanes have different internal consistency, and this — not effort �
 - **Spawn lane MIXES scales** — `body_roi_milli` is par-scale (~12k for a good miner) while `SPAWN_BID_*` are band-scale ordinals (25k–100k). Converting ONE civilian role to `body_roi` makes it under-bid every band role. So **A2/A4/A7/A9/A10 (the spawn-EV batch) must be a COORDINATED migration** — all civilian spawn roles to `body_roi` at once, with the survival overrides (miner-bootstrap / downgrade → CRITICAL) as explicit floors above the par-scale bids, and the forming bid's reserved [HIGH,CRITICAL) band re-based onto the same scale. Larger and riskier than the transfer lane; it is one unit, with a full spawn-lane A/B re-sweep.
 
 Consequently: the transfer live-market rewire (A1, lane-by-lane: refill → containers → controller) is separable and can proceed on its own; A11/A12 are independent; the spawn-EV batch is the coordinated scale migration and comes last. Every item converts a band to the ADR 0042 B1 pattern.
+
+## Design deltas (2026-09-07 — RULING-11 root B: the income ladder, before the spawn-EV batch)
+
+The live MMO collapse (2026-09-07 diagnosis) surfaced a band-ordinal defect this ledger had
+classified but not sequenced urgently: the hauler's `body_roi_milli` (A10, fixed per-body `w`)
+pinned every hauler at 99_999 while the static miners bid HIGH (75_000, a drift from the CRITICAL
+contract C2/A2 assume) — so logistics preempted income and the head-of-line queue deadlocked.
+Landed now in `spawn_policy` (ADR 0040 delta of the same date), ahead of and compatible with the
+coordinated spawn-EV batch:
+
+- **A10 — marginal `w` landed; band step retained.** `hauler_bid` now prices
+  `w = min(throughput, residual unfulfilled hauling)` (the ledger's prescribed form) through
+  `body_roi_milli`, floored at the coarse band and capped at `SPAWN_BID_MINER − 1`. The `< 0.75·desired`
+  band step and the band-scale numbers stay until the batch re-bases the whole spawn lane onto
+  par-scale (the scale-migration constraint below still holds — converting the hauler alone to
+  true e/t would under-bid every band role).
+- **C2 made explicit.** `SPAWN_BID_BOOTSTRAP_HARVESTER` (`harvester_bid`, total==0 local) is now a
+  named floor strictly above the income band rather than a tie at CRITICAL; a sibling
+  `SPAWN_BID_BOOTSTRAP_HAULER` (first local carrier) sits between it and the miners. Ladder:
+  restart harvester (102k) > first carrier (101k) > `SPAWN_BID_MINER` = CRITICAL (100k) > every
+  other bid. These are the "survival overrides as explicit floors above the par-scale bids" the
+  batch requires — they survive the batch unchanged.
+- **A2 partial.** Static miners bid `SPAWN_BID_MINER` (CRITICAL, all distances) — the containment
+  half of A2 (income never preempted). The EV half (`body_roi_milli(w, cost)` with the haul-cost
+  distance discount, un-discarding `w` in the queue ordering) remains the batch's.
+- **New ledger row, S6 → closed live:** `replacement_body_energy` (K4 starvation sizing) — a
+  per-tick reachability test (lane + haulable stock vs the capacity body's cost), no latch. Not a
+  band item, but it is the reason a lane can now always field SOME body; the batch's
+  `deficit_priced_pick` (K4 income-aware sizing) refines it, does not replace it.
+- **Consequence for the batch's A/B re-sweep:** the baseline arm to re-sweep against is THIS
+  ladder (miners CRITICAL, marginal hauler `w`, starvation sizing), not the M5b tree; the sim arms
+  (`screeps-econ-eval`) have not adopted these kernels yet (they call the unchanged
+  `harvester_priority` / `hauler_priority` / `harvester_body_energy`) — adopt before re-sweeping.

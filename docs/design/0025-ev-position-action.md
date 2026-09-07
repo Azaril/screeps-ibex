@@ -80,9 +80,9 @@ All terms in `mhp`:
 | Term | Definition | Provenance |
 |---|---|---|
 | **OFFENSE** | `g_them · Σ_targets min(damage_landed(A,t,target), residual_kill[target])`. `damage_landed` respects rampart-redirect (0 credit for a single-target hit redirected to a rampart, resolve.rs) and the engine net (an out-healed target has residual 0). The `min` against the live residual is what kills overkill. | `ev_target_order` budget (lib.rs:318); `assign_focus_fire` spill (lib.rs:332-359) |
-| **DENIAL** | When cumulative committed squad damage on a target **crosses its budget this tick** (it dies), add `g_them · threat_value(target) · KILL_HORIZON` (small `~3`). Removing a healer's future output thereby beats chipping a tank. Granted **once per target** (the budget-crossing member books it), so no two creeps both claim the kill swing. | `threat_value`/`ttk` (lib.rs:294,316) |
-| **HEAL** | `g_us · Σ_allies min(heal_output(A,t,ally), residual_heal_need[ally])`, with the **MORTAL** case (`projected_incoming ≥ ally.hits`) crediting the ally's **whole** remaining fighting-strength (a prevented death is the max swing). "Mortal" is thus a *region of the continuous curve*, not a boolean veto. | `best_heal_target` mortal-first (lib.rs:482); `assign_heals` deficit+risk (lib.rs:1138) |
-| **RISK** | `g_us · (net_incoming_at(t) lost from THIS member)` where `net = max(0, ThreatField.raw_at(t) − reaching_squad_heal)`, scaled by how close it is to killing this member over `SURVIVAL_HORIZON`. Plus a hard **`LETHAL_TILE_PENALTY`** backstop (astronomical, dominates all EV) when `net · SURVIVAL_HORIZON > member.hits` — the binary survival veto (kite.rs:701) is **kept as a floor** under the graduated curve. | `incoming_damage_at` / `ThreatField` |
+| **DENIAL** | As built there is NO separately booked kill swing: every hit is priced linearly at `value_per_hit = g_them · threat_value(target) / residual_budget`, so the last hit that empties a target's budget is worth exactly its share and removing a healer's future output still beats chipping a tank (the healer's `threat_value` is higher and its residual smaller). The once-per-target `KILL_HORIZON` swing described here originally was never implemented (`kernel.rs` records it as a tournament refinement — corrected 2026-09-07, see Design deltas → A). | `threat_value`/`ttk` (lib.rs), `plan_squad_ev` damage ledger (kernel.rs) |
+| **HEAL** | *(As built since 2026-08-24 — RULING-9; the original row read `g_us · Σ min(heal_output, residual_heal_need)` with a whole-fighting-strength MORTAL credit.)* Each healed HP is priced at the ally's **progress-diluted** `value_per_hp = g_us · member_output / horizon_hits` — the exact mirror of the attack side's `value_per_hit` — drained against TWO ledgers (URGENT anticipated incoming first, then BACKLOG real deficit), × `MORTAL_HEAL_MULT` (4) when `incoming ≥ hits`. Design deltas → A. | `kernel.rs` `HealTarget`, `apply_act` `Act::Heal` |
+| **RISK** | *(As built since 2026-08-24.)* `net = max(0, ThreatField.raw_at(t) − deliverable_heal(t))` — the heal that can actually LAND on `t` next tick, not the squad total — priced at the member's own **marginal** `value_per_hp` (`g_us.max(unit) · my_out / max(raw_at(t), hits / SURVIVAL_HORIZON)`). Plus the hard **`LETHAL`** backstop when `net · SURVIVAL_HORIZON > member.hits` — the binary survival veto is **kept as a floor** under the graduated curve. Design deltas → A/B. | `kernel.rs` `best_tile`, `deliverable_heal` |
 | **SELF_RISK_MELEE** | Expected melee attack-back if `A` lands a melee `Attack`, the target has `ATTACK` parts, and we are **not on a rampart** (resolve.rs:317-321). **New EV the current model ignores** — and the cleanest proof that joint position+action matters (a near-dead melee+ranged creep should often *not* melee). | resolve.rs:317-321 (verified) |
 | **DISCOHESION** | Wall-aware distance-from-centroid penalty past `K`, converted to `mhp` by one scale constant. Holds a forming/no-target blob together. | `score_tile` cohesion term |
 | **APPROACH_DEFICIT** | When **no** action lands from `t` (out of every weapon/heal range): `−` (scaled) safe-path distance `D[t]` from the shared target-flood, giving an out-of-range creep a continuous downhill gradient toward where it *would* have EV. Replaces the `LAYOUT_DOABLE_BONUS` step-function with a gradient. | target-flood `D[]` (lib.rs:883) |
@@ -101,7 +101,7 @@ Per engaged squad per tick (the engage/retreat **gate runs first**, unchanged �
 - Compute `μ`, `W`, `g_us`, `g_them` from `assess_engage`'s existing strengths (~20 ops).
 - Build the **residual budget ledgers** (Vec-indexed, integer):
   - `residual_kill[e] = e.hits + heal_reaching(e)` for each killable enemy (the `ev_target_order` budget verbatim).
-  - `residual_heal_need[a] = max(0, projected_incoming(a) − a.hits)` (+ a deficit top-up) per ally.
+  - per ally, TWO heal ledgers (as built): `inc` = anticipated incoming at its tile (evidence-gated, ÷4 when unwounded) and `deficit` = `hits_max − hits`, plus its `value_per_hp` price — Design deltas → A.
 
 **STAGE 1 — per member, in a deterministic commit order:**
 - Candidate tiles = the member's Moore neighbourhood (current ±1) ∩ walkable, **plus** its current tile (incumbency). This is the **same local 9-tile window** `plan_squad_layout` already scans (kite.rs:927). **No per-member flood is added** — the shared `D[]` supplies the long-range gradient.
@@ -238,7 +238,7 @@ In all three, **who gets the scarce range-1 tile** is decided by the value-sorte
 **Determinism.** Per the build directives we do **not** preserve byte-identity with the old path or worry about a live-vs-old digest — the old `score_tile`/`decide_combat` machinery is deleted, and the *only* parity that matters is **sim-vs-real-engine intent legality** (§3), which both the sim and the bot honour because they run the same kernel. We still want the kernel itself **deterministic** (reproducible replays, stable behaviour, tournament-comparable):
 
 - The `mhp` kernel is **integer/fixed-point throughout** (sigmoid LUT, `g_us`/`g_them`, all term sums) — no f32 on the hot path, so no IEEE-ordering subtleties. (The old `score_tile` was fixed-order f32; this is a real integer rewrite, simpler and cheaper, and we delete the f32 path rather than keep it byte-compatible.)
-- Tie-breaks are total and explicit: `(EV desc, then x, then y, then ActionSet rank, then idx)`. Residual ledgers are `Vec`-indexed (no `HashMap` iteration-order nondeterminism). The shared target-flood result is iterated in sorted-key order. A determinism unit test asserts identical output on repeated runs (as `layout_is_deterministic` does today).
+- Tie-breaks are total and explicit: `(EV desc, then approach distance asc, then x, then y)` for the tile (`best_tile`'s key is `(cost, Reverse(d), Reverse(x), Reverse(y))` — the approach-distance leg was added 2026-08-24 because a lower-x/lower-y tie-break is objective-blind on a cost plateau, see Design deltas → D), and enumeration order for the action-set. Residual ledgers are `Vec`-indexed (no `HashMap` iteration-order nondeterminism). The shared target-flood result is iterated in sorted-key order. A determinism unit test asserts identical output on repeated runs (as `layout_is_deterministic` does today).
 
 **Anti-oscillation (must not regress single-room ~0.5%).** Two new degrees of freedom vs the positional baseline: action choice, and the commit order.
 
@@ -270,7 +270,7 @@ With these four in place single-room oscillation sits around **3%** (worst case,
 
 **Blowout degeneracy (proposal D's real weakness, fixed here).** At `|μ|` extremes the sigmoid flattens, `W'(μ) → 0`, so `g_us`/`g_them` shrink and *all* EV terms collapse toward noise — the squad stops fighting intelligently exactly when winning/losing hard. Mitigation: **floor `g_us`/`g_them`** at a minimum slope, so even in a blowout the relative ordering of (kill A vs kill B vs heal vs safe tile) is preserved. The floor is a single EXP-* constant; the Lanchester gate still prevents committing to a losing fight, so the floor only governs *how* a decided fight is fought, never *whether*.
 
-**Cross-room (out of scope, must-not-worsen).** `ThreatField` and the flood are room-scoped. Cross-room positioning is the known **93% oscillation** open problem (Designed#4); it is independent of this kernel. The kernel degrades to the existing `MoveToRoom` handoff at room borders (it does not score across the edge), so it neither helps nor worsens cross-room. The single-room gate is `≤ 0.5%`; Designed#4 may stay at its known value.
+**Cross-room.** `ThreatField` and the flood are room-scoped. *(Corrected 2026-09-07 — this paragraph used to call cross-room "the known 93% oscillation open problem"; that is no longer true.)* The kernel now prices the seam explicitly: it is anchored on the **fight room** (the focus room, else the centroid room — never a straddling centroid), scores room-edge tiles as transitional (`EXIT_EDGE_PENALTY`), assesses towers room-locally, and hands out-of-contact members to the block mover (see **Design deltas → C**). Designed#4 measures ~0.6% period-2 (from 99.6% at its worst and ~93% originally); the harness keeps a `≤ 0.97` not-fully-regressed bound on the cross-room bed (`screeps-combat-eval/src/harness/mod.rs`, `PositioningOscillation`). What remains OPEN is the design item, not a defect: the threat/approach field is still built per room, so there is no seam-stitched gradient — a member on one side prices the other side's threat as zero (§11 #10, ADR 0024 follow-up).
 
 ## 8. Build plan (clean replacement — no migration stages)
 
@@ -298,7 +298,7 @@ All four source proposals share the same spine (per-`(tile, action-set)` EV with
 
 - **Short-horizon tail (graft C properly).** Add `FUTURE_K` discounted ticks to the kernel once a *correct* forward threat model exists: re-stamp chasers at their projected positions (not the hand-wavy inward-offset), keep towers immobile, keep ranged at range 3. Structural framing (this-tick = K=0 slice) is already in place.
 - **Multi-squad shared residuals.** Residuals are per-squad. Two squads on one focus may under-fire (safe direction — never over-commit). Cross-squad ledgers are a P5 item.
-- **Boosted-TOUGH threat field.** `ThreatField` stamps unboosted output; a win-probability currency compounds the mis-estimate through `W`. May need the boost field sooner than the weighted model did.
+- **Boosted-TOUGH threat field.** *(Refreshed 2026-09-07.)* The boost field now EXISTS on the decision view — `CombatBodyPart.boost_mult` + `CombatCreepDto::effective_output` (ADR 0041 delta) — and every creep-side consumer of this kernel is boost-aware: `threat_value`, `heal_reaching`, `kite_threats` (so `ThreatField::build` receives boosted attack/ranged output; the `kite.rs` module doc still calls itself "unboosted" — stale wording, the inputs are boosted). What is still NOT modelled is boosted **TOUGH** damage *reduction* on the receiving side: the field stamps raw output, so a boosted-TOUGH defender is over-counted (conservative) and our own boosted-TOUGH member's risk is over-priced. Open until a fight shows it matters.
 
 ## 11. Open questions
 
@@ -311,7 +311,7 @@ All four source proposals share the same spine (per-`(tile, action-set)` EV with
 7. **Outcome-aware oscillation metric (operator, 2026-06-25).** `oscillation_rate` counts *all* period-2 movement, but beneficial A-B-A (dodging a tower volley, forcing a re-acquire, keeping a focus in range) is *good* and fatigue is free with enough MOVE (§7.1). Refine the metric to flag only **unnecessary** reversals — those that did not reduce incoming / increase dealt / improve the resulting EV vs holding. Until then the positional rate is a gross-jitter tripwire to be read *with* net-HP, never a standalone optimisation target.
 8. **The tournament basket must be enriched BEFORE any tuning lead is adopted (roadmap 0020-S4-RES).** A thin basket produces a confident, wrong winner — measured directly: widening from a fixed-ranged bed to a comp-varied one *changed* the ranking (`k-tight-coh` displaced the fixed-ranged leader; with comp variation `k-spread` tops mean payoff while `k-tight-coh` remains the robust Nash pick). The basket therefore carries: (a) a **random squad-composition population** (`harness::roster` — free-form body mixes within an energy budget); (b) **Lanchester validation** (`roster::lanchester_validation`: predicted `predict_engage` vs actual sim outcome over that population — ~95% sign accuracy, and the confidently-wrong outliers it surfaces are the mispredicted comps worth inspecting); (c) a **comp-varied tournament basket** (`tournament::comp_basket` / `run_tournament_over_comps`: Bed × N random comps with both sides mirroring the comp, so a match isolates `KernelParams`); (d) a **base attack/defend lens** — varied bases (open tower-nest, corridor-choke + guard, thick-rampart bunker turtle with tower crossfire, mid bunker + 2 towers, swamp turtle: terrain + structures + defenders) scored by an objective-aware `assault_score` (HP razed + destroyed bonus + attacker survival); and (e) a **winnable-sized** attacker (the force-sizing solver's breach force) with an efficiency-weighted assault score (razed + destroyed bonus + survival×2 − per-tick). Against *synthetic* beds a winnable force makes the breach position-INSENSITIVE — every `KernelParams` config cracks them alike — so on those beds the base lens is a breach-CAPABILITY gate and the discrimination lives in the open-combat comp-varied tournament. (§12 shows this does not carry over to realistic foreman bases, where position-sensitivity returns.) Adoption always waits for the full realistic basket (§12).
 9. **Value/contestedness commit priority needs hysteresis.** §7.2 ships a *stable index* commit order because the value-sorted order churned (period-2 swaps). Re-introducing "highest-leverage/most-contested first" (better contention resolution) requires the order key to carry its own dead-band (e.g. incumbent-EV-weighted) so it can't flip tick-to-tick. Deferred until measured to matter.
-10. **Cross-room positioning (the standing ~93% oscillation, Designed#4).** `ThreatField` + the approach flood are per-room, so at a room seam the kernel has no coherent cross-border gradient and the lead creep flip-flops at the edge. Needs the flood/threat stitched across the seam (or a cross-room strategic goal the local step homes to). Orthogonal to the kernel; the harness gate excludes it.
+10. **Seam-stitched threat/approach field (Designed#4 — the remaining cross-room DESIGN item).** *(Reworded 2026-09-07; the "standing ~93% oscillation" this line used to describe was closed by the 2026-08-24 border-crossing work — Designed#4 now sits ~0.6%, see §7 and Design deltas → C.)* `ThreatField` + the approach flood are still built per room, so a member standing on one side of a seam prices the far side's towers/creeps at zero and the far side's approach gradient does not exist until it crosses. The fight-room anchoring, exit-edge pricing and room-local tower assessment make crossings work; a stitched field would make them *priced*. The harness pin for this bed is `≤ 0.97` (not-fully-regressed), deliberately loose — a kernel design item (ADR 0024 follow-up), not a harness closeout (WS-CLOSE D4).
 11. **Declaim targeting needs a controller in the decision view.** The `Declaim`/`AttackController` action is enumerated + priced, but `CombatStructureDto`/the squad view carry no controller, so room-neutralization EV cannot be scored. The strategic enemy controller (pos + downgrade ticks) belongs on the view; whether the view should also carry the reservation/ownership state the EV would need is the undecided part.
 
 ## 12. Realistic simulation worlds — staged build plan
@@ -327,7 +327,7 @@ Turns §11 #8's "realistic simulation worlds" into a four-stage build, grounded 
 **What the re-tunes established (design knowledge, in the order it was learned):**
 - **Basket size changes the answer.** A small Raze-only basket made `k-approach-hot` (`approach_coef = 4`) look dominant (+21154 while every other config scored deeply negative); at 48-config × 52-base scale that did not replicate — a4 configs are middling-to-poor. The lesson is the §11 #8 rule restated: never adopt off a thin basket.
 - **Realistic bases ARE position-sensitive** (unlike the synthetic beds of §11 #8) — the default kernel can chip at a real foreman rampart ring and bleed creeps instead of breaching. But with a *winnable-sized* force the base lens is only weakly discriminating (scores cluster), and LOW approach slightly wins on survival.
-- **Open combat's optimum is low-approach / high-incumbency / TIGHT cohesion** (`a1-i6-tight`) — hold tight at range, not spread. `a2-i4-tight` is the best *balanced* single config (a modest tweak from the `a2-i3-def` seed: incumbency 3→4, cohesion default→tight).
+- **Open combat's optimum is low-approach / high-incumbency / TIGHT cohesion** (`a1-i6-tight` at this re-tune; the profile has since been re-tuned twice — the adopted `open_combat` is `a2-i6-tight` under the boosted 9-cell maximin, Design deltas → A results / ADR 0026) — hold tight at range, not spread. `a2-i4-tight` is the best *balanced* single config (a modest tweak from the `a2-i3-def` seed: incumbency 3→4, cohesion default→tight).
 - **The discriminating levers are incumbency and cohesion, not approach.** Objective-awareness still pays (the best open config is poor at base attack and vice versa), which is exactly what ADR 0026's per-objective strategy-selection layer exists to exploit — but its breach profile should be swept over incumbency/cohesion with approach LOW, not around an `approach = 4` seed.
 - **Spacing was a structural blind spot in the original grid** (it fixed `spacing = 1`). Screeps AoE is pure Chebyshev with no line-of-sight, so a tight blob eats stacked ranged-mass-attack and overlapping tower fire. Once spacing is a live axis, the spacing-1 profile is negative-mean and exploitable, and **spacing 2 is the generic sweet spot** over the real-opponent field (spacing 4 only wins a pure-ranged mirror — a candidate situational mode). See ADR 0026a.
 - **Tournament discovery beats ideation here.** The hand-designed ADR-0026a catalog modes mostly under-performed the data sweep (e.g. the "lower incumbency for a ranged duel" idea *lost* the ranged mirror), and the headline lever was the one the hand-built grid had excluded.
@@ -339,7 +339,7 @@ Turns §11 #8's "realistic simulation worlds" into a four-stage build, grounded 
 Get real shard terrain into a host `CombatWorld` + prove a squad navigates it. **Use committed encoded-terrain fixtures (a `const` table), NOT a live fetch** — a room is a 2500-char digit string (`0`plain/`1`,`3`wall/`2`swamp; rest-api `types.rs:156`); the rest-api `room_terrain_encoded` (`client.rs:387`) is async+HTTP+360/hr-capped → belongs in the Stage-3a offline tool. Absent committed fixtures, a room decodes from `screeps-foreman-bench/resources/map-*.json` (identical encoding, decoded at `bench/src/main.rs:464-501`). `harness/terrain_import.rs`: `decode_terrain(&str)->CombatTerrain` (inverse of the bench visitor; `walls.insert`/`swamps.insert`, `state.rs:11-29`), `fast_to_combat(&FastRoomTerrain)->CombatTerrain` (the cross-crate bridge; `terrain.rs:39-49`), `decode_fast`, `TerrainFixture { room, terrain, controller, sources, mineral }` + `FIXTURES`. Add `screeps-foreman` dep (Stage 3 needs it). Tests: `decode_roundtrips_a_known_pattern`, `fast_to_combat_matches_decode`, **`imported_terrain_is_navigable`** (the operator's smoke test — `ManagedSquadIntegration::validate` over a fixture passes; render via `render_managed_replay`). **Foundation — land first.**
 
 ### Stage 2 — Single + multi-room × objectives × comps
-An `ImportedRoom` `Generator` over imported terrain, single + multi-room (ADR 0023a S3 `in_room`/`terrain_for`), parameterized by objective kind × comp. **Close the objective-kind gap first** (today `Objective` is a hard-coded "destroy spawn"; `EngageObjective` only Destroy/Hold): add a generation-side `enum ObjectiveKind { Farm, Secure, Breach, Raze, Declaim }` + `Objective.kind` (`scenario.rs`), each mapped to existing `RunUntil`/`EngageObjective`/world-population (Raze=`ObjectivesDestroyed`; Breach=rampart-falls; Secure=`SideWiped(defender)`; Farm=survive-N+`Hold`; Declaim=push `SimController`+ new `ControllerNeutralized` RunUntil). `ImportedRoom { multi_room, n_comps }` decodes `index→(fixture, kind, comp_seed)` like `Permutations`; **vary the DEFENDER comp via `roster::random_squad`**, leave attacker variety to the tournament `comp_basket`. Multi-room mirrors `twin_room_siege` (`generate.rs:400`). Tests: `imported_room_every_kind_is_assessable`, `imported_declaim_has_a_controller`, `imported_room_navigable`, `multi_room_imported_crosses_border` (gate on *reach*, not the known ~93% cross-room oscillation). **After Stage 1.**
+An `ImportedRoom` `Generator` over imported terrain, single + multi-room (ADR 0023a S3 `in_room`/`terrain_for`), parameterized by objective kind × comp. **Close the objective-kind gap first** (today `Objective` is a hard-coded "destroy spawn"; `EngageObjective` only Destroy/Hold): add a generation-side `enum ObjectiveKind { Farm, Secure, Breach, Raze, Declaim }` + `Objective.kind` (`scenario.rs`), each mapped to existing `RunUntil`/`EngageObjective`/world-population (Raze=`ObjectivesDestroyed`; Breach=rampart-falls; Secure=`SideWiped(defender)`; Farm=survive-N+`Hold`; Declaim=push `SimController`+ new `ControllerNeutralized` RunUntil). `ImportedRoom { multi_room, n_comps }` decodes `index→(fixture, kind, comp_seed)` like `Permutations`; **vary the DEFENDER comp via `roster::random_squad`**, leave attacker variety to the tournament `comp_basket`. Multi-room mirrors `twin_room_siege` (`generate.rs:400`). Tests: `imported_room_every_kind_is_assessable`, `imported_declaim_has_a_controller`, `imported_room_navigable`, `multi_room_imported_crosses_border` (gate on *reach*, not oscillation — the cross-room bed carries only the loose `≤ 0.97` bound, §11 #10). **After Stage 1.**
 
 ### Stage 3 — Foreman-layered realistic bases
 **3a (offline, cached, committed):** reuse the bench `plan_room(&data_source)` path (`bench/src/main.rs:259-335`, `CpuBudget::unlimited()`) with a new output mode emitting `CapturedBase { room, terrain, controller, structures: Vec<CapturedStructure{kind,x,y}> }` — iterate `Plan::structures` (`plan.rs:267`), map `RoomItem.structure_type`→Spawn/Tower/Rampart/Wall (drop roads/extensions/labs), write one JSON per room to committed `resources/captured-bases/`. **Run once, manually, never in CI.** (Live-shard variant = same tool via `room_terrain_encoded`+`room_objects`, credential-gated, Phase G.) **3b (fast — loads cache, never plans):** `ForemanGenerator::new(dir, n_comps)` loads the JSONs; `realize_base(&CapturedBase, kind, comp_seed)->Scenario` decodes terrain + pushes `SimStructure`/`SimTower` (towers energized 100k, the calibration convention) via `ScenarioBuilder`. **New `breach_from_ramparts(core, &ramparts, &terrain)`** — the synthetic `breach_geometry` assumes one west rampart; derive staging from the real rampart ring (shortest BFS flood-fill to a room exit, `terrain.rs:315/52`). Tests: `foreman_cache_realizes`, `foreman_base_is_assessable`, `foreman_breach_geometry_is_in_range`, `#[ignore] write_foreman_replays`. **After Stages 1+2; 3b can land with a checked-in sample cache.**
@@ -354,3 +354,218 @@ Widen the EXISTING tuning machinery (`tournament.rs`), build no new mechanism: e
 - `7b348e4` sim intent-legality mirrors the real engine table (2026-06-25)
 - `7f72516` `plan_squad_ev` kernel in, old layout/action machinery deleted (2026-06-25)
 - `2a4f790` sim adapter consumes `member_intents` (2026-06-25)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+What the kernel (`screeps-combat-decision/src/kernel.rs`, `lib.rs`) became between the WS-VAL
+corpus (2026-08-23) and the WS-CLOSE tie-off (2026-09-07). Every item below is verified against the
+code as of this write-back; the body sections above were corrected in place where they had become
+false (§2.2 HEAL/RISK rows, §2.3 STAGE 0 heal ledger, §7 tie-break and cross-room paragraph, §10
+boosted-TOUGH, §11 #10, §12 Stage 2 and the `a1-i6-tight` line). Provenance, cited once: decision
+`be725c9` (A/B), `b0b7ea0` (C), `acf3600`/`71c6e0a` (D), `f8b97a6` (A), `d693229` (E), and the
+2026-09-07 WS-CLOSE Phase A lanes (F).
+
+### A. One progress-diluted currency across all three legs (RULING-9, operator 2026-08-24)
+
+The §2.1 promise — no new exchange rate between damage dealt, deaths prevented and risk taken — was
+only half kept by the first build: attack value was diluted by progress (`value_per_hit =
+g_them · threat_value / residual`, each landed hit is a fraction of the kill), but heal value and
+self-risk were priced FLAT per HP with multiplicative premiums bolted on. The asymmetry showed up as
+survivor remnants that PERCHED: in a long fight a perpetual heal out-priced every killable focus.
+The redesign makes all three legs the same primitive — `g × output × survival-time per HP`:
+
+- **HEAL leg — the triage price.** `HealTarget::value_per_hp = g_us · member_output /
+  horizon_hits`, where `member_output = melee + ranged + heal_parts·HEAL_POWER + dismantle_power`
+  (a pure siege dismantler's whole contribution is WORK; excluding it priced its heals at zero) and
+  `horizon_hits = max(1, hits − inc·SURVIVAL_HORIZON)` at the ally's UNGATED incoming. Dividing by
+  the *remaining* hits mirrors the attack side exactly (the event a heal prevents is this ally's
+  death, and the enemy still needs `hits` more damage to realize it), so the price rises as death
+  nears — graduated mortality falls out — while a full-HP target stays cheap. `MORTAL_HEAL_MULT`
+  (4, when `inc ≥ hits`) is kept as the one sanctioned nonlinearity (the finish-bonus mirror). The
+  flat `URGENT_HEAL_MULT` premium (×8, then a ×3 calibration) is DELETED.
+- **Two heal ledgers, urgency as allocation not price.** Each ally carries `inc` (URGENT —
+  anticipated incoming from the threat field, drained first) and `deficit` (BACKLOG — `hits_max −
+  hits`). Equal-value candidates tie-break toward the most UNCOVERED incoming (`apply_act`,
+  `Act::Heal` branch), which is the dying-first stack the old ledger-index tie lacked.
+- **Evidence gate on the URGENT ledger.** The field stamps the enemy's full output on every tile in
+  range, but focused fire lands on one creep; pricing every full-HP member as "about to take it all"
+  made each healer's top EV a self-pre-heal while the actually-focused member died (watched: healers
+  at full HP emitting `Heal(self)` as the focused healer spiralled −78→−318/tick). A member is
+  `wounded` — carries its full `inc` — when it has a real deficit OR a hostile is inside its weapon
+  band (melee ≤2, ranged ≤3); otherwise `inc` is discounted `÷ UNFOCUSED_INC_DIV` (4). The range
+  clause exists because deficit-only evidence BREATHES in an even duel (healed-full on alternating
+  ticks) and period-2'd the healer's tile with it.
+- **RISK leg — the MARGINAL price, not the triage price.** `best_tile` charges `net × my_vph` with
+  `my_vph = g_us.max(unit) · my_out / max(raw_at(tile), hits / SURVIVAL_HORIZON)`. The triage form
+  diverges as a risk price: a healthy squad reads its exposure as ~`out/hits_max` (near zero — six
+  of eight marched into the choke kill zone), then the wounded remnant prices its HP as infinite and
+  PARKS outside tower range to timeout. The marginal form pays what one HP actually buys —
+  `d(ttl)/d(hp) = 1/inc` ticks of output under fire, capped at the horizon rate when fire is light —
+  bounded both ways. `g_us.max(unit)` is the siege risk-currency floor from B (with no killable
+  creeps `g_us → 0` and members priced their HP at nothing). The flat `NET_RISK_MULT` (×4) is
+  DELETED: it out-massed every diluted attack value for healer-less comps and produced universal
+  cowardice (a T3 trio refused a 4:1 trade with a HOLDING T0 twin). The `LETHAL` survival veto is
+  untouched.
+- **Kite dead-zone fall-through** (`lib.rs`, `decide_squad_with_pathing`, `kite_settled`). A
+  `plan_kite_anchor` result of `None` means "already the safest, most cohesive tile" — a kite with
+  nothing to flee. Previously the kernel was gated on `!should_kite`, so such a squad neither fled
+  nor fought: a stable non-fighting equilibrium just outside weapon range (the T3-twin margin-0
+  standoff, gate-traced). Now the kernel runs anyway unless the squad state is `Retreating` (a
+  withdrawing block must not re-engage because its tile happens to be safe).
+- **Focus-stall gate** (`select_focus_target`, fallback 1). A squad with `our_dps == 0` (WORK/HEAL
+  siege comp) no longer falls back to the lowest-hits unshielded creep when a valued hostile
+  STRUCTURE exists: the creep focus dragged the approach gradient to a creep it could not hurt
+  (dismantlers crowded an unkillable guard at range 2 of the core, zero acts, engage budget burned).
+  With no structure alternative the creep focus is kept even at dps 0 (harmless, and it holds the
+  committed state across roster flaps).
+- **Heal-incumbency dead-band.** At its current tile a member gets `+unit · incumbency_coef` only
+  where OFFENSE lands (`offense_reachable`); where only a HEAL lands (`heal_reachable`) it gets a
+  light `+1 · unit`. The duel-breathing this damps is sub-unit (~0.005 unit on designed#2, where
+  `value_per_hp` breathes with the ally's HP), so one unit crushes the flip without out-pulling a
+  real approach gradient (≥ 2 units/tile) — the full coefficient froze healer-dps lockstep pairs
+  mid-march. designed#2 oscillation 29.5% → 5.0%.
+- **Results under the currency.** `t3_twin_decisively_beats_unboosted_twin` is pinned against a
+  HOLDING defender (an equal-speed mirror fleer is honestly uncatchable — the eternal chase is
+  correct, not a defect); the generated-bed fairness bound moved 2000 → 3000 because mirror fights
+  now TRADE (order bias compounds over real casualties; the sign is still seed-varying — open). The
+  boosted re-tune that followed (item 6) adopted `open_combat = a2-i6-tight` (`strategy.rs`:
+  approach 2, incumbency 6, discohesion 20, k 2, spacing 1) by maximin-with-a-noise-band over
+  3 tiers × 3 terrains; the profile table itself is ADR 0026's.
+- **Note on the §2.2 DENIAL row.** As built there is no separately booked once-per-target kill
+  swing: kill value is linear in `DamageTarget::value_per_hit` over the residual (the comment in
+  `kernel.rs` records the finish/concentration bonus as a tournament refinement, §11 #1).
+
+### B. Cohesion under focused fire (Phase 4.5 item 1)
+
+The L1@T3 stronghold sizing was honest (3 T3 healers out-heal a 600-dps tower) but only at heal
+range 1; the squad approached strung out, ranged-heal landed at ⅓ output, and `focusClosest` killed
+full-HP members serially. Four kernel defects, each fixed per-tick-optimally with no formation state:
+
+1. **Deliverable heal, not squad total** (`deliverable_heal`). The RISK net at a candidate tile
+   subtracts the member's own full self-heal plus what each OTHER living healer can land there from
+   where it stands NOW: full `heal` within 1, `rangedHeal` within 2..3, nothing beyond. Deliberately
+   NO catch-up slack: crediting a healer one tile past real reach is a lie during a march (both move
+   1 tile/tick, the gap never closes; slack-1 wiped the L1-chokepoint squad by t69). Strict reach
+   makes the advance self-gate — the front tile prices uncovered the moment it leaves range, the
+   member brakes, the healers' own approach pull restores adjacency, the wedge crawls forward tight.
+2. **Lockstep healer-tile advertising.** After a healer commits, `HealerReach.pos` is set to its
+   LANDED tile, so every member after it in the commit order prices coverage one step ahead (a wedge
+   advancing together reads full coverage; a healer four tiles back still reads as the chase it is).
+   This relies on the STABLE member-index order (§7.2 item 2): the optimizer emits Healer slots first,
+   so healers already commit before the dps they cover in oracle comps. **Rule (recorded in
+   `plan_squad_ev`):** an explicit healers-first SORT was tried and REVERTED — reshuffling contention
+   away from member index drove designed#0's period-2 rate 3% → 44%; the claimed/spacing/held
+   interactions are tuned around index-stable contention. No kernel-order change ships without the
+   oscillation gate in the loop.
+3. **Siege risk-currency floor** — `g_us.max(unit)` in the RISK price (A above). The item-1 form
+   also carried a ×4 uncovered-net steepener; that steepener was the flat coefficient RULING-9 later
+   deleted, so only the floor survives.
+4. **Evidence-gated URGENT/BACKLOG triage** (A above).
+
+Also from this pass: the **flood-gap fallback** (`APPROACH_FALLBACK_TILE_COST` = 2) — the target
+flood is ops-bounded (`TARGET_FLOOD_OPS`) and threat-cost inflation shrinks its radius; a member
+beyond it read `u32::MAX` for every candidate and froze permanently (L1 probe: parked 15 tiles out
+from t200). Beyond the flood the approach term degrades to Chebyshev distance to the approach
+target at plains cost, handing over to the wall-aware flood where coverage begins. Acceptance:
+L1-open@T3 → Killed, zero losses (`stronghold_floor_t0_defers_t3_kills_every_l1_rung`).
+
+### C. Border crossing — the kernel's share (Phase 4.5 item 2, item 8a)
+
+Of the seven-defect chain behind "one creep enters and everything outside the room stalls", four
+live in this kernel; the bloc crossing gate, full-roster member views (parity H5) and room-gated
+mover anchor are `screeps-combat-agent`'s, rout-to-rally is ADR 0034's and Retreating state decay
+ADR 0027's.
+
+- **`plan_squad_ev` takes the FIGHT room explicitly.** `decide_squad_with_pathing` derives it as the
+  focus room, else the centroid room, and passes it down; members in any other room are excluded
+  from the kernel (goal `None` → the shared `Advance` rejoin governs them) and `best_tile` asserts
+  every `EvMember` is in that room (the V-1 aliasing guard). Deriving the room from the CENTROID had
+  transplanted every tile into the STAGING room whenever a mid-crossing squad's full-roster centroid
+  sat across the border, and integer centroid flapping re-mapped the goals tick to tick.
+- **Exit-edge tiles are transitional** (`EXIT_EDGE_PENALTY = LETHAL / 8` on `x,y ∈ {0, 49}`). In
+  the real engine a creep on an exit tile transits — it cannot hold there — while the sim grid let it
+  stand; an entrant camping the arrival tile "waiting for coverage" was also the doorway jam (three
+  entrants at x=49, the five members carrying their coverage queued behind them forever). Priced
+  below every tactical alternative but above the survival veto (transiting beats dying).
+- **Room-local tower assessment** (`assess_engage`). The tower damage curve floors at 150 for any
+  large range, so with full-roster views a staging-room centroid read the target room's towers as a
+  phantom 150/tick each, latched `Retreating`, and never crossed. Towers now count only in the
+  centroid's room — a tower cannot fire across a room boundary.
+- **Out-of-contact handoff** (`block_advance`, item 8a). Under a block `Advance` whose goal is in the
+  fight room, a squad with no combat signal near ANY member (`squad_in_contact`: field incoming > 0,
+  a living hostile creep or structure within 4, or a healer with a needy ally within 4) yields every
+  member's goal to the block directive (`goal: None` → the traffic-managed mover). The per-tile EV
+  is a CONTACT instrument; out of contact it deadlocks the pack as a rigid body — with `act = 0`
+  everywhere each lone step prices as leaving the pack (discohesion ≫ approach at the tuned profile)
+  while the centroid, an average, can never lead (tile-traced on border g1@T3). Squad-level on
+  purpose: a per-member handoff flapped control kernel↔mover at the contact boundary (designed#4
+  → 99.6% period-2); cross-room goals are excluded because the mover marched members over the exit
+  edge. Kite / Drain / Hold blocks are untouched. designed#4: 99.6% → 0.6%.
+
+Acceptance: every fielding stronghold rung kills (L1 open / choke / choke-multi) and border g1@T0,
+g1@T3, g2@T3 kill with the bloc crossing together. What remains open is §11 #10 (the seam-stitched
+field).
+
+### D. Drain rework and the plateau tie-break (Phase 4.5 item 5)
+
+- **Placement, not the form phase** (correcting an earlier log entry). The harness placed drain
+  squads at ~r11 INSIDE the tower falloff; the focused tank died in ~3 ticks in every variant and the
+  canary's verdict rode whichever remnant survived. Drain scenarios now place at
+  `TOWER_FALLOFF_RANGE + 2` along the entry ray (`screeps-combat-eval/src/harness/validate.rs`) —
+  live parity, since a real squad meets the standoff before entering the falloff.
+- **Deliverable standoff sizing** (`lib.rs`, `DRAIN_ADJACENT_SLOTS = 3`). The standoff range is
+  chosen against the heal that can actually reach the tank: the largest healers fill the three
+  REAR-ring full-rate slots, overflow support heals at ⅓ (ranged) from the set-back band. Squad-total
+  sizing picked a band ~5 ranges too deep (r15; the tank bled −45/tick) — the survivable band is r19.
+  `drain_member_goals` fills only behind/level ring tiles (`range_to(nest) ≥ standoff`), never the
+  deeper-falloff side.
+- **Approach-aware plateau tie-break** (`best_tile`). Equal-cost bands are common in flat,
+  threat-free states; the old lower-x/lower-y tie-break was objective-blind, and a post-drain squad
+  west of its target plateau-drifted WEST and perched. Ties now prefer the smaller approach distance
+  `d` first, then lower x, lower y (§7 corrected in place).
+- **Tried and reverted, recorded in `best_tile` / `plan_squad_ev`:** an EXACT-CLAIM hard exclusion
+  (no two members may pick the same range-0 destination) cost the kite beds their concentrated
+  chip-fire (`EXP-POS-KITE-1` went red) — the goal-convergence churn is real but its fix must ride
+  the EXP register; and a kernel-side REPAIR pass for early goals landing on later committed-stayers
+  (both full and adjacent-only strengths) either stalled the drain endgame or broke corridor
+  queueing — that dance stays damped mover-side (`convert_persistent_doomed_goals`).
+
+### E. Siege member-clamp machinery — landed, wired off (Phase 4.5 item 8a)
+
+`composition.rs`: `member_cap_for(objective)` is the ONE policy point both the winnability ceiling
+and the assembler cap derive from; it returns `MAX_SIZED_MEMBERS` (8). `SIEGE_MAX_SIZED_MEMBERS`
+(16) is kept as the wiring anchor. Measured with the lift active: the sizing works (L2@T3 fields at
+p_surv 0.82, the whole gate battery green) but the 16-blob loses tactically on every terrain —
+congeals in the choke, parks as a rigid body at the tower-threat edge in the open (five deliverable
+healers cannot gate eleven fighters forward). Shipping it would convert live L2+ defers into repeated
+wipes, so the L2+ path is the multi-squad doctrine (ADR 0048, parked Draft). The by-products that DID
+ship and this kernel is now graded by: honest gauntlet verdicts (`Killed` = the core RAZED; the old
+defender-wipe stop mis-scored border rungs at camper-kill), the in-contact stall gate (ADR 0035),
+and the out-of-contact handoff (C above).
+
+### F. `threat_value` prices WORK and CLAIM (WS-CLOSE D1, 2026-09-07)
+
+`lib.rs::threat_value` is the one additive capability-removed currency for every consumer — the
+kill ledger here (`g_them × threat_value` via `ev_target_order`), squad focus EV, and the tower
+redirect order in `tower_fire` (parity M17/M18). It now adds `effective_output(Work,
+DISMANTLE_POWER)` (50/part, UNCONDITIONAL — a ranking proxy only; force SIZING must never fold WORK
+into creep dps, per the dismantle ruling) and `effective_output(Claim, CONTROLLER_ATTACK_PER_PART)`
+(300/part, the engine's own controller-damage unit). One CLAIM part = ten ATTACK parts, so a
+declaimer outranks any realistically-sized breacher and ADR 0008a's T-DEF-4 ordering falls out of
+the currency instead of a lexicographic tower-only rule. Every term is boost-aware through
+`CombatCreepDto::effective_output`.
+
+### G. Open items recorded 2026-09-07
+
+- **F2 — duplicate-goal park.** The kernel has been seen to assign two members the SAME goal tile on
+  a tower's flank (the ADR 0023 S5 GROUP-UP bed, members at (46-48,21-23) vs a tower at (46,23));
+  the agent's dance damper then converts both to `Immovable` holds and the squad parks `Engaged`
+  forever without acting. The soft spacing penalty does not prevent it and the exact-claim exclusion
+  (D) was reverted for cost. Bar: goal assignment excludes tiles already claimed this tick, or the
+  damper never freezes two members on one tile. Repro: the GROUP-UP bed with the staging moved onto
+  the tower's flank.
+- **Boosted-TOUGH damage reduction** — §10, refreshed in place (the boost field exists; receiving-
+  side TOUGH reduction does not).
+- **Goal-convergence churn** (D) — needs the EXP register + oscillation surfaces in the loop.
+- **Generated-bed fairness** — mirror fights trade; the sign of the order bias is seed-varying.
+- **Process rule** — the oscillation gate rides every kernel-order change (B.2).

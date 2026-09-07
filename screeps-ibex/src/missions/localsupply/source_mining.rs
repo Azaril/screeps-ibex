@@ -1,5 +1,6 @@
 use super::body_helpers::*;
 use super::structure_data::*;
+use crate::creep::SpawnBodyDefinition;
 use crate::jobs::data::*;
 use crate::jobs::harvest::*;
 use crate::jobs::linkmine::*;
@@ -7,6 +8,7 @@ use crate::jobs::staticmine::*;
 use crate::missions::data::*;
 use crate::missions::missionsystem::*;
 use crate::remoteobjectid::*;
+use crate::room::data::RoomData;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -18,6 +20,40 @@ use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
+
+/// K4 starvation sizing for a replacement body (RULING-11 root B — `spawn_policy::
+/// replacement_body_energy`): the budget is the home's capacity iff the lane can reach the
+/// capacity body's cost from the lane + the room's haulable stock; else available-now energy
+/// (floored at the 300 regen). `capacity_body` is the capacity-sized definition whose expanded
+/// cost is the reachability target (an unexpandable definition falls back to the raw capacity).
+fn replacement_body_energy(
+    home_room_data: &RoomData,
+    energy_available: u32,
+    energy_capacity: u32,
+    capacity_body: &SpawnBodyDefinition,
+) -> u32 {
+    let capacity_body_cost = crate::creep::spawning::create_body(capacity_body)
+        .map(|body| body.iter().map(|p| p.cost()).sum())
+        .unwrap_or(energy_capacity);
+    let reachable_energy = crate::missions::haul::spawn_lane_reachable_energy(home_room_data, energy_available);
+    screeps_econ_decision::spawn_policy::replacement_body_energy(energy_available, energy_capacity, reachable_energy, capacity_body_cost)
+}
+
+/// The static-miner body for one home lane: the capacity body when the lane can reach it, the
+/// affordable-now body otherwise (income is CRITICAL — it must never head-of-line-bank a lane
+/// that cannot pay for it; a 250e [M,W,W] miner is always fieldable).
+fn miner_body_for_lane(
+    home_room_data: &RoomData,
+    home_room: &Room,
+    is_local: bool,
+    work_parts: usize,
+    has_link: bool,
+) -> SpawnBodyDefinition<'static> {
+    let energy_capacity = home_room.energy_capacity_available();
+    let capacity_body = source_miner_body(is_local, energy_capacity, work_parts, has_link);
+    let body_energy = replacement_body_energy(home_room_data, home_room.energy_available(), energy_capacity, &capacity_body);
+    source_miner_body(is_local, body_energy, work_parts, has_link)
+}
 
 pub struct SourceMiningMission {
     owner: EntityOption<Entity>,
@@ -387,20 +423,29 @@ impl SourceMiningMission {
                 let current_source_room_harvesters = home_rooms_to_harvesters.iter().filter(|e| source_harvesters.contains(e)).count();
 
                 // K4 policy (ADR 0040 M3): the desired count, body-energy choice (bootstrap
-                // available-sized / replacement capacity-sized — the S6 arm, preserved) and
-                // the priority lerp live in `screeps_econ_decision::spawn_policy`.
+                // available-sized; replacement via the starvation sizing — RULING-11 root B) and
+                // the priority (restart floor over the lerp) live in
+                // `screeps_econ_decision::spawn_policy`.
                 //TODO: Compute correct number of harvesters to use for source.
                 let desired_harvesters = screeps_econ_decision::spawn_policy::DESIRED_HARVESTERS_PER_SOURCE;
 
                 if current_source_room_harvesters < desired_harvesters {
-                    let body_definition = harvester_body(screeps_econ_decision::spawn_policy::harvester_body_energy(
-                        total_harvesting_creeps,
-                        home_room.energy_available(),
-                        home_room.energy_capacity_available(),
-                    ));
+                    let energy_available = home_room.energy_available();
+                    let energy_capacity = home_room.energy_capacity_available();
+                    let body_energy = if total_harvesting_creeps == 0 {
+                        screeps_econ_decision::spawn_policy::harvester_body_energy(
+                            total_harvesting_creeps,
+                            energy_available,
+                            energy_capacity,
+                        )
+                    } else {
+                        replacement_body_energy(home_room_data, energy_available, energy_capacity, &harvester_body(energy_capacity))
+                    };
+                    let body_definition = harvester_body(body_energy);
 
                     if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                        let priority = screeps_econ_decision::spawn_policy::harvester_priority(
+                        let priority = screeps_econ_decision::spawn_policy::harvester_bid(
+                            total_harvesting_creeps,
                             current_source_room_harvesters,
                             desired_harvesters,
                             room_manhattan_distance as u32,
@@ -446,7 +491,7 @@ impl SourceMiningMission {
                     let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
                     let is_local = link.pos().room_name() == home_room_data.name;
-                    let body_definition = source_miner_body(is_local, home_room.energy_capacity_available(), work_parts, true);
+                    let body_definition = miner_body_for_lane(home_room_data, &home_room, is_local, work_parts, true);
 
                     if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                         let target_container = available_containers.next();
@@ -454,7 +499,7 @@ impl SourceMiningMission {
                         let spawn_request = SpawnRequest::new(
                             format!("Link Miner - Source: {}", source_id.id()),
                             &body,
-                            SPAWN_BID_HIGH,
+                            screeps_econ_decision::spawn_policy::SPAWN_BID_MINER,
                             Some(token),
                             Self::create_handle_link_miner_spawn(mission_entity, *source_id, *link, target_container.cloned()),
                         );
@@ -482,13 +527,13 @@ impl SourceMiningMission {
                     let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
                     let is_local = container.pos().room_name() == home_room_data.name;
-                    let body_definition = source_miner_body(is_local, home_room.energy_capacity_available(), work_parts, false);
+                    let body_definition = miner_body_for_lane(home_room_data, &home_room, is_local, work_parts, false);
 
                     if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                         let spawn_request = SpawnRequest::new(
                             format!("Container Miner - Source: {}", source_id.id()),
                             &body,
-                            SPAWN_BID_HIGH,
+                            screeps_econ_decision::spawn_policy::SPAWN_BID_MINER,
                             Some(token),
                             Self::create_handle_container_miner_spawn(mission_entity, *source_id, *container),
                         );

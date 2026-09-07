@@ -177,3 +177,52 @@ Stable seams: **the `BoostQueue` resource API** (already plumbed into `MissionEx
 6. **L5 (optional, evidence-gated) — Unboost recovery.** Only if eval data shows ≥X T3 units/kilotick lost to high-TTL retirement deaths; designated sacrificial lab + pre-positioned hauler. Default: not built.
 
 **Breaking-change summary:** L0 — **None**. L1/L2/L3 — **Behavioral** (what gets brewed/bought/boosted changes; `BoostQueue` is ephemeral and `LabsState`'s serialized shape is untouched — assignments are derivable, not persisted; any later decision to persist planner state must follow [0002](0002-serialization.md)'s `serde(default)` + labelled-segment discipline). L4 — **None** (new mission variant addition follows the same `MissionData` enum-extension path as existing missions; additive). L5 — **Behavioral**. **No Memory/format break and no state drop anywhere in this pillar.**
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+Written back from the WS-5 implementation doc (docs/implementation/README.md rule 5); every claim checked against the code.
+The consumer ADR ([0041](0041-combat-boost-layer.md)) landed its P0–P3 against this pipeline's
+**existing autonomous brew** (O1(b) dark-first); the layers below record what of L0–L5 that consumed,
+and what each layer still is.
+
+- **L0 as shipped (dark, behind `features.military.boost_military`).** (1) `available_boosts` is
+  populated: `EconomyAssessmentSystem` (`military/economy.rs`) sums storage + terminal + every lab per
+  home over the 18 military compounds (`bodies::boosts::tier_compounds` T1..T3); the "one notion of
+  available" this ADR's header demands is `bodies::boosts::max_supplied_tier` (fully-suppliable per
+  six-family set, `MIN_BOOST_STOCK` = 1 000, T0 floor), read by the offense sizing clamp. (2) The
+  `BoostQueue` is wired and ephemeral, with **owner-staged clears** rather than the single per-tick
+  `clear()` this ADR named: the tick order is PreRun → RunMission (labs fulfil) → SquadManager
+  (produces) → RunJob (consumes), so `game_loop` wipes the ready marks at tick start and the producer
+  wipes last tick's requests right before re-filing (`clear_ready` / `clear_requests`,
+  `military/boostqueue.rs`). (3) The **key is the creep name** — the stable per-member identity that
+  exists today (never a raw `Entity`); §4's `DemandId` key is deferred to ADR 0011's spawn
+  orchestrator. (4) The sole `boost_creep` site is the `AwaitBoost` job state
+  (`jobs/squad_combat.rs`). **Not shipped from L0:** the reaction-selection extraction into pure
+  kernels and the chain-math/targets kernels — `LabsMission` still selects reactions from
+  `desired_resources()` / the flat `get_desired_storage_amount` target.
+- **The fulfiller as built = §2's "temporary re-role" of reaction labs.** `LabsMission::service_boosts`
+  (`missions/labs.rs`) assigns one lab per distinct pending compound (labs sorted by id, compounds in
+  priority-file order), files the loads through the transfer system exactly as the reaction states do
+  (withdraw foreign contents, deposit `30/part` compound + `20/part` energy — the energy accounting §4
+  demanded), `mark_ready`s each creep whose lab holds its full need, and pauses the reaction FSM
+  (`wait(5)`) while requests pend; the requester's `AWAIT_BOOST_DEADLINE` (300 ticks of age) bounds the
+  pause. No standing boost-lab tax in peacetime, as designed. **Not built:** the pre-loaded Tier-A
+  defense lab (L1) and the `Critical` preemption path (defense is T0-only today — 0041 O5).
+- **Consumer gating differs from §3(3)/§4 "is_ready before spawning".** As built the boost decision
+  is taken at SIZING against stock (0041 D2: the tier is clamped to what the home can fully supply
+  before the roster is spawned), and the boost is applied post-spawn with a bounded fall-through
+  (`AwaitBoost` departs unboosted at the deadline). That keeps §4's invariant — a boosted objective can
+  never hang in Forming — without an `is_ready` spawn gate; the "flip the plan back to unboosted" arm
+  is the deadline fall-through per member. The producer is the SquadManager filing per-member
+  remaining compounds every tick (`bodies::boosts::remaining_for_parts` over the live body — no
+  serialized progress), not the spawn orchestrator's reservation (ADR 0011 D9 stays the target shape).
+- **§5 end-of-life is live in part.** Renew skips any creep with a boosted part (`squad_manager.rs`
+  renew filter — the "never renew a boosted creep" rule). Recycle-not-unboost holds trivially:
+  `unboostCreep` is not implemented anywhere, and retiring members already route to recycle.
+- **What L1–L5 still are (unchanged design, none built):** L1 = ReagentPlanner v0 for the Tier-A
+  defense floor + the pre-loaded defense lab + defense boost-on-the-way; L2 = the empire planner
+  replacing the flat-10k demand input, inter-room reagent balancing, the recycle policy for boosted
+  members; L3 = market buys through ADR 0012's trust guard (`market.buy_minerals` is still default
+  `false`, `features.rs`); L4 = `FactoryMission` (no factory code exists); L5 = evidence-gated unboost.
+  The 0041 consumer is the demand signal L1/L2 were waiting for — `SquadComposition::required_boosts()`
+  now has real callers.

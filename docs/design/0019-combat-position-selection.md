@@ -370,3 +370,21 @@ search the block uses (no one-off algorithm) and routed per-member.
 - `992b191` final normalized unified position utility (2026-06-19)
 - `4185aef` build-once-per-room `PositionLayers` sharing (2026-06-20)
 - `93c2063` unified utility as the default, CPU bench as the standing gate (2026-06-20)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+- **S4-TUNE closure (§5 "standing weight-tuning loop", 2026-08-23) — provenance.** The tournament is
+  `s4_weights_retune` (eval `bbc1184`): one-axis perturbations of the shipped kite/engage
+  `KiteScoreParams` + style combos over `chokepoint_comp_basket`, per-regime maximin vs the shipped default,
+  kernel held at `SquadTacticParams::default()`. Every engage-preset axis scores exactly 0 because
+  post-ADR-0025 the EV kernel `plan_squad_ev` owns engaged positioning, so the engage preset's weights do not
+  reach a scored decision in these beds; the kite axes' only positive was a contact-time artifact. Defaults
+  confirmed; `kite.rs::KiteScoreParams::{kite, engage}` are unchanged. The kernel profile re-tuned in the same
+  session (`incumbency_coef`, the R19 pass) has since moved again (ADR 0026a, item 6) — that does not touch
+  this verdict, since the preset sweep did not use the open profile.
+- **T-POS-5 (ADR 0008a) lives in this ADR's scorer:** `EXIT_TILE_SURCHARGE` = 3×SCALE in `score_tile`, a
+  flat exit-tile term under threat (finite, so the sanctioned break-contact ejection survives) — the one
+  addition to the §1.2 utility since Stage 3.
+- **T-DEF-1 (ADR 0008a) lives in §2.1's threat field:** `ThreatField::build_covered` zeroes maintained
+  friendly rampart tiles (the engine's damage redirect), so the T layer — and every consumer of it — reads
+  cover; `MIN_RAMPART_HOLD` = 10k filters the about-to-break rampart out.

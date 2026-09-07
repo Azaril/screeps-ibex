@@ -112,3 +112,10 @@ re-run under `SWEEP_W_ENERGY=1.0` (48 points, `regime=all`, 80 calibration scena
 w_energy=1.0"): defaults stand, conclusions re-grounded. Ranked table:
 `sweep_0031_we1.txt` (session scratchpad; regenerate any time —
 `SWEEP_W_ENERGY=1.0 cargo test --release -p screeps-combat-eval --lib sweep_composition_params -- --ignored --nocapture`).
+
+## 6. Note (2026-09-07 — WS-CLOSE write-back)
+
+§5 is the WS-4 write-back and closes the re-tune obligation; nothing later moved the swept surface. The
+Phase 4.5 item-8a capped optimizer family (ADR 0031 Design deltas) is byte-identical at the shipped cap of
+8 — the deliverable-heal ceiling and the anti-creep reserve only bite above 8, and `member_cap_for`
+returns 8 for every objective — so these tables stand without a re-run.

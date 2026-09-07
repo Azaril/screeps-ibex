@@ -207,3 +207,53 @@ Decision dispositions: #1 refill floor derived (banking-model instant-spawnabili
 - `81ada97` `screeps-econ-decision` seam (K1–K4 + `TransferSnapshot`) at A/A parity (2026-07-04)
 - `3125f5e` logistics market live: numeric-bid tickets + bid-native hauler selection (2026-07-05)
 - `294ee26` spawn currency unification — civilian `body_roi` + military `p_win·value_e/est_ticks` (2026-07-05)
+
+## Design deltas (2026-09-07 — RULING-11 root B, the spawn-queue head-of-line deadlock)
+
+Live MMO collapse diagnosis (2026-09-07, verified): with the §D2 head-of-line-banking queue, the
+M5b hauler ROI bid `band.max(body_roi_milli(carry·50·1000, carry·100)).min(CRITICAL−1)` evaluated
+to **99_999 for every 1:1 body** (a fixed per-body constant, never need-scaled), the replacement
+hauler was capacity-sized once any hauler existed (1300e RCL4 / 1800e RCL5 / 2000e RCL8), and the
+link/container miners had drifted to `SPAWN_BID_HIGH` (75_000) — so once a lane fell below one
+hauler body it banked an 1800e head forever while 550e income bodies with full containers behind
+it were never looked at (W5N49 / W16N51 / W9N46 queues). The §D2 line "K4 also fixes S6 by design"
+had not landed live (the M3 extraction preserved S6 "for M4 to fix"). Three changes, all in the
+shared `spawn_policy` kernel (`screeps-econ-decision`) with the bot missions as thin callers:
+
+- **§D2 income ladder made explicit.** `SPAWN_BID_MINER = SPAWN_BID_CRITICAL` (static link /
+  container miners — the contract the comments, the forming-band docs and the squad-manager pins
+  always asserted); `hauler_bid` now caps at `SPAWN_BID_MINER − 1`. Two bootstrap floors sit
+  strictly ABOVE the miner band so a bid tie can never resolve (by registration order) into a
+  capacity-sized miner banking a lane at zero income: `SPAWN_BID_BOOTSTRAP_HAULER` (CRITICAL +
+  1·BID_SCALE — the first local carrier, what turns stock into lane) and
+  `SPAWN_BID_BOOTSTRAP_HARVESTER` (CRITICAL + 2·BID_SCALE — the self-sufficient restart body, ADR
+  0043 C2 made explicit via `harvester_bid`). Both floors are sized from available-now energy, so
+  they never bank. Side effect (correct): a defense-forming slot (~76k) no longer preempts a miner.
+- **§D2 / M5b hauler `w` is MARGINAL (ADR 0043 A10 form).** `hauler_bid(current, desired, d,
+  unfulfilled_hauling, carry, cost)`: `w = min(body throughput, unfulfilled − current·throughput)`
+  in the `hauler_desired` demand-sizing currency (`hauler_throughput_milli`), then `body_roi_milli`,
+  then `band.max(roi).min(MINER−1)`. Zero (or roster-covered) unmet demand → the coarse band floor;
+  an unserved lane bids up, monotonically, saturating at 99_999. The 0.75 band step is kept (the
+  ADR 0043 A10 deletion belongs to the coordinated spawn-EV batch, which also re-bases the scale).
+- **K4 starvation sizing lands — `replacement_body_energy(E, cap, reachable, capacity_body_cost)`.**
+  A pure per-tick function (no mode, no latch, no history): the capacity body is the target iff
+  `reachable ≥ capacity_body_cost`, where `reachable = energy_available + the home's haulable stock`
+  (storage + links + source-side containers; the controller container and the reserve-locked
+  terminal excluded — `missions::haul::spawn_lane_reachable_energy`); otherwise the body is sized
+  from `energy_available.max(300)` (`SPAWN_LANE_REGEN_FLOOR_E`: the engine regenerates the lane to
+  300 for free, so that body is always fieldable). Applied to replacement haulers (`haul.rs`),
+  replacement harvesters and both static-miner arms (`source_mining.rs`); the empty-roster
+  bootstrap arms are unchanged. Steady state (stock ≥ one body) is byte-identical to before:
+  capacity sizing and head-of-line banking toward it. The queue's `break`-on-unaffordable stays —
+  the P1 premium is built on it; the fix is that the head is now always a body the lane can reach.
+- **Pins (RED-verified):** `spawn_policy::tests::{miner_outranks_every_hauler_and_the_bootstrap_floors_outrank_the_miner,
+  need_scaled_hauler_bid_falls_to_the_band_floor_when_unmet_demand_is_zero,
+  starvation_sizing_picks_the_affordable_body_when_the_capacity_body_is_unreachable}` and, through
+  the real `SpawnQueue`, `missions::haul::tests::{income_outranks_logistics_in_the_spawn_queue,
+  starvation_sized_replacement_bodies_are_always_fieldable}` (the RED run reproduces the live W5N49
+  head `[("Haul",1800), ("Container Miner",550), …]`). The 0028 lifecycle harness stays green
+  (forming bids unchanged, still `< CRITICAL`).
+- **Not migrated (reported):** the econ sim arms (`screeps-econ-eval::{baseline,market}`) still call
+  `harvester_priority` / `harvester_body_energy` / `hauler_priority` (unchanged kernels, no static
+  miners in the sim) — the bootstrap floors, the marginal hauler bid and the starvation sizing are
+  live-only until the sim adopts `harvester_bid` / `hauler_bid` / `replacement_body_energy`.

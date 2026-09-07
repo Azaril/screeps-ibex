@@ -25,14 +25,14 @@
 - **Engage / commit / retreat / valuation (section F):** Lanchester winnability gate + coupled hysteresis + stalemate disengage [lib.rs:1300/1428/1488], `clear_force` escalate-vs-abandon with quad cap [force_sizing.rs:333], energy-equivalent `value_e` valuation feeding the global Hungarian auction [objective_value.rs:93, assignment.rs:491], war.rs winnability + ROI gate [war.rs:1405].
 - **Compositions (section G):** the capability-driven assembler *produces* the swarm quad, the harasser and the garrison tank+healer on demand via `assemble_force` [composition.rs:380] from a sized `RequiredForce` — the catalog's compositions are outputs of the sizing oracle, not fixed templates.
 - **Controller warfare (section H):** de-claim salvage takeover [salvage.rs:417 -> doctrine.rs:575], self-room unclaim on `upgrade_blocked` [colony.rs:186], the declaim strike primitive [squad_combat.rs:1172].
-- **Defense (section I) + NPC (section J):** remote RANGED interceptor + invader cleanup via GarrisonDefense [war.rs:709/798], lvl-0 core snipe [war.rs:1063], SK kite-kill [sourcekeeperfarm.rs:355], stronghold deploy/decay gate [war.rs:1069/1152], the reactive safe-mode floor [safe_mode.rs:190], tower danger ordering [tower.rs:348], `estimated_ticks_to_kill` [damage.rs:62].
-- **Sizing inputs the gates consume:** `project_enemy` [squad_manager.rs:397] (enemy `hits`, which must carry the boosted-TOUGH eHP pool per T-HEAL-3), `project_defense` [squad_manager.rs:387] (`repair_per_tick`, per T-BREACH-3), `estimated_heal` [threatmap.rs:315] (reachable-healer scoping, per T-HEAL-3), `assess` [force_sizing.rs:204] (the T-BREACH-3 safety margin), the room combat DTO [squad_manager.rs:1718] (where own-rampart pos+hits must be threaded for T-DEF-1), `build_combat_body` [bodies.rs:74/95] (MOVE back-loading + the parity assert, T-POS-3), `best_tile` [kernel.rs:652] (the exit-tile cost, T-POS-5), the two count-based RMA pipelines [lib.rs:587/633] (the shield check, T-BREACH-5).
+- **Defense (section I) + NPC (section J):** remote RANGED interceptor + invader cleanup via GarrisonDefense [war.rs:709/798], lvl-0 core snipe [war.rs:1063], SK kite-kill [sourcekeeperfarm.rs:355], stronghold deploy/decay gate [war.rs:1069/1152], the safe-mode arming kernels `safe_mode_should_arm` (reactive floor) + `predictive_breach_arm` (T-DEF-5) [safe_mode.rs], the ONE tower-firing decision `decide_towers` reached from `TowerMission` [tower.rs:322 -> tower_fire.rs], the URGENT defender downsize `defender_spawn_readiness` -> `slot_build_energy` [damage.rs:67/97 -> squad_manager.rs `queue_slot_spawn`].
+- **Sizing inputs the gates consume:** `project_enemy` [squad_manager.rs:886] (enemy `hits` = the body-derived `effective_hits` pool, T-HEAL-3a — built), `project_defense` [squad_manager.rs:387] (`repair_per_tick`, per T-BREACH-3), `reachable_estimated_heal` [threatmap.rs:234] (reachable-healer scoping, T-HEAL-3a — built), `assess` [force_sizing.rs:204] (the T-BREACH-3 safety margin), the room combat DTO (already carries own ramparts; T-DEF-1 reads them through `friendly_rampart_cover` [lib.rs:2103]), `build_combat_body` [bodies.rs:74/95] (MOVE back-loading + the parity assert, T-POS-3), `score_tile` [kite.rs] (`EXIT_TILE_SURCHARGE`, T-POS-5 — built), the two count-based RMA pipelines [lib.rs:587/633] (the shield check, T-BREACH-5).
 
 ### Cross-tactic dependencies
 
 Several catalog entries are not independent — they are only meaningful once another capability exists:
 
-- **T-DEF-1 (rampart-anchored defenders) is the defensive keystone.** Threading **our** ramparts (pos + hits) into the room combat DTO, plus a cover-seek term and a survival-veto exemption in `score_tile`, is what makes **T-DEF-2** (broadcast the tower's `best_target` into the squad focus) worth coordinating and makes **T-DEF-7** (drop HEAL on cover-only defenders) meaningful at all. **T-DEF-8** additionally needs a per-room threat-recency memory.
+- **T-DEF-1 (rampart-anchored defenders) is the defensive keystone.** Zeroing **our** maintained rampart tiles in the shared `ThreatField` (`build_covered`), so the TAKEN term, the EV risk term, the survival veto and the traversal pricing all read cover from one point, is what makes **T-DEF-2** (broadcast the tower's `best_target` into the squad focus) worth coordinating and makes **T-DEF-7** (drop HEAL on cover-only defenders) meaningful at all. **T-DEF-8** additionally needs a per-room threat-recency memory.
 - **The RMA falloff table is shared.** T-FOCUS-4 (falloff credit in the heal ledger), T-POS-4 (mass-vs-single selection) and the credit half of T-BREACH-5 all consume one `{0:1, 1:1, 2:0.4, 3:0.1}` table; they are one mechanism seen from three call sites.
 - **T-CTRL-1 inverts an existing veto.** The siege-opener CLAIM strike requires treating an *available-but-inactive* hostile safe mode as a reason to field the strike (not as a hard veto), and co-emitting an offensive Declaim sub-objective alongside the siege so the strike lands the same tick.
 - **New intel is the gate on three controller/defense tactics:** T-CTRL-2 needs the downgrade clock, T-CTRL-6 needs enemy `spawn.spawning` + an emergence-tile prediction, T-DEF-5's predictive arm needs `breach_rampart_hits` + attack DPS reaching the safe-mode decision (the reactive floor and the `upgrade_blocked` guard stay underneath it).
@@ -60,7 +60,7 @@ The full boost design is [ADR 0041](0041-combat-boost-layer.md); this section re
 
 Four invariants, all derived from fixed engine constants, underpin every tactic below. They are opponent-agnostic — the source of the catalog's robustness.
 
-**(1) The kill inequality (focus-fire vs aggregate heal).** Combat resolves in **two phases** (`creeps/tick.js:118-135`): all damage and all heal accumulate into per-object pools during the intent phase, then at each object's own tick they net **damage first, then heal, then the death check**. Consequence: a target of effective HP `H_eff`, receiving aggregate enemy focus-heal `Hb`/tick, hit by our aggregate DPS `D`, dies in `t = ceil(H_eff/(D − Hb))` ticks **and only if `D > Hb`**. If `D ≤ Hb` the target is unkillable by that force and every shot is wasted. This is exactly the bot's `attack_parts_to_kill(target_hp, enemy_focus_heal, window, dmg_per_part)` (`damage.rs:181`) and the tower-side `should_towers_fire` / `net_tower_damage` (`damage.rs:84-92`) generalized from towers to creeps. Two corollaries: (a) heal landing the *same tick* can save a creep from otherwise-lethal damage (pre-heal is never wasted) — so always heal an exposed creep every tick; (b) to kill you must out-DPS the **whole enemy heal stack** concentrated on the focused creep, not its self-heal.
+**(1) The kill inequality (focus-fire vs aggregate heal).** Combat resolves in **two phases** (`creeps/tick.js:118-135`): all damage and all heal accumulate into per-object pools during the intent phase, then at each object's own tick they net **damage first, then heal, then the death check**. Consequence: a target of effective HP `H_eff`, receiving aggregate enemy focus-heal `Hb`/tick, hit by our aggregate DPS `D`, dies in `t = ceil(H_eff/(D − Hb))` ticks **and only if `D > Hb`**. If `D ≤ Hb` the target is unkillable by that force and every shot is wasted. This is exactly the bot's `attack_parts_to_kill(target_hp, enemy_focus_heal, window, dmg_per_part)` (`damage.rs:181`) and the tower-side hold-fire in `decide_towers` (`full_tower_damage <= heal`, `screeps_combat_decision::tower_fire`) generalized from towers to creeps. Two corollaries: (a) heal landing the *same tick* can save a creep from otherwise-lethal damage (pre-heal is never wasted) — so always heal an exposed creep every tick; (b) to kill you must out-DPS the **whole enemy heal stack** concentrated on the focused creep, not its self-heal.
 
 **(2) Tower range / drain math.** A tower does `600 − ((clamp(r,5,20)−5)/15)·450` damage (`tower_attack_damage_at_range`, `damage.rs:8`): 600 at r≤5, linear to 150 at r≥20; 10 energy/shot, one action/tick, heal>repair>attack priority. `N` towers stack additively and net in the same two-phase step. At the room edge (the kernel samples x=25,y=0, `tower_dps_at_room_edge`, `damage.rs:66`) a centred RCL8 bunker is ~range 20-25 so each tower floors at **150** — a **4× cut** from the 600 in-bunker figure. Edge totals: `{1:150, 2:300, 3:450, 4:600, 5:750, 6:900}`; in-bunker totals: `{1:600 … 6:3600}`. HEAL sustains 12/part raw, **48/part** boosted (XLHO2 ×4). `drain_heal_parts_for_dps(dps) = ceil(dps/12)` (`damage.rs:57`). The whole reason range management exists: a 50-part creep self-sustains ~25 HEAL = 300/tick raw → N≤2 towers at the edge unboosted; everything else needs boosts or a heal-train.
 
@@ -74,7 +74,7 @@ Four invariants, all derived from fixed engine constants, underpin every tactic 
 
 **T-FOCUS-1 — Net-heal-gated focus target (replace raw min-by-hits).** *Robustness: robust.*
 - **Trigger:** an offensive/defensive squad has ≥1 hostile creep in the engaged room (the `compute_focus_target` / squad-combat fallback pick).
-- **Behavior:** for each candidate compute (1) the squad DPS `D` landable this tick (sum of in-range members' part DPS at their actual ranges), (2) `Hb` = aggregate enemy heal reaching it (adjacent 12·mult + ranged-in-3 4·mult, from `threatmap` heal-per-tick), (3) discard candidates with `D ≤ Hb` (unkillable — do not waste fire, exactly `should_towers_fire`), (4) among killable, pick **min `ceil(H_eff/(D−Hb))`**, tie-broken by the heal-relief the target's death grants the rest of the enemy (so heal-carriers float up only when also near-killable). No-killable-creep branch keeps `InvaderCore > Spawn > Tower > other`.
+- **Behavior:** for each candidate compute (1) the squad DPS `D` landable this tick (sum of in-range members' part DPS at their actual ranges), (2) `Hb` = aggregate enemy heal reaching it (adjacent 12·mult + ranged-in-3 4·mult, from `threatmap` heal-per-tick), (3) discard candidates with `D ≤ Hb` (unkillable — do not waste fire, exactly the `decide_towers` hold-fire), (4) among killable, pick **min `ceil(H_eff/(D−Hb))`**, tie-broken by the heal-relief the target's death grants the rest of the enemy (so heal-carriers float up only when also near-killable). No-killable-creep branch keeps `InvaderCore > Spawn > Tower > other`.
 - **Params:** `kill_window_ticks` = 25 (reuse `KILL_WINDOW_TICKS`; sweep 15-40); `heal_relief_weight` w in `score = ttk − w·Hb_provided` = 0.05 tick/HP (sweep 0.0-0.15); `range_penalty` = 10/tile (Overmind value; sweep 0-20); `rma_rampart_exclude` = true.
 - **Metric:** sim — ticks-to-clear a tank+healer pair drops vs the current healer-first rule; wasted-fire ticks (target netted ≥0 HP) → ~0. Server — kills per energy in scripted duels rises.
 - Source: Overmind `CombatTargeting.ts` (https://github.com/bencbartlett/Overmind/blob/master/src/targeting/CombatTargeting.ts).
@@ -102,7 +102,7 @@ Four invariants, all derived from fixed engine constants, underpin every tactic 
 
 **T-FOCUS-5 — Off-room/edge drain recognition on the offensive side.** *Robustness: mixed.*
 - **Trigger:** a focused hostile gains hits across ticks despite our fire (returns healthier than it left) — sustain from a healer we cannot reach.
-- **Behavior:** port the tower-side confirmed-drainer logic (`is_likely_tower_drain`, the bounded probe) to creep focus selection: if a candidate's hits recover under our fire, drop it from the killable set and spill to a reachable target. Prevents a squad emptying its life into an edge-kited creep whose healers sit one room over.
+- **Behavior:** port the tower-side confirmed-drainer logic (the persisted drain-sawtooth tracker + bounded probe in `missions/tower.rs`) to creep focus selection: if a candidate's hits recover under our fire, drop it from the killable set and spill to a reachable target. Prevents a squad emptying its life into an edge-kited creep whose healers sit one room over.
 - **Params:** `drain_confirm_cycles` (reuse the tower `DRAIN_CONFIRM_CYCLES`); `edge_band` = x≤3‖x≥46‖y≤3‖y≥46; `probe_budget_ticks` = 3.
 - **Metric:** sim with an off-screen healer — squad disengages within `probe_budget`; ticks/energy on unwinnable edge targets → ~0.
 - Source: https://screeps.com/forum/topic/2801/.
@@ -142,7 +142,7 @@ Four invariants, all derived from fixed engine constants, underpin every tactic 
 **T-POS-5 — Stay-off-exit-tiles discipline.** *Robustness: robust.*
 - **Trigger:** a combat creep's chosen move would land on an exit tile (x∈{0,49}‖y∈{0,49}), or it is within 1 tile of the border with a hostile adjacent.
 - **Behavior:** forbid ending a combat move on an exit tile (mark exit tiles high-cost in the combat pathfinder, except for an intentional room-transition retreat). Keep a ≥2-tile buffer; if pushed toward the border, prefer lateral (interior) retreat over backing onto the exit. One shove on an exit tile ejects you to the adjacent room, resetting positioning and often separating you from healers.
-- **Params:** `exit_buffer` = 2 (sweep 2-3 vs boosted chasers); `exit_tile_cost` = very-high (not ∞, so intentional transitions remain possible); applies only `in_combat`.
+- **Params (as built, WvC-2):** `EXIT_TILE_SURCHARGE` = 3×SCALE — a flat, weight-independent term `score_tile` adds on x/y ∈ {0,49} only while threats are present; it dominates every preset's mixing spread but is finite (a lethal interior may still eject, T-POS-8(b)). No separate `exit_buffer` band is built — the graded EDGE term (`EDGE_THRESH` = 6) already prices the approach to the border; transit movement never sees either.
 - **Metric:** sim — a kiter pressured toward an edge never involuntarily transitions rooms; zero unplanned room exits in adversarial kite scenarios.
 - Source: https://docs.screeps.com/api/#Room.
 
@@ -156,8 +156,8 @@ Four invariants, all derived from fixed engine constants, underpin every tactic 
 **T-POS-7 — Turn-from-tower-range block.** *Robustness: robust.*
 - **Trigger:** a drain/siege creep is in/near hostile tower range and tower fire dominates incoming damage (`threatmap` hostile tower positions non-empty; tower damage > enemy creep DPS).
 - **Behavior:** hold at the room edge / range ≥20 from all towers (each does only 150). When forced through closer range, rotate so fresh-armour/TOUGH creeps absorb the higher-damage tiles and HEAL stays at the lower-damage edge. Step one tile further from the nearest tower whenever `net (tower_damage − our_heal) > 0`.
-- **Params:** prefer range ≥20 (150/tower); drain HEAL ≥ `drain_heal_parts_for_dps(total_tower_damage)`; escalate to `drain_body_heavy` when required HEAL >13.
-- **Metric:** sim/server — drain sustains indefinitely at the edge (net HP non-decreasing) against the room's actual tower count; `should_towers_fire`/`net_tower_damage` correctly predicts the sustain.
+- **Params:** prefer range ≥20 (150/tower); drain HEAL ≥ `drain_heal_parts_for_dps(N·tower_dmg(range))`; escalate to `drain_body_heavy` when required HEAL >13.
+- **Metric:** sim/server — drain sustains indefinitely at the edge (net HP non-decreasing) against the room's actual tower count; the `decide_towers` hold-fire correctly predicts the sustain.
 - Source: https://wiki.screepspl.us/index.php/Combat.
 
 **T-POS-8 — Cornered fallback: commit or eject.** *Robustness: mixed.*
@@ -207,9 +207,9 @@ Four invariants, all derived from fixed engine constants, underpin every tactic 
 - Source: https://wiki.screepspl.us/Combat/.
 
 **T-TOWER-5 — Defender hold-fire vs a confirmed drain.** *Robustness: robust.*
-- **Trigger:** our defending tower(s) target a hostile and `net_tower_damage(target) ≤ 0` (total ≤ target heal/tick) AND the target is near the room edge (`is_likely_tower_drain` already implements this).
+- **Trigger:** our defending towers' candidate is out-healed — `decide_towers` finds `full_tower_damage <= heal_reaching` for it (the kernel hold-fire; there is no separate near-edge test — an un-killable hostile is never fired at, edge or not).
 - **Behavior:** HOLD FIRE — firing only converts stored energy into wasted shots the drain out-heals (the attacker's win condition). Keep towers full; redirect fire only where `net > 0`, and reserve energy for the real assault behind the drain. Resume if the target moves into a net-positive tile (range drops / its healers die).
-- **Params:** `hold_fire_when_net_dmg≤0` (the `should_towers_fire` gate); `edge_band` x/y ≤3 or ≥46; `reserve_energy_for_assault_fraction` = 0.5.
+- **Params:** `hold_fire_when_net_dmg≤0` (the `decide_towers` hold-fire — a rule, not a knob); `edge_band` — not built (subsumed by the hold-fire, WS-CLOSE D2); `reserve_energy_for_assault_fraction` = 0.5.
 - **Metric:** sim — our tower energy stays above reserve while a hostile drain sits at the edge; when the real assault arrives towers still have energy for net-positive shots.
 - Source: https://www.jonwinsley.com/screeps/2021/08/17/screeps-patrolling-perimeter/; https://wiki.screepspl.us/Combat/.
 
@@ -458,8 +458,8 @@ Concrete 50-part RCL8 breakdowns. Boosts: TOUGH XGHO2 ×0.3, HEAL XLHO2 ×48/par
 
 **T-DEF-1 — Anchor owned-room defenders to ramparts (stand-on-cover, don't kite).** *Robustness: robust.*
 - **Trigger:** a Defend objective is active in an OWNED room with ≥1 rampart and a `hostile_warrants_defender` creep inside/adjacent to a rampart line.
-- **Behavior:** replace `kite_toward_objective` for owned-room defenders with a rampart-seek: pick the maintained rampart tile (hits ≥ `MIN_RAMPART_HOLD`) within attack range (1 melee / 3 ranged) of the highest-priority hostile (breacher first), step onto it, attack from cover. A creep on a rampart takes 0 damage until the rampart breaks — the single biggest defensive multiplier in the game. Towers focus the SAME breacher (T-DEF-2) so defender DPS stacks for free. Falls back to kiting only when the room has no usable rampart (early RCL).
-- **Params:** `MIN_RAMPART_HOLD` = 10_000 hits (don't anchor on a rampart about to break; sweep against representative siege DPS); rampart pick = nearest maintained within range to the tower focus; re-anchor hysteresis = move only if target leaves range >2 ticks.
+- **Behavior (as built, WvC-2):** no rampart-seek routine — cover is a property of the shared threat field. `ThreatField::build_covered` zeroes every MAINTAINED friendly rampart tile (`friendly_rampart_cover`: ownership Mine, hits ≥ `MIN_RAMPART_HOLD`), because the engine redirects attack/ranged/tower/dismantle damage on a rampart-covered creep into the rampart — a creep on a rampart takes 0 damage until the rampart breaks, the single biggest defensive multiplier in the game. The kite/engage TAKEN term, the EV kernel's risk term and survival veto, and the traversal pricing all read that one field, so a defender's optimum tile under siege IS the covered tile within attack range of the priority hostile: anchoring emerges from scoring, and the fallback to open-field kiting when the room has no usable rampart (early RCL) is automatic (empty cover ⇒ byte-identical field). Towers focus the SAME breacher (T-DEF-2) so defender DPS stacks for free.
+- **Params:** `MIN_RAMPART_HOLD` = 10_000 hits (`screeps_combat_decision::MIN_RAMPART_HOLD`; don't anchor on a rampart about to break; sweep against representative siege DPS); rampart pick = whichever covered tile scores best this tick; NO re-anchor hysteresis (the per-tick-optimal rule — a state machine was considered and rejected).
 - **Metric:** sim — defender survives a 10× boosted-ATTACK siege indefinitely (HP never drops while on a maintained rampart) vs an open-field defender dying in `ceil(hp/1200)` ticks; deaths-per-engagement → 0, structures lost → 0.
 - Source: https://docs.screeps.com/defense.html; https://wiki.screepspl.us/Combat/.
 
@@ -471,7 +471,7 @@ Concrete 50-part RCL8 breakdowns. Boosts: TOUGH XGHO2 ×0.3, HEAL XLHO2 ×48/par
 - Source: https://wiki.screepspl.us/Combat/.
 
 **T-DEF-3 — Conserve tower energy vs a confirmed drainer (bounded probe).** *Robustness: mixed.*
-- **Trigger:** a hostile's hitpoint sawtooth shows it re-entered the room with MORE hits than it left (`drain_cycles ≥ DRAIN_CONFIRM_CYCLES`), OR `is_likely_tower_drain` fires.
+- **Trigger:** a hostile's hitpoint sawtooth shows it re-entered the room with MORE hits than it left (`drain_cycles ≥ DRAIN_CONFIRM_CYCLES`). (The former second arm, `is_likely_tower_drain`, is deleted — the `decide_towers` hold-fire covers the un-killable case without a memory.)
 - **Behavior:** stop firing at the confirmed drainer by default; fire at non-drainer hostiles normally. Periodically test with a bounded probe: at most `MAX_PROBE_STRIKES` volleys, spaced `PROBE_COOLDOWN`, pressing to the kill only if a volley drops it ≥ `MIN_PROBE_PROGRESS` (its off-room healer is gone). The probe lives in `tower.rs`; the constants below are the sweepable part. Never let a drainer pull steady energy.
 - **Params:** `DRAIN_CONFIRM_CYCLES` = 1; `MAX_PROBE_STRIKES` = 3; `PROBE_COOLDOWN` = 20 (sweep 10-40); `MIN_PROBE_PROGRESS` = 200 (sweep 100-400).
 - **Metric:** sim — total tower energy on the drainer over 1000 ticks bounded to ≤ `MAX_PROBE_STRIKES·N·10` = 180; a real attacker whose healer dies is still finished within `PROBE_COOLDOWN` + kill-time once a probe succeeds.
@@ -485,9 +485,9 @@ Concrete 50-part RCL8 breakdowns. Boosts: TOUGH XGHO2 ×0.3, HEAL XLHO2 ×48/par
 - Source: https://screeps.fandom.com/wiki/Controller; https://docs.screeps.com/defense.html.
 
 **T-DEF-5 — Predictive safe-mode activation when breach is imminent and no defense holds.** *Robustness: mixed.*
-- **Trigger:** add a predictive arm to the existing reactive floor (`total_hostile_dps > 300` AND a critical structure < 5000 hits): the innermost rampart/wall protecting a spawn/storage is below `breach_hits` AND `projected_ticks_to_breach < ticks_to_kill_all_breachers`, AND `upgrade_blocked == 0`, a charge is available, and not on cooldown.
+- **Trigger:** add a predictive arm to the existing reactive floor (`safe_mode_should_arm`: a spawn below `critical_floor` = 2/5 of its max hits with hostile dps > 0, OR a WORK carrier adjacent to a spawn with dps > `SAFE_MODE_DPS_THRESHOLD`): the innermost rampart/wall protecting a spawn/storage is below `breach_hits` AND `projected_ticks_to_breach < ticks_to_kill_all_breachers`, AND `upgrade_blocked == 0`, a charge is available, and not on cooldown.
 - **Behavior:** activate safe mode the tick before the last protective rampart breaks rather than after a spawn is already chewed. `projected_ticks_to_breach = rampart_hits / breach_dps`; `defense_kill_time` from `attack_parts_to_kill` / tower net damage; if defense can't hold, activate. Never activate while `upgrade_blocked > 0` (wasted attempt) — that's why T-DEF-4 prioritizes the CLAIM creep.
-- **Params:** `breach_hits` floor = 10_000 (start watching); `predictive_margin` = activate when `projected_ticks_to_breach < defense_kill_time · 1.0` (sweep 0.8-1.5); keep `SAFE_MODE_DPS_THRESHOLD` = 300 and `CRITICAL_STRUCTURE_MIN_HITS` = 5000 as the reactive floor.
+- **Params:** `breach_hits` floor = 10_000 (start watching); `predictive_margin` = activate when `projected_ticks_to_breach < defense_kill_time · 1.0` (as built: an implicit 1.0 — a strict `<` in `predictive_breach_arm`, no knob; sweep 0.8-1.5 if a false positive is ever observed); the reactive floor stays underneath as `safe_mode_should_arm` — `SAFE_MODE_DPS_THRESHOLD` = 300 (the dismantler arm only) and `critical_floor(hits_max)` = 2/5 (2000 for a spawn; the old `CRITICAL_STRUCTURE_MIN_HITS = 5000` equalled spawn max hits and is gone, Wave B D2).
 - **Metric:** sim — with the predictive trigger, safe mode fires while the spawn is still full (0 structures lost); false-positive activations (burned when defense would have held) → 0 across a sweep of attacker sizes.
 - Source: https://support.screeps.com/hc/en-us/articles/212239225; https://docs.screeps.com/defense.html.
 
@@ -617,7 +617,7 @@ These are the experimental **shell** (ADR 0015): tuned by sim/server iteration, 
 | `retreat_lookahead` | T-POS-2 | 2 tiles | 1-3 | avoid backing into a dead-end |
 | `plain_move_ratio` / `road` / `boosted_t3` | T-POS-3 | 1.0 / 0.5 / 0.25 | engine-derived | MOVE-parity; assert in kiter builders |
 | `part_order` | T-POS-3 | [TOUGH, combat, HEAL, MOVE] | fixed | MOVE-back keeps speed under attrition |
-| `exit_buffer` | T-POS-5 | 2 tiles | 2-3 | vs boosted-MOVE chasers may need 3 |
+| `EXIT_TILE_SURCHARGE` | T-POS-5 | 3×SCALE | fixed (finite) | flat exit-tile term in `score_tile`, threats-present only; no buffer band built |
 | `rotation_cooldown` | T-POS-6 | 2 ticks | 2-4 | anti-thrash on armour rotation |
 | `operating_range` (drain) | T-TOWER-1, T-POS-7 | 20 | 18-23 | lower = more drain, more incoming |
 | `push_when_target_energy_below` | T-TOWER-1 | 200 | 0-500 | handoff to siege squad |
@@ -659,7 +659,7 @@ These are the experimental **shell** (ADR 0015): tuned by sim/server iteration, 
 | `claim_target_priority` | T-DEF-4 | highest | fixed | above armed breacher |
 | `breach_hits` (safe-mode watch) | T-DEF-5 | 10_000 | — | predictive arm start |
 | `predictive_margin` | T-DEF-5 | 1.0 | 0.8-1.5 | activate before defense fails |
-| `SAFE_MODE_DPS_THRESHOLD` / `CRITICAL_STRUCTURE_MIN_HITS` | T-DEF-5 | 300 / 5000 | fixed floor | reactive floor kept |
+| `SAFE_MODE_DPS_THRESHOLD` / `critical_floor` | T-DEF-5 | 300 / 2⁄5·hits_max (2000 for a spawn) | fixed floor | reactive floor kept (`safe_mode_should_arm`); dps > 0 required on the low-HP arm |
 | interceptor RA:MOVE | T-DEF-6 | 1:1 (5RA+5MOVE) | budget-scaled | unboosted invaders |
 | `THREAT_MEMORY` (pre-position) | T-DEF-8 | 1000-5000 ticks | sweep | avoid quiet-room upkeep |
 | `attack_parts` (core) | T-NPC-1 | 10 | 10-20 | 334t vs 167t kill |
@@ -678,7 +678,7 @@ These are the experimental **shell** (ADR 0015): tuned by sim/server iteration, 
 
 Ordered so foundations (1v1 arithmetic, focus-fire, kiting) validate before composites (drain, breach, quad self-play, defense). **Sim** = the deterministic combat micro-sim driving the bot's own decision code (ADR 0006 Part B); per-change, hard-exact conformance vectors + N=9 paired-seed engagement diffs. **Server** = the Docker private-server acceptance gate (ADR 0006 Part A), nightly N-seed confirmation. Gates use the seg-57 metrics emitted in both sim and live (the MMO canary).
 
-1. **EXP-FOUND-1 — Kill inequality conformance.** *Hypothesis:* `attack_parts_to_kill` / `should_towers_fire` correctly predict kill-or-not under two-phase netting. *Scenario (sim):* 1 attacker vs 1 target with parameterized self-heal; sweep D around Hb. *Metric:* predicted-kill label vs actual death; netting order (damage-then-heal) matches the engine. *Gate:* hard-exact conformance, 100% agreement; foundation for all of section A.
+1. **EXP-FOUND-1 — Kill inequality conformance.** *Hypothesis:* `attack_parts_to_kill` / the `decide_towers` hold-fire correctly predict kill-or-not under two-phase netting. *Scenario (sim):* 1 attacker vs 1 target with parameterized self-heal; sweep D around Hb. *Metric:* predicted-kill label vs actual death; netting order (damage-then-heal) matches the engine. *Gate:* hard-exact conformance, 100% agreement; foundation for all of section A.
 
 2. **EXP-FOUND-2 — Per-part degradation & TOUGH eHP.** *Hypothesis:* output degrades front-to-back and a boosted XGHO2 part = ~333 eHP consumed front-first. *Scenario (sim):* fixed-DPS fire on a TOUGH-front body; record DPS/heal output and survival per tick. *Metric:* eHP-consumed curve and output-decay curve vs the model. *Gate:* within 5% of the closed-form; validates T-HEAL-3 / T-TOWER-3 TOUGH-buffer assumptions before any abandon decision trusts them.
 
@@ -757,3 +757,134 @@ Ordered so foundations (1v1 arithmetic, focus-fire, kiting) validate before comp
   T-DEF-3's second trigger arm ("OR `is_likely_tower_drain` fires") no longer exists — an un-killable
   hostile is simply never fired at, edge or not; the persisted drain-sawtooth tracker + bounded probe
   (T-DEF-3's first arm and its params) are unchanged and feed the kernel as `conserve_ids`.
+
+### Safe mode as built (Wave B D2/D3 + WvC-2 T-DEF-5; `missions/safe_mode.rs` — WS-CLOSE write-back)
+
+- **The reactive floor is `safe_mode_should_arm(spawn_hits, hostile_dps, dismantler_adjacent_to_spawn)`.** It
+  arms when a spawn is below `critical_floor(hits_max) = 2/5` (2000 of 5000) AND the hostiles have damage
+  output (`hostile_dps > 0`), OR when a WORK carrier stands adjacent to a spawn with burst dps above
+  `SAFE_MODE_DPS_THRESHOLD` (300). The old absolute `CRITICAL_STRUCTURE_MIN_HITS = 5000` equalled spawn
+  max hits, so any scratch armed the trigger and a single poke could spend the irreversible charge (review
+  D2); the dps>0 guard is what stops a damaged spawn plus a harmless scout from spending it. The T-DEF-5
+  entry and the tunable table were corrected in place to this floor.
+- **The `activated` latch clears when the safe mode we latched expires** (`controller.safe_mode() == 0`
+  while `activated`), re-arming the evaluator — pre-fix the latch was permanent and a room auto-safe-moded
+  at most once EVER (review D3). The serialized field is kept (removing it would be a WFV shape change);
+  only its lifetime changed. Host pins: `scratched_spawn_never_arms`,
+  `deep_damage_arms_only_with_damage_output`, `critical_floor_is_a_real_fraction_of_max`.
+- **T-DEF-5 is `predictive_breach_arm(protective_hits, breach_dps, defense_dps_net, hostile_hits_pool)`,
+  combined by OR with the reactive floor.** `protective_hits` = min hits over OUR ramparts on/adjacent to a
+  spawn or storage (`None` ⇒ no protective layer ⇒ the reactive floor owns the decision); it arms iff that
+  layer is below `BREACH_WATCH_FLOOR` (10k), the enemy is actually breaching (`breach_dps > 0` — dismantle +
+  melee + ranged), and `hits / breach_dps < pool / defense_dps_net` (the rampart dies before the defense can
+  kill them all), with `defense_dps_net <= 0` (out-healed) counted as a lost race. `defense_dps_net` = each
+  energized tower's falloff output at its CLOSEST hostile, minus the hostiles' total heal. The downstream
+  `upgrade_blocked == 0` / charge / cooldown checks are unchanged. Six-case pin
+  `predictive_arm_fires_only_for_a_losing_breach_race`. The hostile-side inputs use a flat ×4 on any
+  boosted part — tier-blind (the ADR 0041 boost threading is not applied at this site yet).
+
+### T-HEAL-3a — the winnability gates' inputs (WvC-1, `c5a06c8`)
+
+- `project_enemy` (`squad_manager.rs:886`) derives enemy `hits` from the observed bodies: `Σ
+  max(effective_hits, hits)`, where `threatmap::effective_hits` replaces the raw TOUGH portion with its
+  boost-adjusted pool (a T3 TOUGH part soaks ~333, not 100). The old hard-coded `hits: 0` priced every
+  enemy as dying instantly, so every engage/abandon/sizing decision downstream of `EnemyForce` read a
+  certain win.
+- `RoomThreatData.estimated_heal` is now `threatmap::reachable_estimated_heal` (`threatmap.rs:234`): a
+  hostile healer counts in full within range ≤1 of any damage-dealer (itself included — a self-healing
+  fighter sustains itself), one third at range 2–3 (the ranged-heal ratio), nothing beyond — mirroring the
+  engaged-side `heal_reaching` ladder. The old fold summed every hostile's heal unconditionally, so a healer
+  parked across the room suppressed commit gates as if it stood in the fight (T-HEAL-3's over-counting
+  case). The boost multipliers on the heal side remain ADR 0041's. Pins: the `reachable_estimated_heal` /
+  `effective_hits` tests in `threatmap.rs`.
+
+### Defender spawn readiness — the URGENT downsize (WvC-1, `81ee72f`), and the tower helpers that were deleted
+
+- `military::damage::defender_spawn_readiness(available, capacity, incoming_dps, has_friendly_tower,
+  defender_alive)` is live at the slot spawner: Phase B gathers a `DefenseUrgency` for defense slots and
+  `queue_slot_spawn` maps the verdict through `slot_build_energy`. Only the URGENT verdict (under attack,
+  no defender alive, no friendly tower buying time) changes behavior — the body is sized to the in-range
+  homes' max AVAILABLE energy so something spawns THIS tick (a smaller defender now beats a perfect one too
+  late), falling back to the full-size bank-to-capacity queue if even that is too small for the minimum
+  body. `Wait` / refilled / offense all collapse to the normal budget: queueing the full-size body IS the
+  wait (`WAIT_REFILL_FRACTION` = 0.85 of capacity).
+- The once-planned single-target tower helpers (`should_towers_fire`, `net_tower_damage`,
+  `estimated_ticks_to_kill`) were DELETED as superseded, not wired: the U-TOWER `decide_towers` kernel
+  (`screeps_combat_decision::tower_fire`) already sizes the tower commit against `heal_reaching` per target
+  and refuses out-healed dogpiles, which the helpers could not (they compared one target's flat heal
+  total). Review O3 ("wire `should_towers_fire` at the tower seam") is therefore MOOT. The catalog's
+  references to those names (the arithmetic, T-FOCUS-1, T-POS-7, T-TOWER-5, EXP-FOUND-1) were rewritten
+  above to the kernel hold-fire.
+
+### T-DEF-1 — rampart cover is a field property, not a routine (WvC-2, decision `47a163a` + eval `47f9d0b`)
+
+No DTO threading was needed (`structure_to_dto` already carries friendly ramparts; sim ownership is
+viewer-relative) and no rampart-seek state machine was built. `ThreatField::build_covered(threats,
+towers, cover)` (`kite.rs:63`) zeroes the `cover` tiles after stamping, where `cover =
+friendly_rampart_cover(structures)` (`lib.rs:2103`: ownership Mine, hits ≥ `MIN_RAMPART_HOLD` = 10_000).
+Because the kite/engage TAKEN term, the EV kernel's risk term and survival veto (`build_room_layers`), and
+the live traversal matrix (`build_room_threat_field`) all read that one field, a defender under siege
+scores the covered tile in range of the priority hostile as its optimum and stands on it; the moment the
+rampart drops below the hold floor the tile reads exposed again and the kiting fallback is automatic.
+Empty cover ⇒ byte-identical to the uncovered field. Per the per-tick-optimal rule there is no re-anchor
+hysteresis. Three RED-verified pins (one rewritten after its first RED check showed it was not
+discriminating). The T-DEF-1 catalog entry and the cross-tactic dependency note were rewritten to this
+mechanism.
+
+### T-POS-5 — exit-tile surcharge (WvC-2, decision `3d451ac`)
+
+`EXIT_TILE_SURCHARGE = 3.0 * SCALE` (`kite.rs:303`) is added by `score_tile` to any candidate tile with
+`dist_to_edge == 0`, only while threats are present. It dominates every preset's weighted-term spread
+(ordinary preference mixing never picks an exit) but is finite — a squad whose whole interior option set
+is lethal may still take the exit (the sanctioned break-contact ejection, T-POS-8(b)). No separate
+`exit_buffer` band: the graded EDGE term already prices the last `EDGE_THRESH` = 6 tiles. Pin: an exit
+tile costs at least half the surcharge more than an interior tile under threat, and the same when calm.
+
+### Roster churn under fire (Wave B D4/D5/D6, `be5ce24`) + the live adapter gaps (D9 `1a85a57`, D10 rover `850a06b`)
+
+The casualty cycle every fight exercises. (ADR 0008 §4 owns the squad architecture; these are recorded
+here because Wave B advanced this catalog's positioning/defense entries.)
+
+- **D4 — the fight owns the squad frame.** `fight_owns_squad_frame(engaged_once, in_room_any)`
+  (`squad_manager.rs:430`): once a squad has GENUINELY engaged and still has a member in the target room, a
+  mid-fight slot refill spawning at home no longer drags the squad back through the rally/travel machinery
+  (which Held every member and re-anchored the box, disabling kiting for the whole replacement window).
+  Engaged members keep their kernel orders; the refill self-drives to the target room through the job's own
+  travel; the exemption drops the moment no member is in-room (wipe or full retreat) and the travel
+  machinery re-captures the roster as before.
+- **D5 — the formation layout tracks the living count in BOTH directions.** `formation_needs_update(living,
+  slots) = living != slots` (`military/squad.rs:856`); the old `living < slots` was shrink-only, so a
+  refilled member joined a layout with no seat and `get_offset`'s out-of-range fallback `(0,0)` stacked it
+  on the anchor. `update_formation_for_living_count` was already count-driven, so growth is the same call.
+- **D6 — engaged squads are not "forming".** `counts_toward_forming_cap(is_defense, engaged_once,
+  requested, filled) = !is_defense && !engaged_once && requested > 0 && filled < requested`
+  (`squad_manager.rs:441`): the `MAX_FORMING_SQUADS` pacing cap serializes the HIGH-priority spawn burst of
+  rosters still ASSEMBLING; counting an engaged squad refilling casualties silently turned it into an
+  offense-concurrency reducer (two engaged-damaged squads ⇒ zero new offense claims, forever). Mirrors
+  `forming_state`'s `!engaged_once` semantics; defense never counts (REC-008). The cap constants now live
+  in `screeps_combat_decision::claim_pacing` (S5-CAP, ADR 0028).
+- **D9 — the engaged stuck ladder is live.** `StuckThresholds::engaged()` (rover `movementsystem.rs:104`)
+  is the ONE implementation of the squadmate-transparent ladder (friendly-avoid tiers at `u16::MAX`,
+  default cadence otherwise; ADR 0033); the sim's `squad::engaged_stuck_thresholds` returns it and the live
+  bot stamps it on engaged/anchored members' `MovementRequest`s at the three `squad_combat.rs` sites
+  (:381, :911, :1345). Pre-fix there were zero `stuck_thresholds` hits in `screeps-ibex/src` — the sim's
+  heal-cluster fix had never reached the bot.
+- **D10 — retreat uses partial flee paths.** Rover's `compute_next_step_for_flee`
+  (`movementsystem.rs:1696`) issues the first step of an ops-capped INCOMPLETE flee search (flee maximizes
+  distance, so any distance gained beats standing still); goal-directed `generate_path` keeps
+  incomplete-is-failure. Pre-fix a retreating creep under a swarm issued no move at all. Pin:
+  `incomplete_flee_uses_the_partial_path_instead_of_freezing`.
+- **Live-soak watch signature (no code):** hold-tick spikes and Loose ratchets after casualties (review §6
+  item 7) — graded in the Phase C offense soak.
+
+### T-DEF-3 note — the bounded probe does not resolve against a visibly out-healed drainer (WS-CLOSE found work F4)
+
+The probe's persisted state machine (`missions/tower.rs:277-296`) flips `tracker.engaging = true` after
+`PROBE_COOLDOWN`, which removes the drainer from the `conserve` set handed to `decide_towers`; the strike
+is only counted (`engaging = false`, `probe_strikes += 1`) once `probe_fired` reports a volley actually
+landed. When the drainer's VISIBLE heal out-heals all towers, the kernel's `full_tower_damage <= heal`
+hold-fire refuses the volley, so `probe_fired` never flips and `engaging` stays true: the probe never
+resolves. Energy behavior is correct (no shot is wasted — the hold-fire is doing T-TOWER-5's job), so this
+is a bookkeeping quirk, not a leak; it means `MAX_PROBE_STRIKES` bounds only volleys that fire, and the
+`[Tower]` probe telemetry can read "engaging" indefinitely against an un-killable drainer. Recorded, not
+fixed — a fix would count a kernel-refused probe tick as a strike.

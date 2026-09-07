@@ -10,7 +10,7 @@ use serde::*;
 use shrinkwraprs::*;
 use specs::prelude::*;
 use specs::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[derive(Shrinkwrap, Component, Serialize, Deserialize, Clone, Default)]
@@ -52,6 +52,13 @@ thread_local! {
     /// START of the next tick's run, before new requests. EPHEMERAL heap state by design — NOT a
     /// serialized component, NO WFV interaction; a VM reset loses exactly one tick of the metric.
     static G13_ISSUED_LAST_TICK: RefCell<Vec<IssuedMoveIntent>> = const { RefCell::new(Vec::new()) };
+    /// The rover's first-path round-robin cursor (`MovementSystem::first_path_cursor`): the last
+    /// pathless creep whose first-path search was served, handed back next tick so a saturated
+    /// ops pool rotates through the pathless creeps instead of re-serving the same head-of-list
+    /// window every tick (RULING-11 root A, ADR 0033 design delta 2026-09-07). EPHEMERAL heap
+    /// state like the G-13 buffer — never serialized, no WFV interaction; a VM reset restarts the
+    /// rotation from the lowest entity.
+    static FIRST_PATH_CURSOR: Cell<Option<Entity>> = const { Cell::new(None) };
 }
 
 /// [`CreepHandle`](screeps_rover::traits::CreepHandle) wrapper that delegates to the real
@@ -595,8 +602,14 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let pathfinding_headroom = if normal_mode { Some(movement_cap) } else { Some(80.0) };
         system.set_pathfinding_headroom(pathfinding_headroom);
 
+        // First-path round-robin hand-off (see `FIRST_PATH_CURSOR`): seed from last tick, read
+        // back after `process()`.
+        system.set_first_path_cursor(FIRST_PATH_CURSOR.with(|cell| cell.get()));
+
         let request_count = movement_data.request_count();
         let results = system.process(&mut external, movement_data);
+
+        FIRST_PATH_CURSOR.with(|cell| cell.set(system.first_path_cursor()));
 
         // P1.B2: per-tick pathfinding telemetry into the seg-57 block.
         data.metrics.record_movement_stats(system.tick_stats());
@@ -617,7 +630,21 @@ impl<'a> System<'a> for MovementUpdateSystem {
                 _ => false,
             })
             .count() as u32;
-        data.metrics.record_movement_failures(move_failures);
+        // RULING-11 root A observability: split the give-up level by failure KIND so a pool
+        // wedge (budget misses — searches that could not run this tick) is distinguishable from
+        // genuinely unreachable targets. Additive seg-57 fields; `move_failures` keeps its
+        // historical definition.
+        let count_failed = |pred: fn(&MovementFailure) -> bool| -> u32 {
+            results
+                .results
+                .values()
+                .filter(|result| matches!(result, MovementResult::Failed(failure) if pred(failure)))
+                .count() as u32
+        };
+        let move_failed_budget = count_failed(|f| matches!(f, MovementFailure::PathBudgetExhausted));
+        let move_failed_nopath = count_failed(|f| matches!(f, MovementFailure::PathNotFound));
+        data.metrics
+            .record_movement_failures(move_failures, move_failed_budget, move_failed_nopath);
 
         // Stash this tick's issued intents for next tick's G-13 reconciliation (top of `run`).
         G13_ISSUED_LAST_TICK.with(|cell| *cell.borrow_mut() = issued_moves.take());

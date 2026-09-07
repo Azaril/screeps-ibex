@@ -326,3 +326,34 @@ harness-wiring → the H4 fence. Production code changes land only after the mat
 ## Landed
 - `911efe8` E1 — unwinnable latch + abandon-on-contact (D3–D6) (2026-06-30)
 - `7b76c09` E2 — scout-before-commit / `ScoutedEmpty` defer (D1–D2) (2026-06-30)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+### FU2 as built — the stall-aware give-up clock is the shared `lifecycle::RetreatClock` (WvC-1; parity M22)
+
+- **The kernel.** `screeps_combat_decision::lifecycle::RetreatClock` (`lifecycle.rs:156`) is the
+  per-objective give-up clock behind `ReconcileSnapshot.retreat_budget_exhausted`.
+  `RetreatClock::holds(state_retreating, stalemate_latched) = state_retreating || stalemate_latched` decides
+  whether the clock RUNS this tick; `advance(now, ..)` starts it on the first holding tick, reports exhausted
+  once it has run `MAX_RETREAT_BUDGET` (600) consecutive ticks, and CLEARS it on any non-holding tick. The
+  stall latch is `EnemyStallTracker::latched()` — `ENEMY_STALL_TICKS` (40) consecutive ENGAGED ticks in which
+  the summed alive enemy hits did not decrease. `EnemyStallTracker::advance(hits, engaged)`: a decrease
+  resets the streak in ANY state (headway is headway — a parting shot that lands is progress; freezing it
+  deadlocked the multi-room assault bed); the streak GROWS only on engaged ticks (a squad not in contact
+  cannot *fail* to make headway, so a recovery retreat under flat hits does not accrue); flat hits while
+  disengaged FREEZE it (a stall latched while engaged survives the disengage, or the period-2 bounce
+  would re-open). Both are `Copy`, ephemeral, never serialized (no WFV); the live manager keeps one per
+  objective in its non-serialized runtime resource (`retreating_since`, `enemy_stall`, and the REC-062
+  `structure_stall` twin) and the offline lifecycle harness runs the SAME two types — never a mirrored copy.
+- **What it replaced.** The REC-003 clock ran only while `Retreating` and reset on every `Engaged` tick, so
+  the Retreating↔Engaged probe bounce a borderline fight legitimately runs made an in-room squad immortal
+  (the committed-never-progresses zombie — the real hole behind "committed but can't engage"). The first
+  cut (decision `4d044be`) made Retreating ABSORBING via a kernel re-engage veto keyed on the stall; it was
+  REVERTED (`4d186d8`) because it deadlocked two eval beds — a positional "harmless" reads wrong at range,
+  and the probe bounce is load-bearing for recoverable borderline fights. The bound therefore lives in the
+  manager's clock, not the state machine; the sim driver mirrors the engaged-only streak rule (agent
+  `0c57c45`). Pins RED-verified; the eval suite (114) green after the revert.
+- **The predicate is a composition of terminators, not one gate** — §2.1 FU2 above is the design of record
+  and stands as written: never departs → R22; never arrives → travel budget + REC-022 lease; empty room →
+  D28 vacuous clear (ADR 0027); loses → `unwinnable_contact` (D4); no headway → this clock; forming stalls →
+  forming budget + the economic give-up. Hold-intent standoffs stay exempt.

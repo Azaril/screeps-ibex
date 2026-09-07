@@ -155,7 +155,7 @@ must exist first, and naming that prerequisite is the point of this section:
 | **0020-S6** | Archetype classifier → preset selector + seeded mixed-strategy draw | Consumes the step-4 meta-Nash mix, so it ships behind a populated, exploiter-gated tournament (§4.7's caveat: a finite hand-enumerated classifier is itself a fixed policy). |
 | **0020-S7** | Adversarial room-gen (minimax-regret + pairwise covering array) | A continuous regression frontier with zero runtime impact (`eval/scenario_gen.rs`). |
 | **0020-CAUTIOUS** | Cautious-engage retune lead (`w_taken 1.5/w_dmg 1.0` beats the default `0.5/2.0` by ~90 net HP, Nash 1.00) | A *lead*, not a retune: adopting it off a 3-bed all-ranged basket would overfit. Broaden the bed basket (terrain / tower-pressure beds) first; the robustness gate passes meanwhile, so the shipped default is safe. |
-| **0020-TOUGH** | Boosted-TOUGH net-damage conversion (ThreatField safety/veto + Lanchester μ) | Needs a `boost` field threaded through `CombatBodyPart` + a most-fragile-member reduction. Unboosted v1 **over-flees**, which is the safe-conservative direction. |
+| **0020-TOUGH** | Boosted-TOUGH net-damage conversion (ThreatField safety/veto + Lanchester μ) | `CombatBodyPart.boost_mult` now carries the per-part OUTPUT multiplier (WS-VAL 2026-08-23 — see Design deltas); still needs the TOUGH damage-**reduction** curve threaded into the field/μ + a most-fragile-member reduction. Unboosted-TOUGH v1 **over-flees**, which is the safe-conservative direction. |
 | **0020-N** | Per-archetype Lanchester n ∈ {1,2} | `n=2` as a fixed default is safe; per-archetype selection is empirical tuning in `SquadTacticParams` + `assess_engage`. |
 | **0020-S4-RES** | Tournament enrichment: asymmetric objective beds (+ the §8.6 turtle scorer), scripted-vs-managed matches, PFSP/behavioral dedup, formal Elo | Harness-only; sharpens the exploiter gate the adaptivity layer depends on. |
 | **0019-S4-TUNE** | ADR 0019 Stage-4 tuning: engage-stickiness + a weight-**discriminating** sweep bed | The sweep is flat on melee beds; a terrain/tower bed must exist before the weights can be tuned meaningfully (the §6 "FLAT sweep" caveat). |
@@ -328,9 +328,9 @@ So a rung sits **between R5 (size a structure) and R8 (full role auction): an ar
 | Repair rate (tower/creep rampart repair) | `DefenseProfile` (P2b D5) | net breach-dps need |
 | Safe-mode | `RoomThreatData` | hard veto |
 | Expected reinforcement / escalation (players: predicted incoming; NPCs: keeper respawn 300t, invader waves) | intel + heuristics (**FUTURE**) | margin, archetype, commit-at-all |
-| Our boosts available | lab/mineral state (0020-TOUGH/S2, **FUTURE**) | effective part power → smaller bodies, archetype |
+| Our boosts available | `EconomySnapshot.available_boosts` → `max_supplied_tier` → `CompositionParams.boost_max_tier` (ADR 0041 P1; the boost ladder in `optimize_composition`) | effective part power → smaller bodies, archetype |
 
-Most inputs exist (P2a/P2b); the FUTURE rows (expected reinforcement/escalation, our boosts) are S6/S2. **Design implication:** the solver's signature should take an `ObjectiveContext` + a `DefenseProfile` (the expected opposing force), not just a defense snapshot — the same two inputs feed archetype selection, sizing, mode, margin, and the engage policy.
+Most inputs exist (P2a/P2b, 0041 P1); the remaining FUTURE row (expected reinforcement/escalation) is S6. **Design implication:** the solver's signature should take an `ObjectiveContext` + a `DefenseProfile` (the expected opposing force), not just a defense snapshot — the same two inputs feed archetype selection, sizing, mode, margin, and the engage policy.
 
 ## Landed
 
@@ -338,3 +338,17 @@ Most inputs exist (P2a/P2b); the FUTURE rows (expected reinforcement/escalation,
 - 2256c9f EV target selection + damage spill over the kill budget (2026-06-20)
 - eabaed6 Lanchester engage/retreat gate with the safeMode veto (2026-06-20)
 - b73e344 self-play tournament, meta-Nash mix + exploitability ship-gate (2026-06-22)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+- **§11 row 0020-TOUGH and the §12.6 "our boosts" input row corrected in place.** The `boost` field
+  this ADR said `CombatBodyPart` still needed exists: `CombatBodyPart.boost_mult` (the per-part engine
+  OUTPUT multiplier, exact per compound via `bodies::boosts::output_multiplier_for`) with
+  `CombatCreepDto::effective_output` as the one power primitive every kernel consumer reads (WS-VAL
+  2026-08-23, ADR [0041](0041-combat-boost-layer.md) Design deltas). What 0020-TOUGH still needs is
+  the other half: the TOUGH damage-**reduction** curve (30/50/70%) in the ThreatField safety/veto and
+  the Lanchester μ, plus the most-fragile-member reduction — `BoostTier::output_multiplier` and the
+  DTO deliberately model output only (the 0019 boosted-TOUGH item; unboosted-TOUGH over-flees, the
+  safe direction). "Our boosts available" is no longer FUTURE: `EconomySnapshot.available_boosts` →
+  `bodies::boosts::max_supplied_tier` → `CompositionParams.boost_max_tier` feeds the §12 solver's
+  boost ladder (0041 P1), gated on `features.military.boost_military`.

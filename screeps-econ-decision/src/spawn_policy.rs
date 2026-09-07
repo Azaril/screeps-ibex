@@ -12,8 +12,10 @@
 //! (one implementation; the bot re-exports it as `crate::creep::spawning::create_body`) — this
 //! module owns the body *definitions* and the *policy* numbers.
 //!
-//! The S6 defect (capacity-sized replacement bodies head-of-line-banking trickle income) is
-//! deliberately preserved — extracted faithfully; M4 owns the fix.
+//! The S6 defect (capacity-sized replacement bodies head-of-line-banking trickle income) was
+//! preserved through the M3 extraction; it is FIXED here (RULING-11 root B, 2026-09-07) by
+//! [`replacement_body_energy`] — the per-tick starvation sizing — together with the income ladder
+//! ([`SPAWN_BID_MINER`] / the bootstrap floors) and the need-scaled [`hauler_bid`].
 
 use crate::repair::RepairPriority;
 use crate::sink_economics::{body_roi_milli, BID_SCALE};
@@ -38,7 +40,29 @@ use screeps_combat_decision::spawning::SpawnBodyDefinition;
 
 /// The CRITICAL band-equivalent bid (miners / clock-saving upgraders): the top of the civilian
 /// spawn lane — income is NEVER preempted (ADR §D2). = old `SPAWN_PRIORITY_CRITICAL` (100) × 1000.
+/// Every other civilian/combat bid is capped STRICTLY below this ([`hauler_bid`],
+/// [`forming_completion_bid`]); only the two BOOTSTRAP floors below sit above it.
 pub const SPAWN_BID_CRITICAL: u32 = 100 * BID_SCALE;
+/// The static-miner bid (link / container miners): the CRITICAL income band — income out-ranks
+/// logistics (the [`hauler_bid`] cap) and every combat-forming slot by construction. RULING-11
+/// root B (2026-09-07): the live callers had drifted to HIGH (75_000) while the comments, the
+/// forming-band docs and the squad-manager pins all asserted CRITICAL — so an 1800e capacity-sized
+/// hauler at 99_999 head-of-line-banked over a 550e miner with full containers behind it. One
+/// constant, consumed by the callers; the contract is now what the pins say.
+pub const SPAWN_BID_MINER: u32 = SPAWN_BID_CRITICAL;
+/// The FIRST LOCAL HAULER's bid (an empty hauler roster): strictly above the miner band. A room
+/// with stock in its containers/links/storage and no carrier has no lane inflow at all — a
+/// capacity-sized miner at CRITICAL would head-of-line-bank at the 300 the spawn regenerates and
+/// the affordable 300e carrier behind it would never be looked at (the queue `break`s on the
+/// first unaffordable head). The first carrier is what turns stock into lane; it is sized from
+/// available-now energy (always fieldable), so it never banks.
+pub const SPAWN_BID_BOOTSTRAP_HAULER: u32 = SPAWN_BID_CRITICAL + BID_SCALE;
+/// The RESTART harvester's bid (a local source with NO harvesting creep of any kind): the single
+/// self-sufficient body (mines AND delivers) that can restart an empty room, strictly above both
+/// the first-hauler floor and the miner band — so a bid TIE with a capacity-sized miner (which
+/// would resolve by registration order) can never put the miner at the head and bank the lane
+/// at zero income. Sized from available-now energy ([`harvester_body_energy`]); never banks.
+pub const SPAWN_BID_BOOTSTRAP_HARVESTER: u32 = SPAWN_BID_CRITICAL + 2 * BID_SCALE;
 /// The STARTING bid for a FORMING combat squad's slots — the floor of [`forming_completion_bid`].
 /// A squad with no members yet bids here (== [`SPAWN_BID_HIGH`]): it competes FAIRLY with the HIGH
 /// economy bulk to START, so speculative squads do not preempt the economy just to spawn a first
@@ -193,13 +217,44 @@ pub fn harvester_body(energy: u32) -> SpawnBodyDefinition<'static> {
 }
 
 /// The harvester body budget: the FIRST harvester (no harvesting creeps anywhere) sizes from
-/// available-now energy (floored at the 300 spawn), every replacement from capacity — the S6
-/// arm, preserved (source_mining.rs).
+/// available-now energy (floored at the 300 spawn), every replacement from capacity
+/// (source_mining.rs). The live caller runs the capacity arm through
+/// [`replacement_body_energy`] (the starvation sizing); this is the bootstrap arm + the
+/// steady-state target the sim baseline consumes verbatim.
 pub fn harvester_body_energy(total_harvesting_creeps: usize, energy_available: u32, energy_capacity: u32) -> u32 {
     if total_harvesting_creeps == 0 {
-        energy_available.max(300)
+        energy_available.max(SPAWN_LANE_REGEN_FLOOR_E)
     } else {
         energy_capacity
+    }
+}
+
+/// The energy a room's spawn lane regenerates to for FREE (engine: every spawn gains +1 e/t
+/// while the room's `energyAvailable` is below `SPAWN_ENERGY_CAPACITY` = 300). A body costing
+/// ≤ 300 is therefore ALWAYS fieldable with zero income; anything above it needs a carrier.
+pub const SPAWN_LANE_REGEN_FLOOR_E: u32 = 300;
+
+/// **K4 starvation sizing** (ADR 0040 §D2 "K4 fixes S6"; RULING-11 root B, 2026-09-07) — the body
+/// budget for a REPLACEMENT civilian body, a pure per-tick function of the lane's current facts
+/// (no mode, no latch, no history):
+///
+/// * `reachable_energy_e` = `energy_available` + the home room's HAULABLE stock (storage + source
+///   containers + links — what the lane can be refilled to with NO new income). If the capacity
+///   body is reachable, the lane will get there (refill is the top-priced haul sink), so the
+///   capacity body is the target and head-of-line banking toward it is correct — the steady
+///   state, unchanged.
+/// * Otherwise the room cannot pay for the capacity body from anything it holds; waiting means
+///   waiting on income that does not exist (the collapse regime: lane pinned at the 300 regen,
+///   containers empty, no miner). The body is sized from what is affordable NOW, floored at the
+///   regen floor — a 300e hauler / 250e harvester / 250e miner is always fieldable, the lane
+///   recovers, and the next replacement (a per-tick re-evaluation) grows with the room.
+///
+/// Deterministic integer compare; the body CHOICE is a function of the current lane, not a mode.
+pub fn replacement_body_energy(energy_available: u32, energy_capacity: u32, reachable_energy_e: u32, capacity_body_cost: u32) -> u32 {
+    if reachable_energy_e >= capacity_body_cost {
+        energy_capacity
+    } else {
+        energy_available.max(SPAWN_LANE_REGEN_FLOOR_E)
     }
 }
 
@@ -221,6 +276,18 @@ pub fn harvester_priority(current: usize, desired: usize, room_manhattan_distanc
     };
     let interp = (current as f32) / (desired as f32);
     lerp_bid(priority_range.0, priority_range.1, interp)
+}
+
+/// The harvester spawn bid the LIVE caller uses (source_mining.rs): the ADR 0043 C2 bootstrap
+/// floor made explicit — a LOCAL source with no harvesting creep of any kind bids
+/// [`SPAWN_BID_BOOTSTRAP_HARVESTER`] (strictly above the miner band, so the one self-sufficient
+/// body always heads the queue); every other shape is the [`harvester_priority`] lerp.
+pub fn harvester_bid(total_harvesting_creeps: usize, current: usize, desired: usize, room_manhattan_distance: u32) -> u32 {
+    if room_manhattan_distance == 0 && total_harvesting_creeps == 0 {
+        SPAWN_BID_BOOTSTRAP_HARVESTER
+    } else {
+        harvester_priority(current, desired, room_manhattan_distance)
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -282,19 +349,51 @@ pub fn hauler_priority(current: usize, desired_for_unfulfilled: u32, max_distanc
     }
 }
 
-/// The hauler spawn ROI bid (ADR §D2, M5b — civilian `body_roi_milli`): the hauler's §D5.4 `w` is
-/// its logistics rate (throughput unblocked); amortized over the body cost and clamped only below
-/// the CRITICAL miner band (`[SPAWN_BID_LOW, SPAWN_BID_CRITICAL - 1]`). A genuinely stressed
-/// logistics lane (high throughput-per-cost) can therefore bid ABOVE the shared HIGH/combat-forming
-/// band — logistics is never starved by speculative combat forming, only ever out-ranked by income
-/// (miners). `logistics_rate_milli` is the caller's throughput estimate (milli-e/t).
-pub fn hauler_bid(current: usize, desired_for_unfulfilled: u32, max_distance: u32, logistics_rate_milli: u32, body_cost: u32) -> u32 {
+/// One hauler body's throughput in the demand-sizing currency [`hauler_desired`] runs on
+/// (milli): `carry × CARRY_CAPACITY × 1/((max_distance·2)+1)` — the same round-trip factor that
+/// converts the pickup room's unfulfilled hauling into a hauler count, so throughput and unmet
+/// demand are commensurable by construction.
+pub fn hauler_throughput_milli(carry_parts: u32, max_distance: u32) -> u32 {
+    (carry_parts as u64 * CARRY_CAPACITY as u64 * BID_SCALE as u64 / (max_distance as u64 * 2 + 1)).min(u32::MAX as u64) as u32
+}
+
+/// The hauler spawn ROI bid (ADR §D2, M5b — civilian `body_roi_milli`; ADR 0043 A10 marginal
+/// form, RULING-11 root B 2026-09-07). The hauler's §D5.4 `w` is the MARGINAL throughput this body
+/// unblocks: `min(body throughput, residual unmet demand)`, where the residual is the pickup
+/// room's unfulfilled hauling (`unfulfilled_hauling`, the demand-sizing stat) minus what the
+/// `current` roster already serves — so a lane whose demand is met (or covered by the alive
+/// carriers) prices at its coarse band, and only a genuinely unserved lane bids the ROI up. The
+/// old form priced a FIXED per-body constant (`carry·50` per `carry·100` of cost = 750_000 for
+/// every 1:1 body) and so pinned every hauler at the 99_999 cap regardless of need.
+///
+/// Amortized over the body cost and clamped strictly below the [`SPAWN_BID_MINER`] income band
+/// (`[band, SPAWN_BID_CRITICAL - 1]`): a genuinely stressed logistics lane can bid ABOVE the
+/// shared HIGH/combat-forming band (logistics is never starved by speculative combat forming) but
+/// is only ever out-ranked by income. The FIRST local hauler (`current == 0`) is the bootstrap
+/// carrier and bids [`SPAWN_BID_BOOTSTRAP_HAULER`] instead (see that constant).
+pub fn hauler_bid(
+    current: usize,
+    desired_for_unfulfilled: u32,
+    max_distance: u32,
+    unfulfilled_hauling: u32,
+    carry_parts: u32,
+    body_cost: u32,
+) -> u32 {
+    if current == 0 && max_distance == 0 {
+        return SPAWN_BID_BOOTSTRAP_HAULER;
+    }
     let band = hauler_priority(current, desired_for_unfulfilled, max_distance);
-    let roi = body_roi_milli(logistics_rate_milli, body_cost);
+    let per_body_milli = hauler_throughput_milli(carry_parts, max_distance);
+    // What the alive roster already serves, in the same currency (each alive carrier assumed to be
+    // this body — the `hauler_desired` sizing convention).
+    let served_milli = per_body_milli as u64 * current as u64;
+    let residual_milli = (unfulfilled_hauling as u64 * BID_SCALE as u64).saturating_sub(served_milli).min(u32::MAX as u64) as u32;
+    let w_milli = per_body_milli.min(residual_milli);
+    let roi = body_roi_milli(w_milli, body_cost);
     // Blend: the ROI refines the ordering WITHIN the economy class. Take the larger of the coarse
-    // band and the ROI (a high-throughput cheap hauler bids up), capped only strictly below the
-    // CRITICAL miner band so logistics never preempts income but CAN out-rank a forming squad.
-    band.max(roi).min(SPAWN_BID_CRITICAL - 1)
+    // band and the marginal ROI (an unserved lane bids up), capped strictly below the miner band
+    // so logistics never preempts income but CAN out-rank a forming squad.
+    band.max(roi).min(SPAWN_BID_MINER - 1)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -596,15 +695,103 @@ mod tests {
         assert_eq!(hauler_priority(4, 5, 0), SPAWN_BID_MEDIUM, "≥ ceil(75%) of desired");
         assert_eq!(hauler_priority(0, 5, 1), SPAWN_BID_MEDIUM, "remote urgent band");
         assert_eq!(hauler_priority(4, 5, 1), SPAWN_BID_LOW, "remote relaxed band");
-        // ROI refinement (M5b): a cheap high-throughput hauler bids up. It is capped only below the
+        // ROI refinement (M5b, marginal form): an UNSERVED lane bids up. It is capped only below the
         // CRITICAL miner band, so a genuinely stressed logistics lane can out-rank a forming combat
         // squad (combat must not starve the economy) while income (miners) is still never preempted.
-        assert!(hauler_bid(0, 5, 0, 8_000, 300) >= SPAWN_BID_HIGH, "a strong-ROI hauler bids at least its band");
+        // (current=1 so the bootstrap floor does not apply; 800e unmet vs a 3C roster serving 150.)
+        assert!(hauler_bid(1, 5, 0, 800, 3, 300) >= SPAWN_BID_HIGH, "a strong-ROI hauler bids at least its band");
         assert!(
-            hauler_bid(0, 5, 0, 60_000, 1_000) > SPAWN_BID_COMBAT_FORMING,
-            "a genuinely high-throughput hauler can now out-bid speculative combat forming"
+            hauler_bid(1, 5, 0, 4_000, 10, 1_000) > SPAWN_BID_COMBAT_FORMING,
+            "a genuinely unserved high-throughput lane can out-bid speculative combat forming"
         );
-        assert!(hauler_bid(0, 5, 0, 60_000, 1_000) < SPAWN_BID_CRITICAL, "but logistics never preempts income (miners)");
+        assert!(hauler_bid(1, 5, 0, 4_000, 10, 1_000) < SPAWN_BID_CRITICAL, "but logistics never preempts income (miners)");
+    }
+
+    /// RULING-11 root B (2026-09-07), pin 1 — INCOME OUTRANKS LOGISTICS under every roster / need
+    /// shape: the static-miner bid is the CRITICAL band and the hauler bid can never reach it,
+    /// whatever the unmet demand, body or roster; the two bootstrap floors (restart harvester,
+    /// first carrier) sit strictly above the miner so a tie can never bank the lane at zero income.
+    #[test]
+    fn miner_outranks_every_hauler_and_the_bootstrap_floors_outrank_the_miner() {
+        assert_eq!(SPAWN_BID_MINER, SPAWN_BID_CRITICAL, "static miners bid in the CRITICAL income band");
+        // Every hauler shape: roster 1..=6, unmet 0..=20k, body 300..=2000, local and remote.
+        for current in 1..=6usize {
+            for &unmet in &[0u32, 100, 800, 4_000, 20_000] {
+                for &(carry, cost) in &[(3u32, 300u32), (13, 1_300), (18, 1_800), (20, 2_000)] {
+                    for distance in 0..=2u32 {
+                        let bid = hauler_bid(current, 5, distance, unmet, carry, cost);
+                        assert!(
+                            bid < SPAWN_BID_MINER,
+                            "hauler(current={current}, unmet={unmet}, carry={carry}, cost={cost}, d={distance}) bid {bid} must stay below the miner band {SPAWN_BID_MINER}"
+                        );
+                    }
+                }
+            }
+        }
+        // The live W5N49 shape: an 1800e capacity hauler behind full containers (4000e unmet) with
+        // 2 small haulers alive — bids high, but the 550e miner still heads the queue.
+        assert!(hauler_bid(2, 5, 0, 4_000, 18, 1_800) < SPAWN_BID_MINER, "the live 1800e hauler never out-bids the miner");
+        // Replacement harvesters (roster > 0) sit below the miner; the RESTART harvester and the
+        // FIRST carrier sit strictly above it (ordered restart > carrier > miner).
+        assert!(harvester_bid(1, 1, 4, 0) < SPAWN_BID_MINER, "a replacement harvester never out-bids a miner");
+        assert!(harvester_bid(1, 0, 4, 0) <= SPAWN_BID_MINER, "a same-source replacement at worst ties the income band");
+        assert_eq!(harvester_bid(0, 0, 4, 0), SPAWN_BID_BOOTSTRAP_HARVESTER, "no harvesting creep at all → the restart floor");
+        assert_eq!(harvester_bid(0, 0, 4, 1), SPAWN_BID_MEDIUM, "a remote source never bootstraps above income");
+        assert_eq!(hauler_bid(0, 5, 0, 4_000, 3, 300), SPAWN_BID_BOOTSTRAP_HAULER, "an empty local hauler roster → the carrier floor");
+        assert!(hauler_bid(0, 5, 1, 4_000, 3, 300) < SPAWN_BID_MINER, "an empty REMOTE roster never bootstraps above income");
+        assert_eq!(hauler_bid(0, 5, 1, 0, 3, 300), SPAWN_BID_MEDIUM, "…and with nothing unmet it is exactly its remote band");
+        const _: () = assert!(SPAWN_BID_BOOTSTRAP_HARVESTER > SPAWN_BID_BOOTSTRAP_HAULER);
+        const _: () = assert!(SPAWN_BID_BOOTSTRAP_HAULER > SPAWN_BID_MINER);
+        assert_eq!(spawn_bid_label(SPAWN_BID_BOOTSTRAP_HARVESTER), "Critical", "the floors label as the CRITICAL band");
+    }
+
+    /// RULING-11 root B, pin 2 — the NEED-SCALED hauler bid: with zero unmet demand (or demand the
+    /// alive roster already covers) the bid falls to the coarse band floor; it rises with residual
+    /// unmet demand, monotonically, and saturates strictly below the miner band.
+    #[test]
+    fn need_scaled_hauler_bid_falls_to_the_band_floor_when_unmet_demand_is_zero() {
+        // Zero unmet → exactly the band (local relaxed: MEDIUM; local urgent: HIGH).
+        assert_eq!(hauler_bid(4, 5, 0, 0, 18, 1_800), hauler_priority(4, 5, 0), "zero unmet demand → the band floor");
+        assert_eq!(hauler_bid(4, 5, 0, 0, 18, 1_800), SPAWN_BID_MEDIUM);
+        assert_eq!(hauler_bid(1, 5, 0, 0, 18, 1_800), SPAWN_BID_HIGH, "urgent band floor at zero unmet");
+        // Demand the roster already serves is not marginal: 2 × 18C (900 each) cover 1800 unmet.
+        assert_eq!(hauler_bid(2, 5, 0, 1_800, 18, 1_800), hauler_priority(2, 5, 0), "covered demand → the band floor");
+        // Residual unmet lifts the bid, monotonically, up to (never reaching) the miner band.
+        // (residual 100e → roi 100_000·1500/1800 = 83_333 > HIGH; 110e → 91_666; 18_200e → cap.)
+        let low = hauler_bid(2, 5, 0, 1_900, 18, 1_800);
+        let mid = hauler_bid(2, 5, 0, 1_910, 18, 1_800);
+        let high = hauler_bid(2, 5, 0, 20_000, 18, 1_800);
+        assert!(low > hauler_priority(2, 5, 0), "any residual unmet demand prices above the band ({low})");
+        assert!(mid > low, "more residual demand → higher bid ({mid} > {low})");
+        assert!(high >= mid && high == SPAWN_BID_MINER - 1, "a deeply unserved lane saturates just below the miner band ({high})");
+        // The throughput currency is the demand-sizing one: 18C local = 900 × 1000 milli.
+        assert_eq!(hauler_throughput_milli(18, 0), 900_000);
+        assert_eq!(hauler_throughput_milli(3, 1), 50_000, "remote d=1: 150 / 3");
+    }
+
+    /// RULING-11 root B, pin 3 — STARVATION SIZING is a per-tick function of the lane: the capacity
+    /// body is the target iff the room can reach its cost from what it holds (lane + haulable
+    /// stock); otherwise the body is sized from available-now energy, floored at the 300 the spawn
+    /// regenerates — so a 300e hauler / 250e harvester / 250e miner is always fieldable. No mode.
+    #[test]
+    fn starvation_sizing_picks_the_affordable_body_when_the_capacity_body_is_unreachable() {
+        // The live W13N51 shape: lane 300 of 2300, nothing in storage/containers, 1250e capacity
+        // harvester / 1800e hauler requested → size from the lane (300), not capacity.
+        assert_eq!(replacement_body_energy(300, 2_300, 300, 1_250), 300, "unreachable capacity body → the lane");
+        assert_eq!(replacement_body_energy(300, 1_800, 300, 1_800), 300);
+        // Below the regen floor the budget is still 300 (the spawn regenerates to it for free).
+        assert_eq!(replacement_body_energy(50, 1_800, 50, 1_800), SPAWN_LANE_REGEN_FLOOR_E, "floored at the 300 regen");
+        // A partially-filled lane sizes from what it holds NOW (per-tick optimal, not a mode).
+        assert_eq!(replacement_body_energy(1_000, 1_800, 1_500, 1_800), 1_000, "a 1000e lane fields a 1000e body");
+        // Reachable (stock in containers/storage) → the capacity body banks, exactly as before.
+        assert_eq!(replacement_body_energy(300, 1_800, 4_300, 1_800), 1_800, "full containers → capacity sizing (steady state)");
+        assert_eq!(replacement_body_energy(300, 550, 300 + 250, 550), 550, "reachable at exactly the cost → capacity");
+        assert_eq!(replacement_body_energy(1_800, 1_800, 1_800, 1_800), 1_800, "a full lane is trivially reachable");
+        // The resulting bodies are the always-fieldable ones.
+        let body = create_body(&hauler_body(false, replacement_body_energy(300, 1_800, 300, 1_800))).unwrap();
+        assert_eq!(body.iter().map(|p| p.cost()).sum::<u32>(), 300, "a 3C3M hauler under starvation");
+        let body = create_body(&harvester_body(replacement_body_energy(300, 2_300, 300, 1_250))).unwrap();
+        assert_eq!(body.iter().map(|p| p.cost()).sum::<u32>(), 250, "a [M,M,C,W] harvester under starvation");
     }
 
     /// The upkeep sizing (pre-move fixture, missions/upgrade.rs): at/above half-max → 1 WORK;

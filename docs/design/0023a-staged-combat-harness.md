@@ -251,3 +251,72 @@ ADR 0023 (sim beds), ADR 0022 P-FORCE (the oracle), `combat-agent/src/{objective
 - `6dd6bfb` (eval) — Phase F: `ForemanGenerator` (foreman-planned realistic bases over real terrain; ADR 0025 §12 Stage 3).
 - `287a689` (eval) — Phase G: `ImportedRoom` (captured-room fixtures × objective kinds × comps, single + multi-room; ADR 0025 §12 Stage 2).
 - WS-CLOSE 2026-09-07 batch (eval; SHA on the parent's commit) — Phase B, multi-room half: the `MultiRoom` generator (`generate.rs`), its pins (determinism, seam staging, builder aliasing, calibration assessability, mirrored staging layout, twin-index crossing) + the `multi_room_traversal_sweep` dashboard; the border ROUT bed (`stronghold::run_border_rout`, ADR 0023 cross-room Flee squad side).
+
+### WS-VAL corpus write-back (2026-09-07 — the stronghold / border / boosted lanes, as built)
+
+Written back from the WS-VAL implementation doc (docs/implementation/README.md rule 5) and verified against
+`screeps-combat-eval`. These lanes are `Designed`-class generators + `SelfPlay`-class validators in
+this ADR's terms, specialised to the operator's 2026-08-23 directive ("a test corpus that matches real
+invader strongholds and boosted creeps self play … multi room and challenging room layouts … make
+sure the live code uses all the same behavior as simulation").
+
+- **Stronghold corpus (`harness/stronghold.rs`).** Transcribed from the canonical engine sources,
+  not invented (module doc carries the citations): bunker1–5 templates with exact structure offsets
+  and the full rampart blanket (`screeps-common/lib/strongholds.js`), rampart hits 100K/200K/500K/1M/2M
+  (`RAMPART_HITS`), core 100K (`CORE_HITS`; dismantle-immune in the engine model), the exact defender
+  bodies WITH boosts (`invader-core/stronghold/creeps.js` — T2 `UH2O`/`KHO2` defenders/rangers at L4,
+  T3 `XUH2O`/`XKHO2`/`XZHO2` melee/rangers at L5, the XLH2O fortifier), per-level populations as
+  seeded draws from the engine's deck (`stronghold.js`), tower AI `focusClosest` (L1–3) / `focusMax`
+  (L4–5) in `stronghold_tower_intents`, and core-refilled towers modeled as a 100K pool per tower
+  (`TOWER_ENERGY`) so drain is honestly non-viable. `StrongholdScenario::build(level, terrain,
+  multi_room, seed)` spans level 1–5 × `StrongholdTerrain::{Open, Chokepoint}` (procedural caves,
+  connectivity-verified) × single-room / multi-room (the attacker stages in the east neighbour and must
+  cross a border whose open columns are verified passable on both edges). `run_stronghold_assault`
+  is ORACLE-SIZED: `optimize_composition(DoctrineObjective::KillImmuneStructure, …)` with the
+  attacker's `boost_max_tier` as the supply clamp (T0 / T3), breach hits derived from the built world,
+  the comp placed by `validate::place_at_entry` at its stamped tier and driven by the real managed
+  brain (`ManagedSimSquad`, `Destroy`), defenders = the population under `Hold` — so a rung grades the
+  whole pipeline, sizing through tactics. `RungOutcome` = `Killed{ticks}` / `Deferred` (the oracle
+  refused — honest for what one squad cannot take) / `Unfieldable` / `AttackerWiped` / `Timeout{reached}`.
+- **The honest-verdict rule.** `Killed` means the OBJECTIVE was razed (`ObjectivesDestroyed`): the
+  runner has no `SideWiped(defender)` stop, because killing the camper creeps is not taking the
+  stronghold (towers + core still stand). The earlier defender-wipe stop mis-scored L2 rungs as
+  `Killed{~20}` when the lone camper died 13 tiles from the core; removing it exposed two real
+  tactical defects that were then fixed (the stall clocks accruing through the march; the
+  out-of-contact rigid-body park — ADR 0025/0035 write-backs).
+- **Border gauntlet (`BorderGauntlet::build(grade, seed)`).** The distilled "picked off moving in and
+  out of rooms" fear: a bare core in a chokepoint room, a camper pack parked 2–4 tiles inside the
+  arrival edge bracketing the open border columns — grade 1 = 2 unboosted rangers, 2 = 4, 3 = 4 T2
+  boosted rangers + 2 T2 boosted melee, 4 = 6 T3 `fullBoostedRanger`s. Same runner, same verdicts.
+- **Boosted self-play lane (`tournament.rs`).** `boost_body(body, tier)` (uniform per-part boost via
+  `screeps_sim_core::BodyPartDef::boosted`; `BoostTier::None` ⇒ byte-identical unboosted build);
+  `boosted_comp_basket(n, energy, tier)` = `comp_basket`'s exact seeded comps and beds, boosted — so a
+  tier sweep isolates what boosts change, not a comp reshuffle; `build_bed_bodies`/`play_bed_bodies`
+  take per-side pre-built bodies (tier-asymmetric matches); `payoff_over_boosted_comps` is the
+  antisymmetric payoff over such a basket. NB `comp_basket`/`boosted_comp_basket` are SYNTHETIC beds
+  only (open field / corridor / tower crossfire); terrain regimes come from `chokepoint_comp_basket`.
+- **Checked-in pins (fast, in `cargo test -p screeps-combat-eval`):** template/population ground-truth
+  match, chokepoint connectivity, `stronghold_floor_t0_defers_t3_kills_every_l1_rung` (L1 open /
+  chokepoint / chokepoint-multi: T0 `Deferred` — the quantified pre-boost capability truth under the
+  3000-energy member clamp — and T3 `Killed`; border g1@T0, g1@T3, g2@T3 `Killed` — the bloc crossing
+  beats the campers), `border_rout_withdraws_across_the_seam_but_never_reaches_the_rally_yet` (the
+  ADR 0023 cross-room Flee squad side, honest baseline), `t3_twin_decisively_beats_unboosted_twin`
+  (RED if boost multipliers stop flowing anywhere sim-body → engine → DTO → kernels; pinned against a
+  HOLDING T0 twin because an equal-speed fleer is honestly uncatchable). **`#[ignore]` dashboards
+  (read, assert nothing):** `stronghold_gauntlet` (every level × terrain × rooms × {T0,T3} + the
+  border grades), `write_stronghold_replays` (the operator viewer → `target/replays/stronghold/index.html`),
+  `probe_rung` (one rung tick-traced from its recording — the instrument that root-caused the
+  cohesion-under-fire and border-crossing defect chains), `boosted_selfplay_dashboard` (default vs the
+  0026a catalog per tier), `boosted_tier_retune` / `joint_boosted_terrain_retune` (the ADR 0041 P4
+  instruments), `multi_room_traversal_sweep`. Run commands are in `screeps-combat-eval/README.md`.
+- **Documented corpus approximations (revisit on evidence, not bugs):** the fortifier's rampart
+  REPAIR is unresolved (the sim has no creep-repair intent; the body still fields as the eHP + T3-WORK
+  blob it is); defender micro is `ManagedSimSquad` under `Hold`, not the engine's spot-walk
+  `coordinated` behaviour; L5's anti-nuke fortify is out of scope; roads and containers are omitted
+  (no combat effect — roads only touch fatigue, and combat squads size MOVE for plains).
+- **What the corpus established (design-bearing):** the T0 heal ceiling under the member-energy clamp
+  cannot out-sustain even one stronghold tower (why live only ever razed towerless cores; boosts are
+  the unlock — L1 fields at T3); L2+ defer even at T3 for a single 8-squad — the multi-squad
+  operation is the L2+ path (ADR [0048](0048-multi-squad-assault-doctrine.md), Draft); default
+  tactics tuned unboosted do not generalize to boosted play (the 0041 P4 re-tune). The
+  live↔sim parity audit the corpus triggered is `docs/reviews/live-sim-parity-audit-2026-08-23.md`.

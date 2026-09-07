@@ -224,3 +224,31 @@ modded or synthetic worlds.
 - `6bd8e1b` `emit_requirement` — the one capability-vector emitter (2026-06-27)
 - `da79345` `assemble_force` — role-distribution builder, templates retired (2026-06-27)
 - `97d9944` single `EnemyForce` channel for enemy creep power (2026-06-28)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+- **The capped optimizer family (Phase 4.5 item 8a, RULING-9; `composition.rs`).** `optimize_composition`
+  is a two-step search: the STANDARD cap (`MAX_SIZED_MEMBERS` = 8) is tried first, so every target the
+  8-member optimizer already commits to keeps its exact sizing; only a target the standard cap DEFERS on
+  re-runs `optimize_composition_capped(.., member_cap_for(objective))`. `member_cap_for` is the one policy
+  point — both the winnability ceiling (`optimizer_ceiling_budget_capped`) and the assembler cap
+  (`assemble_force_capped`) derive from it, so the two can never disagree about what is fieldable. A flat cap
+  raise re-sized EVERY siege and regressed the border rungs + L1-multi to defers/wipes when first tried; the
+  fallback form is what made the lift safe to keep in the tree.
+- **`optimizer_ceiling_budget_capped` holds healers at the DELIVERABLE count.** `CEILING_DELIVERABLE_HEALERS`
+  = 5 (full-rate heal lands from range ≤1 on ONE focused member — ~5 slots is what a formation actually
+  delivers); only fighters scale with the cap, and a lifted cap reserves 2 anti-creep members
+  (`overlay_anti_creep` adds the defender-clear parts on top; without the reserve every lifted rung landed
+  ~2 past the cap and was unassemblable by construction). At cap 8 the ceiling is byte-identical to the
+  classic 3+5 split, so nothing in ADR 0031b's swept surface moved.
+- **The lift itself is INERT: `member_cap_for` returns `MAX_SIZED_MEMBERS` for every objective.**
+  `SIEGE_MAX_SIZED_MEMBERS` = 16 was measured RED (2026-08-24): the SIZING works — at cap 16 the optimizer
+  correctly fields an L2 stronghold assault (p_surv 0.82, p_kill 1.0) with the whole gate battery green —
+  but the 16-blob loses TACTICALLY on every terrain (congeals in the choke corridor; parks as a rigid body
+  at the tower-threat edge in the open, where 5 deliverable healers cannot gate 11 fighters forward).
+  Shipping it would convert live L2+ defers into repeated timeouts/wipes, so the L2+ path is the multi-squad
+  doctrine (ADR 0048, a parked Draft): two coordinated 8-squads keep every validated cohesion/crossing
+  behavior. When that doctrine (or an in-room mass-advance discipline) lands, `SIEGE_MAX_SIZED_MEMBERS` is
+  wired back in at `member_cap_for`. §5's "Higher-power multi-squad strategies (#38)" is that item.
+- **0031a/b re-sweep under `w_energy = 1.0` (WS-4, 2026-08-23):** defaults CONFIRMED, margin knobs inert
+  in-band — recorded in ADR 0031b §5; §2c / §4 above remain true as written.

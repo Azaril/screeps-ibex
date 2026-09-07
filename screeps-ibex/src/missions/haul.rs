@@ -15,6 +15,39 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
+/// The energy a home room's spawn lane can be refilled to with NO new income — the K4 starvation-
+/// sizing input (`spawn_policy::replacement_body_energy`, RULING-11 root B): the lane itself plus
+/// the room's HAULABLE stock — storage, the source-side links and the source-side containers. A
+/// container OR link within range 3 of the controller is the upgrade buffer (a Use-lane sink, never
+/// hauled back to the lane — counting a full controller link would keep a capacity body "reachable"
+/// on a lane that can only reach the 300 regen, re-forming the bank) and the terminal sits under
+/// the 10k transfer reserve, so none of those count. Reads the cached
+/// `RoomStructureData` (no `find`); a room without cached structures reads as its lane alone.
+pub(crate) fn spawn_lane_reachable_energy(room_data: &RoomData, energy_available: u32) -> u32 {
+    let Some(structures) = room_data.get_structures() else {
+        return energy_available;
+    };
+    let controller_pos = structures.controllers().first().map(|c| c.pos());
+    let energy_in = |store: Store| store.get_used_capacity(Some(ResourceType::Energy));
+    let storage: u32 = structures.storages().iter().map(|s| energy_in(s.store())).sum();
+    let links: u32 = structures
+        .links()
+        .iter()
+        .filter(|l| controller_pos.map(|p| l.pos().get_range_to(p) > 3).unwrap_or(true))
+        .map(|l| energy_in(l.store()))
+        .sum();
+    let containers: u32 = structures
+        .containers()
+        .iter()
+        .filter(|c| controller_pos.map(|p| c.pos().get_range_to(p) > 3).unwrap_or(true))
+        .map(|c| energy_in(c.store()))
+        .sum();
+    energy_available
+        .saturating_add(storage)
+        .saturating_add(links)
+        .saturating_add(containers)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct HaulingStats {
     last_updated: u32,
@@ -208,42 +241,71 @@ impl Mission for HaulMission {
                 let room = game::rooms().get(home_room_data.name)?;
                 let controller = room.controller()?;
 
-                let current_energy = room.energy_available().max(SPAWN_ENERGY_CAPACITY);
+                let energy_available = room.energy_available();
                 let max_energy = room.energy_capacity_available();
+                let reachable_energy = spawn_lane_reachable_energy(home_room_data, energy_available);
 
                 Some((
                     entity,
                     room,
                     room_manhattan_distance,
                     controller.level(),
-                    current_energy,
+                    energy_available,
                     max_energy,
+                    reachable_energy,
                 ))
             })
             .collect();
 
-        let is_multi_room = home_room_spawn_info.iter().any(|(_, _, distance, _, _, _)| *distance > 0);
+        let is_multi_room = home_room_spawn_info.iter().any(|(_, _, distance, _, _, _, _)| *distance > 0);
 
         let token = system_data.spawn_queue.token();
 
+        // K4 policy (ADR 0040 M3): the hauler body shape, demand sizing and priority bands
+        // live in `screeps_econ_decision::spawn_policy` (consumed here and by the economy sim).
         let energy_to_use = if self.haulers.is_empty() {
+            // The bootstrap carrier: sized from available-now energy (floored at the 300 regen) —
+            // always fieldable, bid at the bootstrap floor (`hauler_bid`).
             home_room_spawn_info
                 .iter()
-                .map(|(_, _, _, _, current_energy, _)| *current_energy)
+                .map(|(_, _, _, _, energy_available, _, _)| (*energy_available).max(SPAWN_ENERGY_CAPACITY))
                 .max()
         } else {
-            home_room_spawn_info.iter().map(|(_, _, _, _, _, max_energy)| *max_energy).min()
+            // K4 starvation sizing (RULING-11 root B): the capacity body only when the lane can
+            // reach its cost from what the room holds; else the affordable-now body. Over the
+            // shared-token homes the conservative (min) facts decide, matching the min capacity.
+            let energy_capacity = home_room_spawn_info.iter().map(|(_, _, _, _, _, max_energy, _)| *max_energy).min();
+            energy_capacity.map(|energy_capacity| {
+                let capacity_body_cost =
+                    crate::creep::spawning::create_body(&screeps_econ_decision::spawn_policy::hauler_body(is_multi_room, energy_capacity))
+                        .map(|body| body.iter().map(|p| p.cost()).sum())
+                        .unwrap_or(energy_capacity);
+                let energy_available = home_room_spawn_info
+                    .iter()
+                    .map(|(_, _, _, _, energy_available, _, _)| *energy_available)
+                    .min()
+                    .unwrap_or(0);
+                let reachable_energy = home_room_spawn_info
+                    .iter()
+                    .map(|(_, _, _, _, _, _, reachable)| *reachable)
+                    .min()
+                    .unwrap_or(0);
+                screeps_econ_decision::spawn_policy::replacement_body_energy(
+                    energy_available,
+                    energy_capacity,
+                    reachable_energy,
+                    capacity_body_cost,
+                )
+            })
         }
         .unwrap_or(SPAWN_ENERGY_CAPACITY);
 
         let max_distance = home_room_spawn_info
             .iter()
-            .map(|(_, _, distance, _, _, _)| *distance)
+            .map(|(_, _, distance, _, _, _, _)| *distance)
             .max()
             .unwrap_or(0);
 
-        // K4 policy (ADR 0040 M3): the hauler body shape, demand sizing and priority bands
-        // live in `screeps_econ_decision::spawn_policy` (consumed here and by the economy sim).
         let body_definition = screeps_econ_decision::spawn_policy::hauler_body(is_multi_room, energy_to_use);
 
         if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
@@ -255,19 +317,19 @@ impl Mission for HaulMission {
             let should_spawn = self.haulers.len() < desired_haulers && self.allow_spawning;
 
             if should_spawn {
-                // Civilian ROI bid (ADR 0040 §D2, M5b — `body_roi_milli`): the hauler's §D5.4 `w`
-                // is its logistics rate = throughput unblocked (cargo per round-trip amortized over
-                // the round-trip time). `range_multiplier = 1/((max_distance·2)+1)` is exactly the
-                // demand-sizing round-trip factor (spawn_policy::hauler_desired), so
-                // `carry × CARRY_CAPACITY × multiplier` is the per-tick throughput this body serves.
+                // Civilian ROI bid (ADR 0040 §D2, M5b — `body_roi_milli`; ADR 0043 A10 marginal
+                // form): the hauler's §D5.4 `w` is the marginal throughput this body unblocks —
+                // `min(body throughput, unfulfilled hauling not served by the alive roster)` in
+                // the demand-sizing currency (`hauler_desired`), so a lane whose demand is met
+                // prices at its band and an unserved one bids up, never reaching the miner band.
+                // The first local hauler is the bootstrap carrier (the floor above miners).
                 let body_cost: u32 = body.iter().map(|p| p.cost()).sum();
-                let range_multiplier_milli = (screeps_econ_decision::sink_economics::BID_SCALE) / ((max_distance * 2) + 1);
-                let logistics_rate_milli = (carry_parts as u32) * 50 * range_multiplier_milli;
                 let priority = screeps_econ_decision::spawn_policy::hauler_bid(
                     self.haulers.len(),
                     desired_haulers_for_unfufilled,
                     max_distance,
-                    logistics_rate_milli,
+                    stats.unfufilled_hauling,
+                    carry_parts as u32,
                     body_cost,
                 );
 
@@ -276,8 +338,7 @@ impl Mission for HaulMission {
                 let allow_repair = max_distance > 0;
                 let storage_delivery_only = max_distance > 0;
 
-                for (entity, _, _, _, _, _) in home_room_spawn_info {
-                    //TODO: Make sure there is handling for starvation/bootstrap mode.
+                for (entity, _, _, _, _, _, _) in home_room_spawn_info {
                     let spawn_request = SpawnRequest::new(
                         format!("Haul - Target Room: {}", room_data.name),
                         &body,
@@ -298,5 +359,119 @@ impl Mission for HaulMission {
         }
 
         Ok(MissionResult::Running)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::localsupply::body_helpers::source_miner_body;
+    use crate::spawnsystem::{SpawnQueue, SpawnRequest};
+    use screeps::Part;
+    use screeps_econ_decision::spawn_policy::*;
+    use specs::prelude::*;
+
+    fn cost(body: &[Part]) -> u32 {
+        body.iter().map(|p| p.cost()).sum()
+    }
+
+    fn request(description: &str, body: &[Part], bid: u32) -> SpawnRequest {
+        SpawnRequest::new(description.to_owned(), body, bid, None, Box::new(|_, _| {}))
+    }
+
+    /// Queue heads (description, cost) after the caller-side bids run through the real
+    /// descending head-of-line-banking `SpawnQueue`.
+    fn queue_order(requests: Vec<SpawnRequest>) -> Vec<(String, u32)> {
+        let mut world = World::new();
+        let room = world.create_entity().build();
+        let mut queue = SpawnQueue::default();
+        for r in requests {
+            queue.request(room, r);
+        }
+        queue
+            .room_requests(room)
+            .iter()
+            .map(|r| (r.description().to_owned(), r.cost()))
+            .collect()
+    }
+
+    /// RULING-11 root B (2026-09-07), ibex-side pin — INCOME OUTRANKS LOGISTICS at the queue the
+    /// callers feed. The live W5N49 deadlock shape (lane 300; containers 2000/2000 → 4000e unmet;
+    /// 2 small haulers alive; 0 miners): the capacity-sized 1800e hauler used to head the queue at
+    /// 99_999 over the 550e miners at HIGH and bank the lane forever. Now the miners head it, the
+    /// restart harvester heads the miners, and the first carrier heads the miners too.
+    #[test]
+    fn income_outranks_logistics_in_the_spawn_queue() {
+        let hauler_1800 = crate::creep::spawning::create_body(&hauler_body(false, 1_800)).unwrap();
+        let carry = hauler_1800.iter().filter(|p| **p == Part::Carry).count() as u32;
+        let miner_550 = crate::creep::spawning::create_body(&source_miner_body(true, 1_300, 5, false)).unwrap();
+        assert_eq!(cost(&miner_550), 550, "the live 5W container miner");
+
+        // W5N49: 2 haulers alive, 4000e unmet; hauler_desired(4000, 18 carry, d=0) yields 4 (4000/900).
+        let (desired_for_unfulfilled, _) = hauler_desired(4_000, carry, 0);
+        let hauler_bid_w5n49 = hauler_bid(2, desired_for_unfulfilled, 0, 4_000, carry, cost(&hauler_1800));
+        let order = queue_order(vec![
+            request("Haul", &hauler_1800, hauler_bid_w5n49),
+            request("Container Miner", &miner_550, SPAWN_BID_MINER),
+            request("Container Miner", &miner_550, SPAWN_BID_MINER),
+        ]);
+        assert_eq!(
+            order[0],
+            ("Container Miner".to_owned(), 550),
+            "a miner heads the queue, not the 1800e hauler ({order:?})"
+        );
+        assert_eq!(order[1].0, "Container Miner");
+        assert_eq!(order[2], ("Haul".to_owned(), 1_800), "the hauler banks BEHIND income");
+
+        // W16N51: the only link miner expired; its 600e replacement vs an 1800e hauler (1 hauler alive).
+        let link_miner = crate::creep::spawning::create_body(&source_miner_body(true, 1_800, 5, true)).unwrap();
+        let order = queue_order(vec![
+            request("Haul", &hauler_1800, hauler_bid(1, 26, 0, 4_000, carry, 1_800)),
+            request("Link Miner", &link_miner, SPAWN_BID_MINER),
+        ]);
+        assert_eq!(order[0].0, "Link Miner", "the income body heads the queue ({order:?})");
+
+        // Bootstrap ladder: restart harvester > first carrier > miner > replacement harvester.
+        let harvester = crate::creep::spawning::create_body(&harvester_body(300)).unwrap();
+        let carrier = crate::creep::spawning::create_body(&hauler_body(false, 300)).unwrap();
+        let order = queue_order(vec![
+            request("Container Miner", &miner_550, SPAWN_BID_MINER),
+            request("Harvester (replacement)", &harvester, harvester_bid(1, 1, 4, 0)),
+            request("Haul (first)", &carrier, hauler_bid(0, 26, 0, 4_000, 3, 300)),
+            request("Harvester (restart)", &harvester, harvester_bid(0, 0, 4, 0)),
+        ]);
+        let names: Vec<&str> = order.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Harvester (restart)", "Haul (first)", "Container Miner", "Harvester (replacement)"],
+            "the bootstrap ladder orders restart > carrier > income > replacement"
+        );
+    }
+
+    /// RULING-11 root B, ibex-side pin — STARVATION SIZING yields always-fieldable bodies through
+    /// the live body definitions: with the lane at the 300 regen and nothing haulable, every
+    /// replacement (hauler / harvester / container miner / link miner) costs ≤ 300; with stock
+    /// reachable, the capacity bodies come back unchanged (steady state).
+    #[test]
+    fn starvation_sized_replacement_bodies_are_always_fieldable() {
+        let starved = |capacity: u32, capacity_body_cost: u32| replacement_body_energy(300, capacity, 300, capacity_body_cost);
+        let hauler = crate::creep::spawning::create_body(&hauler_body(false, starved(1_800, 1_800))).unwrap();
+        assert_eq!(cost(&hauler), 300, "3C3M hauler");
+        let harvester = crate::creep::spawning::create_body(&harvester_body(starved(2_300, 1_250))).unwrap();
+        assert_eq!(cost(&harvester), 250, "[M,M,C,W] harvester");
+        let miner = crate::creep::spawning::create_body(&source_miner_body(true, starved(1_300, 550), 5, false)).unwrap();
+        assert_eq!(cost(&miner), 250, "[M,W,W] container miner");
+        let link_miner = crate::creep::spawning::create_body(&source_miner_body(true, starved(1_800, 600), 5, true)).unwrap();
+        assert_eq!(cost(&link_miner), 300, "[M,C,W,W] link miner");
+
+        // Reachable stock (full containers) → the capacity bodies, exactly as before.
+        let fed = |capacity: u32, capacity_body_cost: u32| replacement_body_energy(300, capacity, 4_300, capacity_body_cost);
+        assert_eq!(
+            cost(&crate::creep::spawning::create_body(&hauler_body(false, fed(1_800, 1_800))).unwrap()),
+            1_800
+        );
+        assert_eq!(
+            cost(&crate::creep::spawning::create_body(&source_miner_body(true, fed(1_300, 550), 5, false)).unwrap()),
+            550
+        );
     }
 }

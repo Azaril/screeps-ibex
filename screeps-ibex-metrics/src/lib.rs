@@ -259,6 +259,20 @@ pub struct PathingMetrics {
     /// offline failed-move classes — [`Self::wasted_moves`] is.
     #[serde(default)]
     pub move_failures: u32,
+    /// The `Failed(PathBudgetExhausted)` share of [`Self::move_failures`]
+    /// (RULING-11 root A, 2026-09-07): creeps whose first-path search
+    /// could not run within this tick's pathfinding ops pool / CPU cap.
+    /// Sustained non-zero = the pool is saturated (the movement-wedge
+    /// signal); the rover keeps these creeps displaceable and rotates
+    /// the pool through them. 0 for writers predating the field.
+    #[serde(default)]
+    pub move_failed_budget: u32,
+    /// The `Failed(PathNotFound)` share of [`Self::move_failures`]:
+    /// searches that ran with their full natural budget and still found
+    /// no route — genuinely unreachable targets (immovable posts). 0 for
+    /// writers predating the field.
+    #[serde(default)]
+    pub move_failed_nopath: u32,
     /// G-13 TRUE wasted moves this tick (ADR 0033 §D8 L6; the
     /// rover-eval `bench.rs` "G-13 canary alignment" note, gap (1)):
     /// move intents the rover ISSUED last tick that the engine did not

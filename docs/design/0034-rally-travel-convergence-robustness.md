@@ -419,3 +419,48 @@ travel through hostile territory needs engine-proof fidelity (a NICE-TO-HAVE, no
 - `7567702` D4/D5/D8: blocked-member quorum exclusion, majority-progress lease, solo-travel stall window (2026-07-01)
 - `4f72088` / `ec23ee2` / `8bdf3e5` D6: pre-departure lifetime gate + renew-in-transit (2026-07-01)
 - `2e7461d` D9: target-intel gate on the win-or-stall fast path (2026-07-01)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+- **D6c / D3(d) renewable-rally bias as built (WvC-1, decision `e6aa3ce`).**
+  `rally::shared_rally_point_for_members_biased(member_positions, target, uncontested, room_is_dangerous,
+  room_is_renewable)` is `shared_rally_point_for_members_avoiding` plus one preference: among the VALID +
+  SAFE staging candidates (all on-corridor, all strictly closer than the laggard — the D3 geometry is never
+  weakened) it prefers the first room where `room_is_renewable` holds; `|_| false` restores the unbiased
+  kernel byte-for-byte. Scope is the SCATTERED candidate ladder only (a tight near-target cluster stages via
+  the legacy geometry — renew matters during the long scattered form, not the final hop). The live caller
+  (`squad_manager.rs:3605`) feeds `room_is_renewable = homes.iter().any(|h| h.name == room)` — our
+  spawn-capable homes. The renew half was already free: Phase B-renew matches any member standing in a home
+  room and the job walks it to the spawn, so a member held/gathered at a home-room rally is topped up (the
+  RC-6 spawn-less-forward-rally age-out closes). RED-verified pin.
+- **Rout-to-rally (WS-VAL Phase 4.5 items 2/3) is a SIM-DRIVER discipline today, not a live one.** In
+  `screeps-combat-agent::squad::ManagedSimSquad` a `Retreating` squad WITH a rally withdraws THE WAY IT
+  CAME — every in-room member's movement becomes `Advance { goal: rally, range: 3 }` — instead of following
+  the local anti-threat gradient into whatever corner is farthest from the enemy (the observed NW-corner
+  rout: survivors fled deeper into the room and died under the tower's room-wide 150 floor); the mover's
+  threat-weighted matrix still shapes the path around kill zones; rally-less beds keep the legacy kite goal.
+  The live manager's `Retreating` arm (`squad_manager.rs:4179`, REC-016) consumes the kernel's threat-priced
+  kite/withdraw goal for in-room members and stamps `Flee` on members already outside the target room — it
+  does not steer toward the rally. The live half is not built.
+- **F7 — the rally leg ends at the seam (found 2026-09-07 under the seam-gated engine; honest baseline
+  pinned).** In the border rout bed the crossers withdraw across the seam alive, and then the rout STOPS:
+  the sim driver's state decay (`Retreating` → `Forming` the moment no member stands in the fight room — the
+  WS-VAL decay that un-deadlocked the vanguard withdrawal; ADR 0027 deltas) hands control back to the bloc
+  gate, which re-releases nobody, and the survivors idle un-rallied to the timeout. The rally is a
+  DIRECTION, not a destination, until a re-entry/give-up rule exists (the M23 economic give-up is the
+  designed answer). Pin: `border_rout_withdraws_across_the_seam_but_never_reaches_the_rally_yet`
+  (`harness/stronghold.rs`) asserts `rallied_tick == None` and `stop == Timeout`, written to FAIL LOUDLY
+  when the rally leg lands ("BASELINE MOVED — promote this pin"). Before the engine's same-room targeting
+  gate the campers kept hitting the withdrawn crossers ACROSS the seam and the bed wiped at t69 — that wipe
+  was the fidelity leak, not the rout.
+- **F3 — the bloc gate's ASSEMBLED test releases with a straggler behind (found 2026-09-07, GROUP-UP bed,
+  measured).** The sim's border-crossing discipline (item 2: travellers GATHER at the staging side and cross
+  as a BLOC, so the fastest member never trickles into a contested room alone and latches the squad
+  Retreating on an in-room minority view) defines ASSEMBLED as every living traveller within
+  `GATHER_RADIUS` = 4 of the traveller centroid, with that centroid within `GATHER_EDGE_SLACK` = 8 of the
+  exit edge (pairwise cohesion, not on-the-band — a bordered edge is mostly walls). A straggler ~6 tiles
+  back can still satisfy it, so one member crosses ~11 ticks late. Decision: grade it in the Phase C
+  crossing before touching the gather constants — a tighter radius re-opens the measured permanent-gather
+  freeze (one straggler 6 tiles off centroid held the gate closed forever with everyone parked) these
+  constants were set to avoid. They are the sim driver's constants (`screeps-combat-agent::squad`),
+  distinct from the shared `rally::RALLY_GATHER_RADIUS` = 3 the quorum uses.

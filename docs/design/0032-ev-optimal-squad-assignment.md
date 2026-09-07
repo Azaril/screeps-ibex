@@ -251,3 +251,13 @@ The optimizer is a **pure deterministic kernel**, driven offline like `reconcile
 - `98dc1e7` v1.1 EV pairing + EV-positive gate + `value_e` + enemy-force pricing (2026-06-28)
 - `f12a711` v1.2 global Hungarian `assignment.rs` replacing both greedy loops (2026-06-28)
 - `a03ee91` v2 `Merge→Bk` column class + pending-slot guard (2026-06-28)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+- **"later — tournament-tune `value_e` weights" stands.** The WS-4 downstream pass (2026-08-23) looked for
+  a bed that discriminates `value_e`'s constants (`objective_value.rs`: `DENIAL_DISCOUNT` 0.5,
+  `DEFENSE_DANGER_HALF` 30, the per-kind arms) and found none in the chokepoint / lifecycle baskets — the
+  auction beds prove ORDERING and EV-positivity, not the scale of one kind against another — so no sweep was
+  run and no constant moved. The tracker re-tagged it →P6 ("its ADR says later; no discriminating bed");
+  this ADR's phasing line is the design of record and needs no change. `value_e` stays a pure per-kind
+  valuation with no serialized weights (§Non-goals).

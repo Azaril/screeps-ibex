@@ -377,3 +377,29 @@ Live-confirmed from the §1–2 list: **D11** (Deny — the routing stall), **R8
 ---
 
 *Review artifacts: five deep-read passes + adversarial verification, 2026-07-09; live-MMO root-cause investigation 2026-07-10, re-confirmed 2026-07-28. Finding IDs (D=defect, R=risk, O=opportunity) are stable for follow-up tracking.*
+
+---
+
+## 8. Closing note (2026-09-07 — WS-CLOSE)
+
+This review is closed as a live document; its design consequences live in the ADRs and its residual items
+in `docs/execution/implementation-tracker.md`. Disposition of the Tier −1 / §7 set, verified against the tree:
+
+- **Wave A (2026-07-28, `ab692bd` + decision `f6c084a`):** D1, D11, D24, D25, D26, D27, R22 — fixed,
+  private-soaked, MMO-verified (§7.2a).
+- **Wave B (2026-08-22/23, shipped 2026-08-23):** D2/D3 (`8fa0c60` — `critical_floor` = 2/5 of max with a
+  dps>0 guard; the `activated` latch clears on expiry), D4/D5/D6 (`be5ce24` — `fight_owns_squad_frame`,
+  `formation_needs_update` in both directions, `counts_toward_forming_cap`), D9 (`1a85a57` —
+  `StuckThresholds::engaged()` shared + live-wired), D10 (rover `850a06b` — partial flee paths), D28
+  (`b26eba4` — the vacuous clear). Design of record: ADR 0008a and ADR 0027 Design deltas (2026-09-07).
+  The T1/T2 "orphaned" framing is withdrawn — retained by design (ADR 0037 deltas).
+- **WvC-1 / WvC-2 (2026-08-23):** §6 item 2's widening of T-HEAL-3 landed as its unboosted half (T-HEAL-3a:
+  `effective_hits`, `reachable_estimated_heal`); the boost multipliers are ADR 0041's. R7 closed by S5-CAP
+  (`claim_pacing`, ADR 0028). O3 answered MOOT — `decide_towers` already makes the heal-aware fire decision;
+  the single-target tower helpers were deleted (ADR 0008a deltas). T-DEF-1 / T-DEF-5 / T-POS-5 built (ADR
+  0008a deltas). The drain group (D13/D20/R2/R3) is NOT disposed by these waves beyond the tower side now
+  running through one kernel — tracker.
+- **R19:** closed by WS-4 (2026-08-23) and re-tuned again under the RULING-9 currency (2026-08-24); the
+  current `open_combat` profile and the three-era reconciliation are in ADR 0026a.
+
+Finding IDs stay stable; anything not named above is tracked in the tracker, not here.

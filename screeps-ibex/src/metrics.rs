@@ -81,6 +81,12 @@ pub struct MetricsState {
     movement_ops_consumed: u32,
     movement_repaths: u32,
     movement_failures: u32,
+    /// The `move_failures` give-up level split by failure KIND (RULING-11
+    /// root A): `Failed(PathBudgetExhausted)` — the search could not run
+    /// within this tick's ops pool / CPU cap (the wedge signal) — vs
+    /// `Failed(PathNotFound)` — unreachable at the full search budget.
+    movement_failed_budget: u32,
+    movement_failed_nopath: u32,
     /// G-13 TRUE wasted moves (issued-vs-moved reconciliation, ADR 0033
     /// §D8 L6) — see [`Self::record_wasted_moves`].
     movement_wasted: u32,
@@ -107,6 +113,8 @@ impl Default for MetricsState {
             movement_ops_consumed: 0,
             movement_repaths: 0,
             movement_failures: 0,
+            movement_failed_budget: 0,
+            movement_failed_nopath: 0,
             movement_wasted: 0,
             cpu_used_ema: None,
             cpu_samples: 0,
@@ -136,8 +144,12 @@ impl MetricsState {
     /// This is the SELF-REPORTED give-up LEVEL (`Failed` + `Stuck ≥ 10`;
     /// a persisting stuck episode re-counts every tick) — the TRUE
     /// per-event rate is [`Self::record_wasted_moves`]; both are emitted.
-    pub fn record_movement_failures(&mut self, count: u32) {
+    /// `failed_budget` / `failed_nopath` split the `Failed` share by kind
+    /// (see the field docs) — additive seg-57 fields, no WFV.
+    pub fn record_movement_failures(&mut self, count: u32, failed_budget: u32, failed_nopath: u32) {
         self.movement_failures = count;
+        self.movement_failed_budget = failed_budget;
+        self.movement_failed_nopath = failed_nopath;
     }
 
     /// The G-13 TRUE wasted-move count for the tick (ADR 0033 §D8 L6, the
@@ -439,6 +451,8 @@ impl MetricsSystem {
                     ops_pool: data.state.movement_ops_cap,
                     repath_count: data.state.movement_repaths,
                     move_failures: data.state.movement_failures,
+                    move_failed_budget: data.state.movement_failed_budget,
+                    move_failed_nopath: data.state.movement_failed_nopath,
                     wasted_moves: data.state.movement_wasted,
                     mission_ops_pool: mission_pool,
                     mission_ops_used: mission_used,

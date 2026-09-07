@@ -82,7 +82,7 @@ enemy side already ×4 (threatmap) — sizing now boost-aware on BOTH sides cons
 2. scored `EV(C) = P(win | C) · target_value − cost(C)` where **`cost(C)` now includes the boost cost** — `Σ boosted_parts × (BOOST_MINERAL_COST·w_mineral + BOOST_ENERGY_COST·w_energy)` — so the optimizer only pays for a boost when the P(win) it buys is worth its mineral+energy (the operator's smallest-favorable-force directive, ADR 0031 REC-011);
 3. clamped to the **availability gate** (D2) — a tier the fielding home can't supply is skipped, exactly like an over-`MAX_SIZED_MEMBERS` candidate is skipped today.
 
-The deterministic tie-break extends: **max EV, then lowest k, then lowest tough, then lowest boost tier, then fewest members** — so at equal EV we prefer the *cheaper, unboosted* comp (never spend minerals for no P(win) gain). This is *why* it's a search axis and not a threshold: `EV(C)` itself decides "is this fight worth boosting for?" — reproducing the grounded Overmind gate (boost when enemy dmg > 1500/tick or heal > 1000/tick, ADR 0031a §5) as an *emergent* outcome of the cost/benefit math rather than a hardcoded cutoff (the same "let EV decide, don't hardcode the archetype" principle ADR 0031 D17 applied to weapon selection).
+The deterministic tie-break extends: **max EV, then lowest boost tier, then lowest k, then lowest tough, then fewest members** (as built in `composition.rs` — tier is compared FIRST so an unboosted tie never spends minerals) — so at equal EV we prefer the *cheaper, unboosted* comp (never spend minerals for no P(win) gain). This is *why* it's a search axis and not a threshold: `EV(C)` itself decides "is this fight worth boosting for?" — reproducing the grounded Overmind gate (boost when enemy dmg > 1500/tick or heal > 1000/tick, ADR 0031a §5) as an *emergent* outcome of the cost/benefit math rather than a hardcoded cutoff (the same "let EV decide, don't hardcode the archetype" principle ADR 0031 D17 applied to weapon selection).
 
 **Why an axis and not a per-objective flag:** the same target is worth boosting or not depending on its `target_value`, the colony's mineral surplus, and the enemy's own boosts — all already inputs to `optimize_composition`. A flag would re-introduce the presumed-shape smell ADR 0031 deleted; the ladder lets the value/cost balance pick the tier per-fight.
 
@@ -132,7 +132,7 @@ pub struct CombatBodySpec {
 
 ### 2(e) — D5: Enemy-boost symmetry — one consistent model on both sides
 
-**Decision.** Our sizing now prices **our** boosts with the **same ×4 / ×3.3 model** the threatmap already applies to the **enemy** (§1.3). This closes the asymmetry: a boosted-vs-boosted engagement is scored consistently (both sides' HEAL at 48/part, both TOUGH at ~333 EHP), and — critically — the optimizer can now *respond* to an observed boosted enemy by boosting up a rung (the `EnemyForce.boosted` flag, `doctrine.rs:93`, and the ×4-inflated `EnemyForce.dps`/`heal` feed `incoming`/`required_kill`; a boosted enemy raises the required capability, and the boost ladder is how we meet it without blowing `MAX_SIZED_MEMBERS`). **No change to the enemy model** — it stays the conservative flat-×4 assumption (EP-8.2, don't "fix" correct-but-conservative code); this ADR only makes *our* side read the same table. The one consistency invariant: the boosted-TOUGH EHP constant is shared (`~333` = `100/0.3`) between the threatmap enemy model and `capabilities()`'s own model, exported from one place (EP-2.9) so they can't drift.
+**Decision.** Our sizing now prices **our** boosts from the **same boost table** the enemy side reads, so a boosted-vs-boosted engagement is scored consistently, and — critically — the optimizer can *respond* to an observed boosted enemy by boosting up a rung (the `EnemyForce.boosted` flag, `doctrine.rs:93`, and the boost-inflated `EnemyForce.dps`/`heal` feed `incoming`/`required_kill`; a boosted enemy raises the required capability, and the boost ladder is how we meet it without blowing `MAX_SIZED_MEMBERS`). **As built (2026-08-23 write-back, see Design deltas):** the one table is `screeps-combat-decision::bodies::boosts` — the exact per-compound OUTPUT map (`output_multiplier_for`: tier-1 ×2 / tier-2 ×3 / catalyzed ×4 over the six military families) stamped per part onto `CombatBodyPart.boost_mult` for **both** sides of the tactical seam, and `BoostTier::output_multiplier()` (1/2/3/4) on our sizing side. The *strategic* enemy channel (`threatmap.rs::analyze_hostile_creep` → `EnemyForce`) keeps its conservative flat-×4 assumption for any boosted part (EP-8.2, don't "fix" correct-but-conservative code). The boosted-TOUGH damage-reduction curve (30/50/70%; the threatmap's `100/0.3 ≈ 333` EHP) is modeled on the enemy side only — our own TOUGH is priced unboosted (the 0019 boosted-TOUGH follow-up; conservative direction).
 
 ### 2(f) — D6: What it unblocks + the graceful-degradation contract
 
@@ -169,7 +169,7 @@ pub struct CombatBodySpec {
 - **Reuses the pipeline** — no new sizing math; the boost axis is a ladder folded exactly like TOUGH (bit-deterministic, tournament-tunable via `CompositionParams` — the reserved `boost_tier` knob, ADR 0031a §4.6).
 
 **Negative / costs.**
-- **One WFV bump** — the `CombatBodySpec.boost` field (D4). `#[serde(default)]` (T0) keeps old serialized bodies byte-compatible on read, but the write shape changes; per EP-5.1 reset-anytime this is one loud reset. It only gates an MMO deploy, not the host-side landing (EP-5.2, ADR 0031 D12).
+- **~~One WFV bump~~ — none.** The `CombatBodySpec.boost` field (D4) is additive with `#[serde(default)]` (T0), and under ADR 0047's tolerant stream that is reset-free (see D-WFV). The cost this ADR budgeted here did not materialize.
 - **A hard dependency on the supply side.** The boost axis is *inert without stock*. The producer (labs stocking compounds on a military demand signal) is ADR 0010 L1/L2 — this ADR is the consumer and does not build the reaction planner. Absent that supply, the layer runs *dark* (the code exists, T0 always wins because `BoostSupply` is empty) — which is exactly the safe way to land it (§7 P0/P1).
 - **New lifecycle state + tunables.** `AwaitBoost` adds a bounded pre-deploy hop; the boost cost weights (`w_mineral`, `BOOST_MINERAL_COST=30`, `BOOST_ENERGY_COST=20`) and the `BOOST_LADDER` join the `CompositionParams` sweep surface — the 0031b tuning re-opens (already flagged: the boost tier "reshapes every ratio", ADR 0031a §5(6)).
 - **Value concentration risk.** A boosted member that dies loses ~30 mineral × its boosted parts (ADR 0010 §Consequences). Bounded by the existing retreat thresholds + the recycle-not-renew end-of-life (ADR 0010 §5) — and the EV cost term prices this into the decision (a fragile boosted comp scores worse).
@@ -180,10 +180,10 @@ pub struct CombatBodySpec {
 
 ## 5. Invariants (carried from ADR 0031 §3, extended)
 
-- **Bit-determinism.** The boost axis is a Vec-ordered `BOOST_LADDER` folded with integer/ceil multiplies; the tie-break is total (max EV → lowest k → lowest tough → **lowest tier** → fewest members). No HashMap reaches the decision. The `emit_requirement`/`optimize_composition` run-twice fences (ADR 0031 §4) extend to cover the tier.
+- **Bit-determinism.** The boost axis is a Vec-ordered `BOOST_LADDER` folded with integer/ceil multiplies; the tie-break is total (max EV → **lowest tier** → lowest k → lowest tough → fewest members). No HashMap reaches the decision. The `emit_requirement`/`optimize_composition` run-twice fences (ADR 0031 §4) extend to cover the tier.
 - **T0 is the floor and the fallback, everywhere.** No layer may make a boost a precondition for fielding or defending (the degradation contract, D6). A grep for a boost check *gating* a spawn or a defense field returns empty (the ADR-0010 "boosts never gate defense" rule, made a combat-layer invariant).
 - **Capability/parts split preserved.** `RequiredForce` stays tier-agnostic (capability demand); the tier is applied only at the parts boundary (`parts_for_rate`/`assemble_force`/`capabilities`), keeping `RequiredForce` non-`Serialize` / WFV-neutral.
-- **One boost multiplier table.** The ×4 / ×3.3 constants are shared between the threatmap enemy model and `capabilities()`'s own model, exported from one place (EP-2.9) — a second, drifting boost table is a design smell.
+- **One boost multiplier table.** The output multipliers live in one place — `bodies::boosts` (`output_multiplier_for` per compound, `BoostTier::output_multiplier` per tier, `tier_compounds` per family) — read by the tactical seam for both sides and by the sizing ladder for ours (EP-2.9); a second, drifting boost table is a design smell. (The threatmap's flat ×4 and `100/0.3` TOUGH EHP are the strategic enemy channel's deliberate conservative over-estimate, not a second table of engine truth.)
 - **Availability is a sizing input, not a filter.** A tier is *chosen* against supply inside the search (clamped down), never fielded-then-checked; a boosted comp is never assembled that the fielding home can't supply (the "sized to a force we can't field" class stays impossible, ADR 0031's whole point).
 - **Boost application is the sole `boostCreep` site.** Exactly one place issues the intent (the `AwaitBoost`/boost-station step, D4); an out-of-lifecycle `boost_creep` is a smell (EP-2.7 one owner).
 
@@ -194,10 +194,10 @@ pub struct CombatBodySpec {
 - **D1 — Boost tier is an EV-search axis.** Add `BOOST_LADDER` to `optimize_composition` (sibling of `OVER_POWER_LADDER`/`TOUGH_LADDER`); each candidate is priced at its tier, `cost(C)` includes the boost mineral+energy, and the EV math decides whether to boost. Emergent gate, not a hardcoded threshold. Tie-break prefers the lowest (cheapest) tier at equal EV.
 - **D2 — Supply-clamped availability gate; degrades to T0.** A candidate's tier is clamped down to the highest fully-suppliable tier for the fielding home (`BoostSupply` from the now-populated `available_boosts`), reserved against concurrent requests; T0 is always present, so absence of stock is never a stall. Defense fields at T0 immediately and upgrades if stock exists (ADR 0010 §4 rule kept).
 - **D3 — One `BoostTier` threaded into the pricing seams.** `defender_heal_parts_for_dps` (generalize its existing `boosted: bool`), `parts_for_rate`, `capabilities`, `single_role_cap` all take a `BoostTier` and apply the engine multiplier. `RequiredForce` stays tier-agnostic. No new strength formula — `fighting_strength`/`win_probability` become boost-aware because `capabilities()` prices boosted parts.
-- **D4 — One persisted field + a bounded pre-deploy lifecycle state.** `CombatBodySpec.boost: BoostTier` (`#[serde(default)]` = T0); `required_boosts()` reads it and gets its first caller; `SquadCombatJob` gains a bounded `AwaitBoost` state that routes to the plan boost tile, applies boosts via ADR 0010's boost station, and falls through unboosted on deadline/stock-loss. The sole `boostCreep` site. BoostQueue keyed by `DemandId` (EP-1.7), not the inert `Entity` key.
-- **D5 — Enemy-boost symmetry.** Price our boosts with the SAME ×4/×3.3 model the threatmap applies to the enemy; the optimizer *responds* to `EnemyForce.boosted` by climbing the boost ladder. Enemy model unchanged (stays conservative flat-×4). Shared EHP constant (EP-2.9).
+- **D4 — One persisted field + a bounded pre-deploy lifecycle state.** `CombatBodySpec.boost: BoostTier` (`#[serde(default)]` = T0); `required_boosts()` reads it and gets its first caller; `SquadCombatJob` gains a bounded `AwaitBoost { tier }` state that walks to whichever home lab the `LabsMission` has loaded for it (as built — not the plan boost tile; the tile is a later routing refinement), applies boosts one compound per visit, and falls through unboosted on the age deadline (`AWAIT_BOOST_DEADLINE` = 300) / stock-loss. The sole `boostCreep` site. BoostQueue keyed by the **creep name** (the stable per-member identity that exists today; ADR 0011's minted `DemandId` supersedes it when the spawn orchestrator lands), never the inert `Entity` key.
+- **D5 — Enemy-boost symmetry.** Price our boosts from the same `bodies::boosts` table the tactical seam reads for the enemy (exact per-compound ×2/×3/×4 via `CombatBodyPart.boost_mult`; `BoostTier::output_multiplier` on the sizing ladder); the optimizer *responds* to `EnemyForce.boosted` by climbing the boost ladder. Strategic enemy model unchanged (stays conservative flat-×4). Own-side TOUGH reduction not yet modeled (0019).
 - **D6 — Unblocks T-COMP/T-TOWER-3/T-NPC-7/L3+, with the T0 degradation contract as the LIVE-safety spine.** Boost is always an upgrade path; unboosted is always the fallback.
-- **D-WFV — one `WORLD_FORMAT_VERSION` bump** (one loud reset) for the `CombatBodySpec.boost` write shape. Host landing is not gated on the bump (EP-5.2 / ADR 0031 D12); `#[serde(default)]` keeps reads of old bodies compatible.
+- **D-WFV — no `WORLD_FORMAT_VERSION` bump.** Originally "one loud reset for the `CombatBodySpec.boost` write shape"; **obviated by ADR [0047](0047-reset-tolerant-serialization.md)** (which post-dates this ADR): an additive `#[serde(default)]` field decodes every pre-field payload as T0 with no reset — the T-HEAL-3a `effective_hits` precedent. Host landing was never gated on a bump (EP-5.2 / ADR 0031 D12).
 
 ---
 
@@ -207,11 +207,11 @@ The stable seams hidden behind each step: the ADR-0031 composition pipeline (lad
 
 1. **P0 — Sizing kernel, boost-aware, dark (Breaking: None; WFV: none).** Thread `BoostTier` into the pricing seams (D3) + add `BOOST_LADDER` to `optimize_composition` (D1) with `BoostSupply` **hardwired empty** (T0 always wins). `RequiredForce` untouched. **Validate (host):** every existing calibration gate (`OracleCalibration`/`SizingWins`/`CreepClearWins`, ADR 0031 §4) is **byte-unchanged** (empty supply ⇒ T0 ⇒ identical fielding); a new kernel test asserts that *given synthetic T3 supply*, a towered bed the unboosted oracle `None`-defers becomes winnable at T3 (the T-TOWER-3 proof). Determinism fences extended to the tier. Deployable on its own — dark, zero behavior change.
 2. **P1 — Populate `available_boosts` + the supply clamp (Breaking: None; WFV: none).** Fill `EconomySnapshot.available_boosts` (`economy.rs:226`, the hollow field) from lab+storage+terminal stock (shared prerequisite with ADR 0010 L0), wire `BoostSupply` into the optimizer (D2). Now the boost axis *can* fire — but only for a home that already holds stock (the labs brew 10k of everything today, ADR 0010, so some T3 may already be on hand). **Validate:** a home with synthetic stock fields a boosted comp for a high-value towered target; a home with no stock is byte-identical to P0; the reservation prevents two squads double-booking one lab fill.
-3. **P2 — The persisted field + spawn attach (Breaking: Memory-format; the one WFV bump).** Add `CombatBodySpec.boost` (D4); `required_boosts()` reads it; attach the tier to the spawn callback. **Validate:** a boosted spec round-trips through serialize/deserialize; `#[serde(default)]` decodes an old (boost-less) body as T0; the acceptance test `oracle_sized_force_forms_and_kills_a_defended_core` (ADR 0031 §4) still passes at T0.
+3. **P2 — The persisted field + spawn attach (Breaking: None as built — `#[serde(default)]` under ADR 0047; the "one WFV bump" this phase planned is obviated).** Add `CombatBodySpec.boost` (D4); `required_boosts()` reads it; attach the tier to the spawn callback. **Validate:** a boosted spec round-trips through serialize/deserialize; `#[serde(default)]` decodes an old (boost-less) body as T0; the acceptance test `oracle_sized_force_forms_and_kills_a_defended_core` (ADR 0031 §4) still passes at T0.
 4. **P3 — The `AwaitBoost` lifecycle + `boostCreep` via the boost station (Breaking: Behavioral).** `SquadCombatJob` gains the bounded `AwaitBoost` state (D4); the boost station (ADR 0010 §4 fulfiller) loads compounds and the creep applies `boostCreep` at the plan boost tile; deadline fallthrough unboosted. This is where a boost *actually applies* live. **Validate (offline lifecycle harness, ADR 0028):** a boosted squad forms → routes to the boost tile → boosts → deploys → kills a towered core that the unboosted comp cannot; a stock-loss mid-`AwaitBoost` falls through to an unboosted deploy (no hang — the bounded-attempt proof, EP-4.5).
 5. **P4 — Tournament re-sweep (Breaking: None).** Re-run the 0031b `CompositionParams` sweep with the boost axis + cost weights (the sweep the boost tier "reshapes every ratio" for, ADR 0031a §5(6)); record the emergent boost-gate thresholds and compare to the grounded Overmind numbers (dmg>1500 / heal>1000). **Validate:** the sweep is Pareto-improving over unboosted on the towered/L3+ beds and neutral on the unboosted beds; seeds recorded in a 0041-companion results note if they change.
 
-**Breaking-change summary:** P0/P1 — **None** (dark, WFV-neutral). P2 — **Memory-format** (the one WFV bump, one loud reset, `#[serde(default)]` read-compatible). P3 — **Behavioral** (boosts actually apply). P4 — **None**. **No state-drop beyond the single WFV bump; the supply dependency (ADR 0010 L0/L1) is the real gate on P1+ having any effect.**
+**Breaking-change summary:** P0/P1 — **None** (dark, WFV-neutral). P2 — **None as built** (additive `#[serde(default)]` field, reset-free under ADR 0047; the ADR's original "Memory-format / one WFV bump" line is superseded). P3 — **Behavioral** (boosts actually apply, behind `features.military.boost_military`). P4 — **None**. **No state-drop anywhere; the supply dependency (ADR 0010 L0/L1) is the real gate on P1+ having any effect.**
 
 ---
 
@@ -266,3 +266,107 @@ decision differs from the recommendation, the "delta" column says why.
   above covers forms → routes to the labs → boosts → deploys; the two together are the §7 P3 proof.
   Not covered offline: the transfer-system haul latency into the lab (modelled as "stock ⇒ loaded"),
   the plan boost-tile geometry, and the one-lab-per-compound overflow beyond six families.
+
+### WS-CLOSE write-back (ws-5 boost pipeline + WS-VAL boost seam) — the layer as built
+
+Written back from the WS-5 / WS-VAL implementation docs on 2026-09-07 (docs/implementation/README.md rule 5) and verified
+against the code. Body sentences corrected in place the same day: §2(e)/§5/§6 D5 (the "same ×4/×3.3
+model … shared EHP constant" framing), §6 D4 (plan boost tile; `DemandId` key), §4/§6/§7 (the WFV bump).
+
+- **The own-side pricing seam (WS-VAL 2026-08-23 — the boost-blind fix, the parity keystone).** The
+  tactical kernels never priced *our* boosts: an EV-sized T3 squad read its own heal at ¼ value,
+  `assess_engage` called every towered fight unwinnable, and the squad kited forever (the stronghold-
+  gauntlet freeze — live and sim identically). The fix is ONE primitive on both sides of the seam:
+  `CombatBodyPart.boost_mult` (`screeps-combat-decision/src/lib.rs`; ctors `new` = ×1, `boosted`) and
+  `CombatCreepDto::effective_output(part, per_part)` = Σ working parts × `per_part × boost_mult`
+  (the engine's `calcBodyEffectiveness`). Every power consumer reads it: `heal_reaching`,
+  `threat_value`, `best_heal_target`, `assess_engage`'s creep dps, `kite_threats`. The compound→multiplier
+  map is `bodies::boosts::output_multiplier_for` — exact over the 18 military compounds (six families ×
+  T1 ×2 / T2 ×3 / T3 ×4; any other compound ×1). Live adapters: `jobs/squad_combat.rs::creep_to_dto`
+  stamps the multiplier from `BodyPart::boost()`; `military/squad.rs` `heal_power` is recomputed
+  **every tick** and boost-multiplied (it was computed once and latched — destroyed HEAL parts kept
+  counting for the creep's whole life; parity H4/M16); `squad_manager.rs` member views sum effective
+  parts. Sim adapter: `screeps-combat-agent::creep_dto` stamps the `SimBody` tier. Pins:
+  `effective_output_prices_boosts_and_skips_dead_parts`, `heal_reaching_reads_boosted_healers_at_real_strength`,
+  `output_multiplier_map_matches_engine_tiers` (decision), `creep_dto_stamps_boost_multipliers` (agent),
+  `t3_twin_decisively_beats_unboosted_twin` (eval, end-to-end).
+- **P0a — the tier axis, as built (`composition.rs`).** `bodies::BoostTier { T0, T1, T2, T3 }`
+  (`Ord`, `Default` = T0, serde) with `output_multiplier()` 1/2/3/4; `BOOST_LADDER` is the outermost
+  loop of `optimize_composition`, filtered to `<= params.boost_max_tier`. Per tier the WINNABILITY
+  assessment is re-emitted against a tier-scaled ceiling (`tier_budget`: `max_heal_per_tick` and
+  `max_dismantle_dps` × m into `emit_requirement`) — so a target the T0 ceiling calls unwinnable is
+  genuinely re-assessed at each suppliable tier (the T-TOWER-3 unlock); `boost_scaled` divides the
+  requirement's output + heal channels by m (ceil, floored at 1; TOUGH/CLAIM pass through); the
+  boost cost is priced over the REAL built body (`comp_total_parts` × `CompositionParams.boost_cost_e_per_part[m-2]`,
+  cold-start constants `[120, 200, 300]` e per part = O4 stage 3 — the market-fed `mineral_value_e`
+  resolver is still unbuilt; over-pricing is the safe direction); tie-break max EV → lowest tier →
+  lowest k → lowest TOUGH → fewest members. `CompositionParams.boost_max_tier` defaults to T0, which
+  is the DARK mode: byte-identical to the unboosted optimizer. `tank_effective_hp` is deliberately not
+  tier-scaled (own-side TOUGH reduction = the 0019 boosted-TOUGH item). Debug: `SZ_DEBUG=1` prints the
+  per-tier requirement + per-candidate `p_surv`/`p_kill`/EV.
+- **P0b re-scoped.** The optimizer-internal per-tier emit already delivers D3's winnability effect;
+  the remaining seam-signature churn (`boosted: bool` → tier on `defender_heal_parts_for_dps` and
+  friends) waits for a consumer, and TOUGH-reduction is the 0019 item. Nothing blocked P3 on it.
+- **P1 — supply, as built.** `EconomyAssessmentSystem` (`military/economy.rs`) populates the
+  previously-hollow `RoomEconomyData.available_boosts` per home from storage + terminal + every lab,
+  over `tier_compounds(T1..T3)` (the 18 compounds). The pure clamp `bodies::boosts::max_supplied_tier(stock, MIN_BOOST_STOCK)`
+  returns the highest tier whose ENTIRE six-family set has ≥ `MIN_BOOST_STOCK` (1 000 units ≈ one
+  ~33-part member) — fully-suppliable per family, T0 floor, never a stall. `operations/war.rs` derives
+  the offense clamp as the **max over homes** (per-home, not empire-pooled: scattered compounds cannot
+  boost one body uniformly) and threads it as `CompositionParams.boost_max_tier`; the caller-side
+  skip honors the boosted verdict (`doctrine.honor_verdict() && !plan.winnable() && plan.composition.is_none()`
+  — a fielded comp at a suppliable tier is not vetoed by the T0 assessment). Defense stays T0 (O5).
+  **Not built:** D2's reservation against concurrent requests — the physical fulfiller (one lab per
+  compound, per-creep readiness) is the only serialization today.
+- **P2 — the persisted tier.** `CombatBodySpec.boost: BoostTier` with `#[serde(default)]`; the
+  optimizer stamps the winning rung onto every sized slot's spec (`BodyType::Sized`) — a T0 win leaves
+  the comp byte-identical to pre-P2. `BodyType::required_boosts()` is real: per fielded family,
+  `30 × parts` of the tier compound, MOVE counted at the derived Plains-parity count the builder uses;
+  `SquadComposition::required_boosts()` aggregates. No spawn-side field: the job re-derives the tier from
+  its slot's spec (`create_spawn_callback(…, slot_boost_tier)` → `SquadCombatJob::new_with_squad_boosted`).
+- **P3 — the apply wire (producer → fulfiller → consumer), all behind `features.military.boost_military`.**
+  `BoostQueue` (`military/boostqueue.rs`) is ephemeral, keyed by creep name, with **owner-staged
+  clears** matching the tick order PreRun → RunMission (labs fulfil) → SquadManager (produces) →
+  RunJob (consumes): `clear_ready` at tick start in `game_loop`, `clear_requests` by the producer right
+  before re-filing. Producer: the `SquadManager` re-files, every tick, for each member whose slot tier
+  > T0 that is still in a home room, inside `AWAIT_BOOST_DEADLINE`, with unboosted parts, the
+  body-derived remaining set `bodies::boosts::remaining_for_parts(parts, tier)` at `BoostPriority::High`
+  (no serialized progress — a boosted part is done). Fulfiller: `LabsMission::service_boosts` assigns
+  one lab per distinct compound (labs sorted by id, compounds in priority-file order), files the
+  transfer-system loads (withdraw foreign contents; deposit `30/part` compound + `20/part` energy),
+  `mark_ready`s each request whose lab already holds that creep's full need, and pauses the reaction
+  FSM (`LabsState::wait(5)`) while requests pend — the ADR 0010 §2 "temporary re-role" of reaction labs
+  (a reacting lab may boost; there is no lab-cooldown check). More compounds than labs ⇒ the overflow
+  waits, bounded by the requester's deadline. Consumer: the `AwaitBoost { tier }` job state (appended
+  variant of the serde-plain state enum) releases immediately when the flag is off or the tier is T0,
+  departs once `remaining_for_parts` is empty, departs unboosted past the age deadline (300 ticks),
+  else walks to the ready lab and calls `boost_creep` (the sole site), one compound per visit;
+  with nothing ready it loiters clear of the spawns on the rally leash. Renew skips any creep with a
+  boosted part (ADR 0010 §5; `squad_manager.rs` renew filter). Offline proof: the ADR 0028 bed above.
+- **P4 — the sweep, as merged (WS-VAL Phase 4.5 item 6).** The §7 P4 line asked for a
+  `CompositionParams` re-sweep with emergent boost-gate thresholds compared to the Overmind numbers;
+  what was built instead grades the **tactical kernel profile** under boosts, because the corpus
+  showed the unboosted tuning did not generalize (default tactics ≈ best at T0 but lost to
+  `focus_ball` at T2 and to `ranged_duel_kite`/`anti_aoe_spread` at T3). Instruments
+  (`screeps-combat-eval/src/tournament.rs`, `#[ignore]`): `boosted_tier_retune` (regimes = T0/T2/T3
+  mirror baskets, maximin) and the ADOPTION instrument `joint_boosted_terrain_retune` — 3 boost tiers ×
+  3 terrain classes (synthetic / imported / generated) = 9 cells over `chokepoint_comp_basket` boosted
+  per tier, ranked by min-over-cells. Caveat recorded in the code: `comp_basket`/`boosted_comp_basket`
+  are synthetic-bed-only, so a tier-only run has empty terrain cells — the joint instrument builds
+  from the chokepoint basket. Result under the RULING-9 one-currency EV: the previous R19 winner
+  `a0-i3-d14-K3-s2` regressed (worst cell −852, mean +39, rank 16/57); no config is positive in all
+  nine cells (the literal maximin is the untuned default), so adoption used **maximin-with-a-noise-band**
+  and `SquadTacticParams::open_combat()` became `a2-i6-tight` (approach 2, incumbency 6, cohesion k 2,
+  discohesion 20, spacing 1; two noise-scale negative cells −26/−18 vs mean +652). The sizing-side
+  re-sweep (0031b seeds + emergent boost thresholds) remains open.
+- **Activation.** `features.military.boost_military` (`features.rs`, default `false`) is the single
+  switch for the sizing clamp, the producer and the consumer; effects are demand-driven (nothing
+  changes until war sizing picks a tier and labs fill the queue). Operational note carried from the
+  workstream (provenance only): the flag was flipped ON live on 2026-08-24 via the rest-api console
+  example (`screeps-rest-api/examples/console.rs`) — the live `Memory._features` tree is persisted and
+  shadows code defaults, so any features change must be applied there too — and no boosted engagement
+  had occurred by this write-back; the first one is the watch item.
+- **What remains of this ADR's design.** O4's trust-gated market `mineral_value_e` resolver (constants
+  govern); D2's supply reservation; the 0031b sizing re-sweep half of P4; own-side boosted TOUGH
+  (0019) and the seam-signature generalization (P0b); the plan boost-tile routing; and the supply
+  side itself — ADR 0010 L1/L2 (the labs still brew the autonomous flat 10k of every compound).

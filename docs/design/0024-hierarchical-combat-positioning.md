@@ -219,3 +219,18 @@ The positioning skeleton above is the core; these are its refinements.
 - `a145462` (agent) threat-weighted path cost (2026-06-24)
 - `6c4e0ba` (decision) target-flood strategic goal + local tactical step (2026-06-24)
 - `659dad6` (super) / `cdcf427` (decision) live threat-cost matrix recipe (2026-06-24)
+
+## Design deltas (2026-09-07 — WS-CLOSE write-back)
+
+- **FU#4 preset half (recorded above) — provenance and scope.** `s4_weights_retune`
+  (`screeps-combat-eval/src/tournament.rs`, eval `bbc1184`) perturbs the shipped kite + engage
+  `KiteScoreParams` one axis at a time (kite: `w_taken` 2.0, `w_future` 1.0, coh .3, prox .5, edge .4;
+  engage: `w_taken` .5, `w_prox` 1.5, `w_dmg` 2.0, `w_close` .35, edge .1) plus style combos over
+  `chokepoint_comp_basket`, ranked by per-regime maximin vs the shipped default, with the KERNEL HELD at
+  `SquadTacticParams::default()`. The flat-surface verdict is therefore independent of the `open_combat`
+  kernel profile, which moved again after the sweep (ADR 0026a: a0-i3-d14-K3-s2 → a2-i6-tight) — no re-run
+  is owed. The plumbing constants stay measure-first seeds.
+- **The unstitched cross-room seam is still the open item** (Open Questions above stand): WS-CLOSE decision
+  D4 closes ADR 0023's "cross-room Flee" on the single-creep bed + the squad rout bed and leaves the
+  seam-stitched threat/approach field as a kernel design item (ADR 0025's open item). ADR 0034 F7 (the
+  rout leg ends at the seam) is the same boundary seen from the retreat side.
