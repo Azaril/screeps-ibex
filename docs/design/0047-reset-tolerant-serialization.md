@@ -207,6 +207,24 @@ segment codecs). Watch items: segment chars once all plans rebuild; VM-reset ins
 the larger binary. A future lever if the binary matters: migrate the auxiliary segment codecs to
 msgpack too and drop bincode entirely.
 
+## Design deltas (2026-09-07 — F11: a truncated chunk must never reset the world)
+
+- **Found (WS-CLOSE 0004 governor-calibration run on the private server,
+  `runs/pressure-critical-hover-3d0e998-20260907-200026`).** With the bucket pinned near 0 the engine
+  killed three ticks mid-execution; one of them was mid-segment-write, so the next boot read a
+  truncated chunk and logged `Failed deserialization: segment decode failed, resetting world state:
+  corrupt gzip stream does not have a matching checksum` — the bot RESET THE WORLD (missions and plans
+  lost), which is exactly the recovery cost this ADR exists to stop paying. The stream writes the new
+  chunk set in place, so a partial write is indistinguishable from a good one until decode.
+- **Design item (second batch, not built): write-then-swap.** Write the new chunk set to the ALTERNATE
+  segment slots (or under a version tag) inside the 10-segment ledger, checksum it, and only then flip
+  the active pointer; a failed checksum on boot falls back to the LAST GOOD set instead of resetting.
+  It sits with the segment-capacity watch: the msgpack stream measured **4 of 4 chunks, 169 KB of a
+  205 KB ceiling** on 2026-09-07 (the "12–14%" projection above was wrong by ~6× — it grows with every
+  claimed room and plan rebuild, and past the ceiling the world stops persisting each tick), and the
+  alternate-slot form needs a second chunk set's worth of slots — so it is designed together with the
+  chunk-budget widening, not before it.
+
 ## Landed
 
 - foreman `5c89f30` — Plan shrink (road_network deleted, build_order on-demand) (2026-08-23)

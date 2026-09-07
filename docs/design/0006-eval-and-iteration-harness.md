@@ -236,7 +236,8 @@ This is the verification substrate every later increment validates against. **Pa
   controller carrying that marker with the claim's shape, restoring the row it saved, and
   refuses any other owned bed room (an earlier version forced any controller held by a bed
   owner id to neutral — the primary bot's real colonies qualified).
-- **Q1 is closed** (recorded in `docs/implementation/ws-closeout-2026-09.md`, 2026-09-07): the
+- **Q1 is closed** (recorded in
+  [`../reviews/ws-close-evidence-2026-09-07.md`](../reviews/ws-close-evidence-2026-09-07.md), 2026-09-07): the
   engine does tick `storage.db['rooms.objects']`-inserted creeps (persisted, in `Game.creeps`,
   moved by the runtime). The spawn-through-the-bot fallback above is history, not a live option.
 - **Placeholder provenance stamp.** `parity synth` stamps the engine submodule's HEAD at synth

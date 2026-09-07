@@ -67,8 +67,13 @@ pub struct VisualizeFeatures {
 }
 
 impl Default for VisualizeFeatures {
+    /// OFF by default (F13, 2026-09-07): with visuals on, `apply_visuals` cost the live MMO bot
+    /// ~75 CPU per tick (max 126) on a 140 limit — more than movement + jobs + missions
+    /// together — and drained the bucket to Critical. Room visuals are a debugging aid; turn
+    /// them on deliberately (`Memory._features.visualize.on = true`) for a look, never as the
+    /// resting state.
     fn default() -> Self {
-        Self { on: true }
+        Self { on: false }
     }
 }
 

@@ -37,7 +37,7 @@ This doc tracks **status and open work only**. It must stay small enough to read
    or §3, or give it its own doc and link it.
 4. **§1 holds exactly one workstream.** That is a policy, not an observation. Finishing beats
    starting; if §1 is full, §3 waits.
-5. **Closing anything appends one line to §9** and deletes the entry. §9 is the only place that
+5. **Closing anything appends one line to §10** and deletes the entry. §10 is the only place that
    grows without bound, and it is one line per close.
 6. **Bulk documentation drift is a chore, not work.** See CHORE-1 — do not create one tracking entry
    per stale header.
@@ -52,241 +52,46 @@ This doc tracks **status and open work only**. It must stay small enough to read
 
 ## 1. NOW — the single active workstream
 
-### NOW: WS-CLOSE — the in-flight tie-off (RULING-10, operator 2026-09-07)
-→ [`../implementation/ws-closeout-2026-09.md`](../implementation/ws-closeout-2026-09.md). Goal: a
-CLEAN STOPPING POINT — every open workstream closed on evidence, every impl doc deleted, all found
-work re-homed — before any new ADR build (0048 stays a parked Draft). Lanes, in landing order:
-**(a)** parity M17/M18 tower/kernel unification (WORK/CLAIM in `threat_value`, gates re-run) →
-**(b)** harness lane code: H5 sim-vs-server parity oracle (0006), 0028 lifecycle closeout beds,
-0023/0023a border scenarios + cross-room Flee + MultiRoom generator, M20–M23 residue → **(c)** ONE
-Docker private-server refresh to the batched build, then the provocation pass (offense-soak +
-seeded boost lab: give-up clock, S5-CAP surge, rampart anchoring, predictive safe-mode, exit
-discipline, R19 profile, BoostQueue→labs→AwaitBoost), 0036 live-raze, 0004 governor calibration,
-H5 golden-vector capture → **(d)** close on that evidence: ws-2 / wvc-1 / wvc-2 / ws-4 / ws-5 /
-ws-val docs DELETE, facts re-homed, §5/§6 collapse, MMO hot swap of the batch.
+**NONE — the clean stopping point RULING-10 asked for is reached (2026-09-07).** WS-CLOSE closed on Docker + MMO evidence (`7dde003` → `3d0e998` → `8c3cece`; the durable record is [`../reviews/ws-close-evidence-2026-09-07.md`](../reviews/ws-close-evidence-2026-09-07.md)); every implementation doc is deleted with its facts in the ADRs' dated `Design deltas (2026-09-07 …)` sections, and `docs/implementation/` holds only its README. What comes next is a **choice, not a commitment** — pick one and open its impl doc:
 
-### Prior: Phase 4.5 — the WS-VAL defect program — COMPLETE 2026-08-24 (items 1-7 + 8a + RULING-9 currency + boost flip; item 8b = ADR 0048 Draft, parked)
-See §3 Phase 4.5 for the ledger + acceptance bars. Prior arc below (the corpus that built the instruments).
+- **(a) The second batch** — RULING-11's deferred half plus the found work that rides with it: amplifiers **D/E/F** of the [collapse diagnosis](../reviews/mmo-collapse-diagnosis-2026-09-07.md) — defense fan-out + forming give-up bounds (0027/0035, `war.rs`; includes F8 and the garrison stand-down finding: an own-room Secure objective outlives its threat, the defense squad never stands down), tower peace refill + SURVIVAL-bid dedupe (0044 sink pricing), reserver gating on live miners (0018, `reserve.rs`) — plus **F11** (0047 write-then-swap: a tick killed mid-serialize resets the world).
+- **(b) ADR 0048 review** — the multi-squad assault doctrine Draft; three operator questions in its §5; its sizing engine (the item-8a capped optimizer) is already in the tree, wired off.
+- **(c) The queued §6 items** — F2 kernel duplicate-goal park (0025); the rally leg + live rout half F7/F9 (0034/0027); the 0036 reaches-0 re-observation; the segment-capacity fix lane (below); Phase 5's 0041/0010 remainder; Phase 6 economy.
 
-### Prior: WS-VAL — combat validation corpus (operator directive 2026-08-23) — corpus LANDED
-→ [`../implementation/ws-val-combat-validation-corpus.md`](../implementation/ws-val-combat-validation-corpus.md) · parity report [`../reviews/live-sim-parity-audit-2026-08-23.md`](../reviews/live-sim-parity-audit-2026-08-23.md)
-
-**Landed 2026-08-23**: the engine-exact stronghold corpus (bunker1–5, real boosted defender
-populations, chokepoint + multi-room layouts, focusClosest/focusMax tower AI), the border gauntlet
-(crossing under camper fire, grades 1–4), the boosted self-play lane (tier-mirror basket +
-T3-vs-T0 twin pin), the **boost-blind seam fix on BOTH sides** (live DTOs/member views + sim
-adapters now price boosts via one shared `effective_output`; live heal_power un-latched — parity
-H4/H7/M15/M16/M19), and the ultracode live↔sim parity audit (43 confirmed findings; backlog ranked
-in the report, H0 neutral-wall intent drop on top). **Honest baseline**: T0 defers ALL strongholds
-(quantified heal ceiling — why live only ever killed towerless cores); L1@T3 fields but loses
-tactically (members picked off strung-out — heal-adjacency collapse); border g1 (2 unboosted
-campers!) stalls; boosted meta reshuffles (default tactics lose at T2/T3). **Follow-up queue (in
-the ws doc)**: cohesion under focused fire → border crossing → lone-survivor policy → parity H0 →
-boosted re-tune. Acceptance bar for the tactical work: `stronghold_gauntlet` L1@T3 → Killed.
-
-### Prior arc: the military program (Phases 3+4) — ALL SHIPPED 2026-08-23; live-watch open
-→ [`../implementation/ws-wvc1-military-completion.md`](../implementation/ws-wvc1-military-completion.md) · [`../implementation/ws-wvc2-defensive-features.md`](../implementation/ws-wvc2-defensive-features.md) · [`../implementation/ws-4-r19-retune.md`](../implementation/ws-4-r19-retune.md)
-
-**The operator's "peak effectiveness" program (reorder 2026-08-23) completed in one arc**: WvC-1
-(correctness + wiring, `e08162810921`), WvC-2 (defensive features, `1fb233b30416`), and the WS-4
-R19 re-tune (`9913ef980109`) all code-complete, tuned, and live as hot swaps; fence green ×5.
-Live validated post-ship (CPU 34/140, bucket full, 0 panics; 8th AND 9th rooms claimed mid-arc).
-**Live-watch is what remains**: the next real fight exercises the give-up clock, urgent-defender
-downsizing, S5-CAP surge, rampart cover-anchoring, predictive safe mode, exit discipline, and the
-re-tuned open-combat profile. When it closes, the three ws docs delete. **Phase 5 (boost): the ENTIRE CONSUMER SIDE (P0–P3) landed DARK 2026-08-23 + shipped** (hot swap
-`00cf29b552ff`) →
-[`../implementation/ws-5-boost-pipeline.md`](../implementation/ws-5-boost-pipeline.md): the boost
-EV axis (T-TOWER-3 proof green), supply clamp + populated `available_boosts`, persisted
-`CombatBodySpec.boost` (reset-free — 0047 obviates the planned WFV bump), and the full apply wire
-(BoostQueue → LabsMission fulfiller → `AwaitBoost` job, renew-skips-boosted). ALL inert behind
-`features.military.boost_military` — **FLIPPED ON (live, watched) 2026-08-24**; the P4 re-tune
-landed as Phase 4.5 item 6. Remaining: the watched first boosted engagement (shakedown), O4
-market-fed valuation (constants suffice for first light), then ADR 0010 L1/L2 demand-driven supply.
-
-~~WATCH: movement CPU~~ **CLOSED on evidence 2026-09-07**: two weeks after the last swap, 135 s of
-live tail shows ZERO over-budget movement lines (the post-swap 80–143 band was cache warm-up; the
-threat overlay is exonerated). **WATCH (operator-ruled watch-only, RULING-10): SEGMENT CAPACITY —
-measured 2026-09-07 the msgpack world stream is at 4 of 4 chunks, 169 KB of a 205 KB ceiling
-(~82%)**; the 0047 projection (12–14%) was wrong by ~6×; it grows with every claimed room and plan
-rebuild, and past the ceiling the world stops persisting each tick. Re-measure on every tail;
-the fix lane (profile the dominant component — plans suspected — shrink it AND widen the chunk
-budget inside the 10-segment ledger) is queued, not scheduled. Others:
-wasm 49.0%; foreman `InvalidTarget` transients; post-hot-swap one-tick `INTEGRITY` squad-ref
-scrubs (benign backstop, attribute if it recurs outside deploys). **WS-VAL swap (wasm
-`039c587dc1c6`, 2026-08-23) tail-verified clean** (0 panics/deser, war pricing through the new
-boost-aware path). NEW WATCH: live threat assessment now prices BOOSTED hostiles at real strength
-(×2–×4) — defense sizing may correctly grow vs boosted invaders, and offense may correctly defer
-fights it previously under-priced; attribute any "why did sizing change" observation here first.
-NEW WATCH (2026-08-24): boost_military is ON (live) — first sized fight should file BoostQueue
-requests, run labs, spawn AwaitBoost creeps; attribute lab/spawn/sizing observations here first.
+**WATCH (live; attribute observations here first):**
+- **Segment capacity (RULING-10 (iii): watch-only).** Measured 2026-09-07: the msgpack world stream is at **4 of 4 chunks, 169 KB of a 205 KB ceiling (~82%)**; 163 KB at the post-swap tail. The 0047 projection (12–14%) was wrong by ~6×; it grows with every claimed room and plan rebuild, and past the ceiling the world stops persisting each tick (and F11 turns a truncated write into a world reset). Re-measure on every tail. Fix lane (queued, not scheduled): profile the dominant component (plans suspected), shrink it AND widen the chunk budget inside the 10-segment ledger — designed together with F11 (0047 delta).
+- **Live flips the next `reset.features` one-shot WIPES — re-apply after any one-shot:** `pathing.pathfinding_cpu_budget` 50 (default 20) and `remote_mine.reserve = false` (RULING-11, tick 5486228). `bucket_burst_threshold` was flipped 9500→2000 as the F12 mitigation (tick 5492700) and **reverted to 9500** after it drained the bucket; F12's code fix (finite normal-mode headroom) ships in `8c3cece` (deploy state: §4).
+- **F13 · room visuals cost ~75 CPU/tick (max 126) on the 140 limit — `apply_visuals` was the single largest system** (per-system timing sample 2026-09-07 evening, 28 ticks): `visualize.on` + `room.visualize.on` flipped OFF live at tick 5493181 (cpu 140→68, bucket 1489→5606 in ~90 ticks); the compiled default of `VisualizeFeatures` is now `on: false` (this commit), so a future `reset.features` no longer re-enables it. Turn visuals on deliberately, never as the resting state. **F12 verified live** after `d38133ffad78`: normal mode (bucket < 9500) now paths (`move_failed_budget` 0, `ops_used` 38k/50k, creeps 96→112).
+- **First boosted live engagement.** `boost_military` ON since 2026-08-24; no fight on either server has yet needed >T0 (the Docker world's fights are won at T0 or are L5 strongholds the bot correctly declines), so BoostQueue → labs → AwaitBoost is validated only in the offline 0028 boosted bed. Attribute lab/spawn/sizing changes here first.
+- **F3 straggler**: the bloc gate releases with one traveller ~6 tiles back (crosses ~11 ticks late) — grade on a live crossing before touching the gather constants (0034 delta).
+- **Shipped-but-unexercised defensive behaviors**: T-DEF-1 cover-anchoring, T-DEF-5 predictive safe-mode arm, T-POS-5 exit discipline, FU2 give-up on a COMMITTED fight — RED-pinned + sim-validated; the Docker provocation was too short to exercise them (raiders dead within 30 s; the AttackFlag route could not be armed remotely). The next sustained owned-room attack is the live grade.
+- Others: wasm ~49% of the code limit; foreman `InvalidTarget` transients; post-hot-swap one-tick `INTEGRITY` squad-ref scrubs (benign backstop — attribute only if it recurs outside a deploy); boosted hostiles are priced at real strength (×2–×4), so defense sizing may grow vs boosted invaders and offense may defer fights it previously under-priced. ~~Movement CPU~~ CLOSED 2026-09-07 (zero over-budget lines two weeks post-swap; the post-swap 80–143 band was cache warm-up).
 
 ---
 
 ## 2. BLOCKED
 
-- ~~**B-1 · `com.docker.service` Stopped/Manual**~~ **RESOLVED 2026-08-24** (operator updated +
-  relaunched Docker; `docker ps` responds). The private-server/harness lane is AVAILABLE again:
-  H5 parity oracle, P2.M2-LIVE, M4 exit criteria, 0036 live-raze, 0028 closeout (all →HARNESS in
-  §6) can be scheduled. RULING-8's deploy-to-live posture stands regardless.
+- Nothing. ~~B-1 · `com.docker.service` Stopped/Manual~~ RESOLVED 2026-08-24; the private-server/harness lane ran to completion under WS-CLOSE.
 
 ---
 
 ## 3. NEXT — the completion roadmap (decided 2026-08-22)
 
-Goal: **finish what is started before starting anything new.** Ordered so each phase closes the
-maximum number of open ADR tails; Phase 2 is a *decision* pass, not a build pass. One workstream
-active at a time (§1).
+Goal: **finish what is started before starting anything new.** Phases 0–4.5 and WS-CLOSE are done; the prose that used to live here is in the ADR delta sections and two review docs. One workstream active at a time (§1 — currently none).
 
-**Phase 0 — close WS-1** (above). Observe live, judge C1–C5, L2 last. Ride-alongs while in the
-deploy loop: ~~UNOWNED-4~~ **retuned 1→2 + live-reconciled 2026-08-23** (UNOWNED-5/6 also closed
-— features.rs doc fixed, `allow_replan` deleted). *Closes: 0046→Live, 0038, 0017's deploy residue, 0021 re-head, the
-expansion program; collects the 0018 "has an SK farm ever run" evidence for free.*
+- **Phase 0 — WS-1 (WFV 28 live, C1–C5)** — CLOSED 2026-08-23 (§10).
+- **Phase 1 — WS-2 · Combat review Tier −1 Wave B** — shipped 2026-08-23 (`0d9524f2668f`), closed on Docker evidence 2026-09-07. Detail: ADR 0008a "Safe mode as built" (D2/D3), ADR 0027 delta (D28), ADR 0037 delta (T1/T2 retained), rover + 0008a (D9/D10); the [2026-07-09 review](../reviews/combat-systems-review-2026-07-09.md) carries the closed Tier −1 list.
+- **Phase 2 — the triage pass** — DONE 2026-08-23 (verdicts `f3c822b`, `29072c3`).
+- **Phase 2.5 — WS-6 · ADR 0047** — SHIPPED 2026-08-23 (WFV 29, the LAST format-transition reset). Capacity watch + F11 in §1/§6.
+- **Phase 3 — WvC-1 / WvC-2 military completion waves** — shipped 2026-08-23 (`e08162810921`, `1fb233b30416`), closed 2026-09-07. Detail: ADR 0008a (T-HEAL-3a, readiness tranche, T-POS-5 / T-DEF-1 / T-DEF-5), 0035 delta (FU2 = `RetreatClock`), 0026 delta (L8), 0034 delta (D6c), 0028 delta (K3/K4 → `claim_pacing`; S5-CAP), 0037 delta (T3 emission closed by ruling).
+- **Phase 4 — WS-4 · R19 chokepoint re-tune** — DONE 2026-08-23 (`9913ef980109`), closed 2026-09-07; its winner was superseded by Phase 4.5 item 6. Detail: ADR 0026 delta + 0026a adoption table (the `open_combat` profile history), 0031 delta + 0031b §5 (w_energy=1.0 re-sweep), 0019/0024 deltas (`s4_weights_retune`), 0033 (corpus-wide fence).
+- **Phase 4.5 — WS-VAL defect program** — COMPLETE 2026-08-24 (items 1–7 + 8a + RULING-9 + the watched boost flip), closed 2026-09-07. Detail: ADR 0025 `Design deltas (2026-09-07)` A–G (RULING-9 currency, cohesion, border crossing, drain rework, capped optimizer, `threat_value` WORK/CLAIM, open items); 0034 / 0027 / 0035 / 0031 / 0024 / 0041 deltas; the corpus in ADR 0023a "WS-VAL corpus write-back" + [`screeps-combat-eval/README.md`](../../screeps-combat-eval/README.md) (gates, dashboards, debug env gates); the [parity audit](../reviews/live-sim-parity-audit-2026-08-23.md) (43 findings; the ranked backlog is closed except M14 → 0048 D3). **Item 8b = ADR 0048 Draft, awaiting operator review** (§1 (b)).
+- **WS-CLOSE (RULING-10) + RULING-11 roots** — CLOSED 2026-09-07 → [`ws-close-evidence-2026-09-07.md`](../reviews/ws-close-evidence-2026-09-07.md) (program, D1–D8, F1–F12, evidence table) and [`mmo-collapse-diagnosis-2026-09-07.md`](../reviews/mmo-collapse-diagnosis-2026-09-07.md) (roots, amplifiers, ranked fixes).
+- **Phase 5 — Boost pipeline (ADR 0010 L0 → 0041)** — consumer side P0–P3 shipped dark 2026-08-23, activated 2026-08-24 (ADR 0041 "WS-CLOSE write-back"; ADR 0010 delta). Remaining in §6 (0041: O4 resolver, D2 reservation, the 0031b sizing re-sweep, boost-tile routing; 0010: L1–L4). *Closes: 0010, 0041; unblocks 0019 boosted-TOUGH, 0020-TOUGH, 0008a Tier 3, 0008 S2.*
+- **Phase 6 — economy completion.** The 0043 band→EV conversions (A2/A4/A7/A9/A10, A11, A12, C1–C7), 0042 `opportunity_floor` + R1–R4, 0044/0044a P3 all-sinks activation, 0007 item 4, 0040 §D8 reserve retirement. Mechanical batch work against a shipped market — the root-B income ladder (0040/0043 deltas) is the new baseline arm. *Closes: 0007, 0040, 0042, 0043, 0044, 0044a.*
+- **Phase 7 — remaining designs.** WS-5 (0045 power creeps), 0020 S5–S7 (ratified; eligible now that Phase 4 is done), plus whichever of 0011/0012/0013/0014/0015/0016 the triage keeps (0013's spending half is already delegated to 0045; 0014 may reduce to the W4 `WarDecl` hook owned by 0008). New builds, so last by policy.
 
-**Phase 1 — WS-2 · Combat review Tier −1 Wave B** →
-[`../implementation/ws-2-combat-wave-b.md`](../implementation/ws-2-combat-wave-b.md).
-**CODE-COMPLETE 2026-08-23**: D2/D3 `8fa0c60`, D4/D5/D6 `be5ce24`, D28 `b26eba4`, D9/D10
-`1a85a57` + rover `850a06b`, T1/T2 ruled retained-by-design. 15 RED-verified pins, no WFV;
-ADR 0027 amended. **SHIPPED to live 2026-08-23** (hot swap `0d9524f2668f`, world persisted — missions carried through, 0 deser errors). Live-watch, then the WS-2 doc deletes.
-*Closes: 0037's decision item and the 2026-07-09 review's Tier −1 as a live work list.*
-
-**Phase 2 — the triage pass — DONE 2026-08-23** (verdicts in git: `f3c822b`, `29072c3`, the sweep). Original brief: **decide, don't build** (one session; create its impl doc — the
-verdicts must land as ADR amendments via `Design deltas`). Every §6/§8 item gets one of three
-verdicts: **schedule** (into Phases 3–6), **amend out** (shrink the ADR's end state — candidates:
-0030 `EngagementTempo` → Withdraw/fold into 0031; 0020 S5/S6/S7 keep-or-cut; 0026a's six deferred
-modes; 0039 P2–P4; 0025a residual → close as documented-mitigated), or **do now** (the §8
-wire-or-delete one-liners, then **UNOWNED-3: remove `#![allow(dead_code)]`** so the compiler
-enforces the register). *Exit criterion: every remaining §6 line is inside a scheduled phase.
-Plausibly closes 6–10 ADRs by amendment.*
-
-**Phase 2.5 — WS-6 · ADR 0047 — SHIPPED 2026-08-23** (msgpack world stream + Plan shrink, WFV 29 live; the LAST format-transition reset). WATCH: segment chars once plans rebuild (projected 12–14% of budget); wasm binary 48.5% of code limit.
-
-**Phase 3 — the military completion waves (WvC-1/WvC-2, operator-prioritized 2026-08-23).** WvC-1 (correctness + wiring): T-HEAL-3a winnability inputs, the damage.rs readiness-tranche wiring, S5-CAP governor-dynamic squad cap, 0035 FU2 never-engages give-up, 0026 L8 observed-bodies coordination, 0034 rally-bias live-wire, 0028 K3/K4 wiring. WvC-2 (defensive features): T-DEF-1 rampart-anchored defenders, T-DEF-5 predictive safe-mode arm, T-POS-5 exit-tile cost, 0037 T3 candidate emission. Batched + shipped like Wave B (no WFV — and under 0047, even shape changes are cheap now).
-
-**Phase 4 — WS-4 · R19 chokepoint re-tune — DONE 2026-08-23** (same-day as Phase 3): chokepoint basket + maximin tournament built; `open_combat` re-tuned a1-i6-tight-s2 → a0-i3-d14-K3-s2 (the only cross-regime-positive config; the old profile measured NEGATIVE vs untuned default — R19 quantified) + SHIPPED (`9913ef980109`); 0031a/b re-swept at w_energy=1.0 (defaults confirmed, 0031b §5); 0019 S4-TUNE + 0024 FU#4-presets + 0033 kite-retune closed defaults-confirmed via `s4_weights_retune` (flat surface — the EV kernel owns engaged positioning); 0033 corpus-wide fence promoted (spread==0 over 21, H 0.9625). Re-tagged →P6: 0026 L6c (consumer-gated per its own rule), 0032 value_e (its ADR says "later"; no discriminating bed).
-
-**Phase 4.5 — WS-VAL defect program (ACTIVE — operator 2026-08-23: "we'll work through the
-defects found from the broad review afterwards").** The instruments exist and are checked in; each
-item has an acceptance bar. Ordered: **(1) cohesion under focused fire — ✅ ACHIEVED 2026-08-24** (decision `be725c9`, deployed): the EV kernel now prices REAL heal delivery —
-deliverable-heal advance gating (no squad-total optimism, no catch-up slack), a risk-currency
-floor (g_us collapsed to ~0 in structure sieges — members priced their HP at nothing) with a ×4
-uncovered-net steepener, lockstep healer-tile advertising, and evidence-gated URGENT/BACKLOG heal
-triage (full-HP healers were self-pre-healing against field-stamped threat while the actually-
-focused member died in a part-loss spiral). **(2) border crossing under fire — ✅ ACHIEVED
-2026-08-24** (decision `b0b7ea0` + agent `1fbff1b` + eval `8dab84d`, from the operator's live
-replay observation "one creep enters and everything outside the room stalls"): bloc
-border-crossing gate (gather at the exit band, cross together), full-roster member views (parity
-H5 — the in-room-only scoping was BOTH a live divergence and the crossing livelock root),
-fight-room kernel anchoring (`plan_squad_ev` room param — the centroid-room V-1 aliasing sent a
-mid-crossing squad's goals into the staging room), room-gated mover anchor, exit-edge tile pricing
-(edge tiles are transitional, never holdable — the doorway jam), room-local tower assessment (the
-150-floor made cross-room towers phantom threats), rout-to-rally, Retreating state decay. Also
-flushed out a LATENT fixture bug (twin_room_siege built its "target-room" core in the staging
-room). **Result: EVERY L1 rung @T3 Killed** — open 172 / choke 273 / choke-multi 590 (the full
-cross-border stronghold assault end-to-end) — **and border g1@T0 74 / g1@T3 49 / g2@T3 50, all
-with the bloc crossing together** (pinned: `stronghold_floor_t0_defers_t3_kills_every_l1_rung`).
-Remaining ladder: border g3/g4 (T2/T3 camper packs — sizing defers; capability item 8 territory);
-**(3) lone-survivor policy** — largely superseded by rout-to-rally, keep the bar (no `Timeout`
-with a lone surviving member) as a watch; **(4) parity H0 — ✅ FIXED 2026-08-24**
-(`is_combat_targetable`, squad_combat.rs): the execution-side structure list now includes neutral
-constructed walls with hits in both arms, matching the decision layer — no native pin possible
-(JS types); verify on the next live neutral-wall breach. H5/M0 also closed by the item-2 batch
-(sim full-roster views + shared-kernel room fixes). Original H0 text: live drops
-Attack/Dismantle vs NEUTRAL constructed walls (`get_hostile_structures` filter; sim executes them);
-**(5) threat/traversal unification — SIM SIDE ✅ COMPLETE 2026-08-24** (decision
-`acf3600`+`71c6e0a`, agent `bed5f0e`+`4e68de4`, eval `1736ea6`): the sim traversal field now IS
-the shared `build_room_threat_field` (cover-aware, hostile-energized-tower-gated,
-unboosted-stamped — H1/H2/M3/M8) and own ramparts are walkable (M2). Unblocked by the DRAIN
-REWORK the substitutions forced: drain-aware placement (the harness placed the squad at ~r11
-INSIDE the falloff — the focused tank died in ~3 ticks every run, every variant, and the canary's
-"Killed" rode whichever remnant survived; a corrected earlier note blamed the form phase — it was
-placement), DELIVERABLE standoff sizing (total-heal optimism picked r15; the survivable band is
-r19), distinct rear-ring support slots, URGENT_HEAL_MULT 8→3 (flat heal premium vs
-residual-diluted attack value let survivors PERCH — asymmetry queued), and the approach-aware
-PLATEAU TIE-BREAK (equal-cost bands drift objective-blind under lower-x/y; ties now prefer
-smaller approach distance — the last blocker). COMPLETE 2026-08-24 (super `1abcc8f`, rover `fae493b`): the live mover now prices threat —
-squad-manager-published per-tick `RoomThreatCosts` overlaid under the structure layer's hard
-blockers via `ThreatOverlayCostSource` (H3/M13; executed paths — approach/rejoin/retreat/civilian
-traffic through war rooms — route around kill-zones like every sim-validated trajectory), and the
-decide room-callback honors the requested room (M4/M6). Other queued finds:
-goal-convergence churn (exact-claim tried/reverted — needs the EXP register in the loop);
-~~heal-vs-offense EV asymmetry~~ → became the RULING-9 redesign, below. Instruments:
-`SQ_DEBUG`/`SQ_DEBUG2`/`SQ_DEBUG3`/`SQ_DEBUG4` env-gated traces;
-**(RULING-9 currency redesign — ✅ ACHIEVED 2026-08-24** (decision `f8b97a6`, agent `34152cd`,
-eval `04c7414`): ONE progress-diluted currency across all three EV legs. Heal value_per_hp =
-`g_us × member_output / horizon_hits` (TRIAGE price, swells near death; wounded-evidence includes
-hostiles inside weapon band); self-RISK = `net × my own value_per_hp` at the **MARGINAL** price
-`g_us.max(unit) × my_out / max(tile_raw, hits/H)` — the triage form diverges as a risk price
-(healthy ≈ risk-blind, six of eight died in the choke kill zone; the doomed remnant priced its hp
-infinite and parked to timeout), marginal is bounded both ways. Flat `NET_RISK_MULT` deleted
-(out-massed every diluted attack value → universal cowardice, T3 refused a 4:1 trade). Batch also
-flushed two latent defects the currency exposed: the **kite dead-zone** (kite-plan-None suppressed
-the EV kernel → stable non-fighting equilibrium at the melee-band edge; now falls through, except
-Retreating) and the **focus stall attractor** (our_dps=0 comps focusing unkillable creeps over a
-live structure objective). Heal incumbency dead-band (1×unit) stops value_per_hp breathing from
-re-deciding positions (designed#2 29.5%→5%). Gates: floor pin all-rungs, t3_twin (repinned vs
-HOLDING defender — the mirror fleer is honestly uncatchable), oscillation, drain, assembler, EXP;
-1537 workspace + fence green. Generated-bed fairness bound 2000→3000 (mirror fights now TRADE —
-order-bias compounds over real casualties; sign still seed-varying).**)
-**(6) boosted kernel re-tune — ✅ ACHIEVED 2026-08-24** (decision `173cd5f`, eval `8997234`;
-merges ADR 0041 P4): `open_combat` re-adopted as **`a2-i6-tight`** via the new
-`joint_boosted_terrain_retune` instrument (3 boost tiers × 3 terrain classes = 9-cell maximin over
-`chokepoint_comp_basket` boosted per tier). The R19 winner regressed to worst −852 under the
-RULING-9 currency; no config is positive in all 9 cells (literal maximin = the untuned default),
-adoption used maximin-with-a-noise-band (a2-i6-tight: −26/−18 noise cells vs mean +652, the
-strongest boosted generalizer). Full battery + fence green. **Unblocks the watched
-`boost_military` flip (the RULING-9 next step)**;
-**(7) parity backlog — ✅ ACHIEVED 2026-08-24** (H6/H8/H9 + M10/M11/M12 batch; sim-core, agent,
-decision, live): sim shove depth 3→10, flee knobs matched (High/swap/bid-MoveTo-only), live
-retreat arm carries the engaged ladder, live tower no-squad path prices with the kernel's
-`heal_reaching` + the chip fallback deleted (hold fire), `forming_state` gets a `departed` gate
-(released under-strength squads travel on the progress-gated lease). M10 resolved by moving LIVE
-`friendly_creep_distance` 15→5 (pre-tournament hand-tune; 15 made the cross-border bed arrive
-strung out and die — details in the
-[parity report](../reviews/live-sim-parity-audit-2026-08-23.md)). REMAINDER queued: M14
-resolver-scope + M17/M18 tower unification + WORK/CLAIM threat_value (design fork) → item 8 /
-below; M20–M23 harness input gaps → the private-harness lane;
-**(8a) siege clamp lift — MACHINERY LANDED, WIRED OFF 2026-08-24** (decision `d693229`, agent
-`380ceb3`, eval `6c01505`; RULING-9 "clamp first"): the sizing works end-to-end (fallback retry,
-deliverable-heal ceiling — healers held at the adjacency-bound 5, anti-creep reserve; at cap 16
-the optimizer correctly FIELDS L2@T3, full battery green with the lift active) but **measured
-RED tactically**: the 16-blob congeals in chokes and parks as a rigid body at the tower-threat
-edge in the open — shipping it would convert live L2+ defers into repeated wipes, so the policy
-point (`member_cap_for`) stays 8 with the wiring documented. The batch's shipped by-products are
-substantial: **honest gauntlet verdicts** (no defender-wipe stop — Killed now means the core was
-RAZED; the old artifact mis-scored border rungs at camper-kill), the **in-contact stall gate**
-(both sides — the harmless-turtle clock accrued through the march and period-2 flapped border
-g1@T3 at the room edge), and the kernel **out-of-contact handoff** (block Advance yields
-out-of-contact members to the traffic-managed mover; the per-tile EV micro is a contact
-instrument — it rigid-body-deadlocked the pack mid-room). Border g1/g2 now kill END-TO-END
-(g1@T0 325 / g1@T3 143 / g2@T3 118); designed#4 cross-room oscillation 1.7%→0.6%.
-**(8b) multi-squad assault doctrine — ADR 0048 DRAFTED 2026-08-24**
-([`../design/0048-multi-squad-assault-doctrine.md`](../design/0048-multi-squad-assault-doctrine.md)):
-N coordinated standard 8-squads (N=2 first light) + a thin operation layer with exactly four
-coordination points (joint sizing via the item-8a machinery, operation staging gate, distinct
-lanes/arcs — which also closes parity M14, operation-level focus/retreat). Validation bars + 3
-open operator questions in the ADR (ownership shape, one-bid-vs-per-squad economics, harness soak
-vs watched flip). **AWAITING OPERATOR REVIEW — Phase 4.5's last open item.**
-*Closes: the WS-VAL follow-up queue; makes the corpus verdicts green instead of honest-red.*
-
-**Phase 5 — Boost pipeline (ADR 0010 L0 → 0041) — CONSUMER SIDE (P0–P3) SHIPPED DARK 2026-08-23**
-(see §1 prior arc + [`../implementation/ws-5-boost-pipeline.md`](../implementation/ws-5-boost-pipeline.md)).
-Remaining: O4 market-fed valuation (constants suffice for first light), the deliberate live
-activation shakedown (`boost_military` flag flip, watching), the P4 rung sweep (now over the
-WS-VAL boosted basket — same instrument as Phase 4.5 item 6), then ADR 0010 L1/L2 demand-driven
-supply. *Closes: 0010, 0041; unblocks 0019 boosted-TOUGH, 0020-TOUGH, 0008a Tier 3, 0008 S2.*
-
-**Phase 6 — economy completion.** The 0043 band→EV conversions (A2/A4/A7/A9/A10, A11, A12,
-C1–C7), 0042 `opportunity_floor` + R1–R4, 0044/0044a P3 all-sinks activation, 0007 item 4,
-0040 §D8 reserve retirement. Mechanical batch work against a shipped market.
-*Closes: 0007, 0040, 0042, 0043, 0044, 0044a.*
-
-**Phase 7 — remaining designs.** WS-5 (0045 power creeps), 0020 S5–S7 (after Phase 4, ratified), plus
-whichever of 0011/0012/0013/0014/0015/0016 the triage keeps (0013's spending half is already
-delegated to 0045; 0014 may reduce to the W4 `WarDecl` hook owned by 0008). New builds, so last
-by policy.
-
-*Convergence: Phases 0–2 ≈ a week of sessions, taking the corpus from 2 Closed to ~15–20 Closed;
-Phases 3–5 are the military program (waves → re-tune → boost capstone); Phase 6 economy; Phase 7 is a choice, not a debt.*
+*Convergence: Phases 0–4.5 + WS-CLOSE took the corpus from 2 Closed to 9 Closed (+0030 Withdrawn, 0022 Superseded) in 17 days; the second batch, Phase 5's remainder, Phase 6 and Phase 7 are choices, not debts.*
 
 ---
 
@@ -294,8 +99,8 @@ Phases 3–5 are the military program (waves → re-tune → boost capstone); Ph
 
 | Where | Artifact | WFV | Date |
 |---|---|---|---|
-| Live MMO (shardX) | wasm `53a3c66f9633` = `3d0e998` (WS-CLOSE Phase A+B + RULING-11 roots A+B hot swap, no reset; previous `e1595e7745f5` 2026-08-24) | **29** (0047 msgpack stream) | 2026-09-07 |
-| Docker private | wasm `cbcd88671d5e` = `3d0e998` (WS-CLOSE Phase A+B + RULING-11 roots A+B; the before/after bed for the live collapse fix — loud reset over the WFV-27 world) | 29 | 2026-09-07 |
+| Live MMO (shardX) | wasm `d38133ffad78` = `8c3cece` (F10 rally flap + F12 headroom + H5; hot swap 2026-09-07 20:39Z; earlier the same day `53a3c66f9633` = `3d0e998` and `e1595e7745f5` 2026-08-24). The visuals-off default (F13) is in the FOLLOWING commit and not yet deployed — the live flip covers it | **29** (0047 msgpack stream) | 2026-09-07 |
+| Docker private | wasm `5b9aac9ee58e` = `8c3cece` (F10 re-observed: two W7N7 cores razed to 0; earlier `cbcd88671d5e` = `3d0e998` was the collapse before/after bed) | 29 | 2026-09-07 |
 | `master` | HEAD (WFV-anchored; do not pin a SHA here — it drifts every commit) | 29 — **live on MMO** | since 2026-08-24 |
 
 **The deployed-artifact test point is now `77dc9cc`** (2026-08-22); anything after it is undeployed. Use this as the test when an ADR claims a
@@ -307,18 +112,16 @@ GCL 12, bucket 10000, W7N47 under remote-build.
 
 ## 5. ADR state index
 
-57 ADRs. States: **Live** (in `ab692bd`) · **Host-only** (offline tooling, never in the wasm
-bundle) · **On master** (merged, undeployed) · **Partial** · **Design-only** · **Closed**.
+57 ADRs. States: **Live** (in the deployed wasm) · **Host-only** (offline tooling, never in the wasm bundle) · **On master** (merged, undeployed) · **Partial** · **Design-only** · **Closed**.
 
-**Closed — no open work. Detail in the ADR; do not re-track.** `0001`, `0005` (containment ratified as-shipped 2026-08-23), `0009c`, `0037` (T1-T3 landed; emission closed by ruling 2026-08-23), `0038`
+**Closed — no open work. Detail in the ADR; do not re-track.** `0001` · `0004` (governor calibration run on evidence 2026-09-07, constants confirmed; its F11 finding is 0047's) · `0005` (containment ratified as-shipped 2026-08-23) · `0009c` · `0023` / `0023a` (S5 + rout bed + `MultiRoom` landed 2026-09-07; cross-room Flee closed per D4 — the seam-stitched field is 0024/0025's) · `0028` (beds 1+3 + the 0041 P3 boosted bed landed, live canary observed 2026-09-07; the three still-mirrored harness constants are noted in its delta, untracked) · `0036` (live raze confirmed on Docker 2026-09-07: under a Dismantle objective the W7N7 core went 29,600→4,000→0 and its successor 18,270→0 within two minutes of the F10-fixed build — hits strictly decrease AND reach 0; D3/D4 + D1 ordering as designed) · `0037` (T1–T3 landed; emission closed by ruling 2026-08-23) · `0038`
 
-**Live** — `0002 0004 0008 0047 0017 0019 0024 0025 0027 0029 0031 0031b 0032 0034 0035 0036 0040 0042 0044 0044a 0046`
-**Host-only** — `0006 0023 0023a 0025a 0026 0026a 0033`
-
-**Partial** — `0003 0007 0008a 0009 0009a 0009b 0011 0012 0018 0020 0021 0028 0031a 0039 0043`
+**Live** — `0002 0008 0010 0017 0019 0024 0025 0027 0029 0031 0031b 0032 0034 0035 0040 0041 0042 0044 0044a 0046 0047`
+**Host-only** — `0006 0025a 0026 0026a 0033 0039`
+**Partial** — `0003 0007 0008a 0009 0009a 0009b 0011 0012 0018 0020 0021 0031a 0043`
 **Withdrawn** — `0030` (2026-08-23; tempo axis preserved in 0031 — no open work)
 **Superseded** — `0022` (by 0027; its P-AUCTION residue is owned by 0020/0031, and its P-OBJ asks were superseded by 0027's observed-success model — no open work of its own)
-**Design-only, zero code** — `0010 0013 0014 0015 0016 0041 0045`
+**Design-only, zero code** — `0013 0014 0015 0016 0045`
 **Draft (operator review pending)** — `0048` (multi-squad assault doctrine — Phase 4.5 item 8b deliverable, 2026-08-24; sizing engine = the wired-off item-8a machinery)
 
 Open work for these is in §6 and §7. An ADR absent from both is Closed.
@@ -327,107 +130,59 @@ Open work for these is in §6 and §7. An ADR absent from both is Closed.
 
 ## 6. Open work by owning ADR
 
-One line per item. **Phase tags** (sweep 2026-08-23): P3 boost · P4 R19-tuning · P5 economy · P6 remaining designs · **WvC** = the post-P4 combat wave (small live combat fixes batched like Wave B) · HARNESS = B-1 lane · WATCH = live observation.
+One line per item. **Phase tags**: P3 boost · P4 R19-tuning · P5 economy · P6 remaining designs · **BATCH-2** = the second batch (§1 (a)) · WATCH = live observation. (The HARNESS and WvC tags are retired — those lanes closed 2026-09-07.)
 
 **Combat**
 - `0008` — S2 boost handoff **→P3**; S1 pre-spawn, W2 trim + W4 `WarDecl` **→P6**; O5 power-bank + heavy assault = deferred capabilities (activate by decision, not schedule).
-- `0008a` — T-HEAL-3 (widens into R1) **→P3** (T-HEAL-3a SHIPPED, WvC-1); T-DEF-1/T-DEF-5/T-POS-5 SHIPPED (WvC-2); Tier 3 **→P6** (after P3). T-DEF-4 = the `threat_value` CLAIM term (WS-CLOSE lane (a), 2026-09-07). FOUND 2026-09-07 (F4): the tower bounded-probe state machine never resolves when a confirmed drainer's visible heal out-heals all towers (`tracker.engaging` stays true, no strike accrued; energy behavior correct) — small state-machine fix, on evidence.
-- `0019` — boosted-TOUGH **→P3** (blocked on 0041). (S4-TUNE DONE, WS-4: presets confirmed flat — no adoption.)
-- `0020` — S5/S6/S7 (blob auction + R7 currency, adaptivity, adversarial room-gen): **operator-ratified scheduled end-state, sequenced AFTER Phase 4** (they want the R19-retuned kernels). S5-CAP SHIPPED (WvC-1): empire-scaled cap + defense surge, shared `claim_pacing` kernel.
-- `0026` — L6c **→P6** (re-tagged WS-4: its `DoctrineParams` consumers are the unbuilt rungs 2–3 — per L6c's own rule, a weight with no consumer has nothing to sweep). (L8 SHIPPED, WvC-1.)
-- `0026a` — modes activate as their signals land **→P6** (catalog; no standalone schedule).
-- `0027` — Farm producers (PowerBank needs its own ADR) + salvage-teardown migration **→P6**. FOUND 2026-09-07 (F8, 0028 bed 3 modelling the live kernel faithfully): a claimed roster that never STARTS a member lapses its +400 commitment lease; offense is then backed off (`mark_unwinnable`) while a Defend objective re-claims every 400t FOREVER (6 generations on a lane-starved defender board) — decide whether a merely lane-starved (never-spawned) offense roster should be marked unwinnable at all, and whether Defend re-claim needs a bound.
-- `0028` — `run_defended_lifecycle` closeout **→HARNESS** (K3/K4 RESOLVED, WvC-1: claim_admission is the shared kernel, `claims_allowed` harness-only; K3 adapters separate by design); multi-squad lane contention folded into that closeout (WvC-2 ruling: it is scenario-coverage beds 1+3, not bot work).
-
-- `0031` — Tier-2 archetype search + Tier-3 axes **→P4** (the 0031a sweep plan).
-- `0031a` / `0031b` — re-sweep DONE (WS-4, 0031b §5): defaults CONFIRMED at w_energy=1.0; margin knobs inert under the binding cost term. Tier-2/3 archetype axes remain **→P6** (with 0031).
-- `0034` — convergence gates **→P4** (D6c renewable-rally bias SHIPPED, WvC-1). FOUND 2026-09-07 (**F10, Phase C live, the "objective creeps idling" class**): the travelling/engaged squad's RALLY ROOM FLIPS tick to tick — `uncontested` is an instantaneous visibility read, so the rally alternates target-room ↔ neighbour as members cross the seam, `gathered` never holds, squads acquire focus and leave (W5N7 L0 core untouched through three generations; W7N7 raze stalled at 4000). **FIXED 2026-09-07** (same session): `uncontested` was a per-tick VISION read one layer down (the room's creep/structure caches refill only from live vision, so no eye ⇒ empty DTOs ⇒ "contested"); now `rally::TargetIntel` + `target_is_uncontested_by_evidence` (clear observation ≤250 ticks old ⇒ uncontested; any hostile observation ⇒ contested; unknown ⇒ contested) fed from the persisted `RoomDynamicVisibilityData` (`ScoutedThreat::from_record`); 10 RED-verified pins across rally.rs / squad_manager.rs / the lifecycle harness (`run_rally_flap_flow`); ADR 0034 delta written. Re-observe the W5N7/W7N7 razes on the next private deploy. FOUND 2026-09-07 (F9, Phase D write-back, parity): **rout-to-rally is a SIM-DRIVER discipline only** — the live SquadManager's Retreating arm does not steer toward the rally (ADR 0034 Design deltas 2026-09-07 records it); the Phase C "routs back to rally" provocation therefore grades the withdraw leg only, and the live half is open work here. FOUND 2026-09-07 (F7, rout bed under the seam-gated engine): the rout-to-rally leg ENDS AT THE SEAM — withdrawn crossers exit alive, Retreating decays to Forming, the bloc gate re-releases nobody, and the survivors idle un-rallied to the timeout (`border_rout_withdraws_across_the_seam_but_never_reaches_the_rally_yet` pins this honest baseline; flip it when the rally leg lands). FOUND 2026-09-07 (F3): the bloc gate's ASSEMBLED test (every traveller within 4 of the centroid) releases while a straggler is ~6 tiles back, so one member crosses ~11 ticks late (GROUP-UP bed, measured) — grade in the Phase C crossing before touching the gather constants.
-- `0035` — FU1 **→P6** (poll-until-fresh sufficiency undecided; FU2 CLOSED, WvC-1: terminator composition + stall-aware give-up clock).
-- `0036` — live raze confirmation **→HARNESS** (private-server world mechanics, B-1).
-- `0039` — P2–P4 **folded into the harness lane** (2026-08-23): re-activate with H5 **→HARNESS**.
+- `0008a` — T-HEAL-3 (widens into R1) **→P3**; Tier 3 **→P6** (after P3); **F4** the tower bounded-probe never resolves vs a visibly out-healed drainer ("T-DEF-3 note … F4") = small state-machine fix, on evidence; T-DEF-1 / T-DEF-5 / T-POS-5 live grade **→WATCH** (§1). (T-DEF-4 = the `threat_value` CLAIM term, D1 — done.)
+- `0019` — boosted-TOUGH receiving-side reduction **→P3** (own-side boost pricing exists via 0041; the TOUGH damage-reduction curve does not).
+- `0020` — S5/S6/S7 (blob auction + R7 currency, adaptivity, adversarial room-gen): operator-ratified end-state, Phase 7 (eligible now that Phase 4 is done). S5-CAP shipped (WvC-1; shared `claim_pacing`).
+- `0025` — **F2** kernel duplicate-goal park (delta G: bar + repro) OPEN; the seam-stitched threat/approach field (§11 #10, ≤0.97 pin, D4) = the remaining cross-room design item (with 0024); goal-convergence churn + generated-bed fairness sign (delta G) on evidence; `action_oscillation_rate` metric **→P4**; `kite.rs` module doc still says "unboosted" (stale comment — a code-lane one-liner).
+- `0026` — L6c **→P6** (no `DoctrineParams` consumer — its own rule). `0026a` — modes activate as their signals land **→P6**.
+- `0027` — **F8** a lane-starved (never-spawned) roster → `mark_unwinnable` while a Defend objective re-claims every 400t forever, and the garrison stand-down finding (an own-room Secure outlives its threat) = amplifier D bounds **→BATCH-2**; Farm producers (PowerBank needs its own ADR) + salvage-teardown migration **→P6**.
+- `0031` (+ `0031a`) — Tier-2 archetype search + Tier-3 axes **→P6**; `SIEGE_MAX_SIZED_MEMBERS` re-wire waits on 0048. (0031a/b re-sweep DONE, defaults confirmed — 0031b §5.)
+- `0034` — convergence gates **→P4**; **F7/F9** the rally leg (sim: the rout ends at the seam — honest-baseline pin; live: the Retreating arm never steers to the rally) OPEN — the M23 economic give-up is the designed re-entry/give-up terminal; **F3 →WATCH**. (D6c shipped WvC-1; F10 rally flap FIXED `8c3cece`.)
+- `0035` — FU1 **→P6** (poll-until-fresh sufficiency undecided); own-room forming give-up bounds **→BATCH-2** (with 0027). (FU2 CLOSED, WvC-1.)
+- `0039` — P1 landed; P2–P4 **re-parked** (2026-09-07, D7): H5 supplies the fidelity bound §0 assumed; P2 = decision-crate extraction item, P3/P4 unscheduled sim-driver work; no harness dependency remains.
+- `0048` — Draft awaiting operator review (§1 (b)); owns parity M14 (D3) and the border g3/g4 rungs (defer at sizing).
 
 **Economy**
 - `0007` — item 4 (route-distance hauler sizing + shared predicted capacity) **→P5**.
-- `0010` — L0 SHIPPED dark 2026-08-23 (`available_boosts` populated, `BoostQueue` wired with owner-staged clears, `AwaitBoost` calls `boost_creep` — ws-5 P1+P3); remaining: chain math + L1–L4 demand-driven planner/labs/factory **→P3** (after the 0041 activation shakedown).
+- `0010` — L0 live (delta 2026-09-07); reaction-selection kernel extraction + L1–L4 demand-driven planner/labs/market/factory **→P3**.
 - `0012` — M2/M3 **→P6**.
-- `0040` — §D8 #2: the 20% military reserve (`economy.rs:87`) was never retired post-soak. Owns review R15 **→P5**.
-- `0042` — `opportunity_floor` still hardcoded `0` (`squad_manager.rs:1868`, gated on 0043 A2); R1–R4 refinements **→P5**.
-- `0043` — A2/A4/A7/A9/A10 band lerps still live in `spawn_policy.rs`; A11 importance margin; A12 exponential backoff; C1–C7 vetoes **→P5**.
-- `0044` / `0044a` — P3 all-sinks only partially activated (build/repair bids are admission gates, not EV-priced haul registrations); per-lane road awareness; Phase-3 verification never recorded **→P5**.
+- `0040` — §D8 #2: the 20% military reserve (`economy.rs:87`) never retired post-soak; owns review R15 **→P5**. (Root-B income ladder landed `3d0e998` — delta.)
+- `0042` — `opportunity_floor` still hardcoded `0` (`squad_manager.rs`, gated on 0043 A2); R1–R4 refinements **→P5**.
+- `0043` — A2's EV half, A4/A7/A9/A10's band step, A11 importance margin, A12 exponential backoff, C1–C7 vetoes **→P5** (the spawn-EV batch; its baseline = the root-B ladder, which the sim arms must adopt first — delta).
+- `0044` / `0044a` — P3 all-sinks only partially activated (build/repair bids are admission gates, not EV-priced haul registrations); per-lane road awareness; Phase-3 verification never recorded **→P5**; tower peace refill + SURVIVAL-bid dedupe (amplifier E) **→BATCH-2**.
 
 **Rooms, expansion, infrastructure**
 - `0003` — `MissionResult::Wait/Idle` park-don't-teardown **→P6**.
 - `0009` / `0009a` / `0009b` — planner revamp (bench evaluator gates it) **→P6**.
 - `0011` — D5 assist, G3 incubation, empire spawn-budget orchestrator **→P6**.
 - `0017` — M5b escort (owned by 0008 **→P6**); abort-threshold tune **→WATCH** (needs live attacker evidence).
-- `0018` — K4 mineral + K-RECONCILE (incl. `HoldModel::Suppress` unification) **→P6**; SK-farm live evidence **→WATCH**.
+- `0018` — reserver gating on live miners (amplifier F) **→BATCH-2**; K4 mineral + K-RECONCILE (incl. `HoldModel::Suppress` unification) **→P6**; SK-farm live evidence **→WATCH**.
 - `0021` — follow-ups #5/#6 **→P6** (#1/#2 absorbed by 0046, live).
 - `0046` — staleness-bucket quantization tune rides live observation (low priority; C1–C5 all passed) **→WATCH**.
 
 **Platform / tooling**
-- `0047` — FOUND 2026-09-07 (F11, 0004 calibration run): a tick KILLED mid-serialize (bucket≈0) leaves a truncated world chunk and the next boot fails `corrupt gzip stream does not have a matching checksum` → the bot RESETS THE WORLD (missions/plans lost). The msgpack stream needs write-then-swap: write the new chunk set to the alternate segment slots (or a version tag), checksum, and only then flip the active pointer; a failed checksum falls back to the last good set instead of resetting. Sits with the segment-capacity WATCH (§1). Second-batch candidate alongside amplifiers D/E/F.
-- `0004` — governor pressure-scenario calibration: **RUN ON EVIDENCE 2026-09-07** (`runs/pressure-critical-hover-3d0e998-20260907-200026`, warm 10-room private world, own cost ~75 cpu): the tiers fire exactly as designed — normal→conserve at bucket 6945 / trend −10, →critical at 3128 / −54 (mission pool 20000→10000→5000, movement pool /4 then the 2000 floor then 0), critical→conserve→normal on the recovery leg at 1764 / 4195 with the expected order; creeps 372→412 through the hold (progress continued); constants CONFIRMED (no diff). FOUND **F11** (owner 0047): three VM kills at bucket≈0 and ONE `Failed deserialization: segment decode failed, resetting world state: corrupt gzip stream does not have a matching checksum` — a tick killed mid-write leaves a truncated world chunk and the next boot RESETS THE WORLD; the stream needs write-then-swap (keep the last good chunk set; checksum before adopting). Shipped JSONs are the fresh-colony schedule (own 18): re-derive `ms` per world (warm: ramp ~65, hover ~30). Remaining: nothing but F11 → 0047.
-- `0006` — server-harness combat scenarios absent (`Fault` enum is only CpuBurn/GlobalReset/PanicOnce); **H5 sim-vs-server parity oracle** (golden vectors + nightly gate — reassigned here from 0008/0028, see UNOWNED-2; blocked on B-1) **→HARNESS**.
+- `0047` — **F11** write-then-swap (delta 2026-09-07: a tick killed mid-serialize resets the world) **→BATCH-2**, designed together with the segment-capacity fix lane **→WATCH** (§1).
+- `0006` — H5 oracle LIVE-VALIDATED 2026-09-07 (five server-captured byte-exact vectors; `parity capture|report|nightly`; layer 2 report-only with `parity-budget.json`); remaining: the layer-2 budget promotion (report-only → gating) is an operator number under ADR 0015's earned-promotion rule — nothing else open.
 - `0013` / `0014` / `0015` / `0016` / `0045` — design-only. 0015 (testkit + seam registry) and 0016 (HUD) were marked "in scope" by the ultracode completion kickoff, a program that has driven nothing since 2026-07-02 (RULING-5) **→P6**.
-- `0023` / `0023a` — S5 border scenarios, cross-room `Flee`, MultiRoom generator **→HARNESS**. Partially advanced by WS-VAL: the border gauntlet + multi-room stronghold scenarios ARE sim-side border-crossing beds (and they FAIL honestly — Phase 4.5 item 2 is the fix lane).
-- `0025` — `action_oscillation_rate` metric **→P4** (rides the sweep instrumentation). FOUND 2026-09-07 (F2, WS-CLOSE): **kernel duplicate-goal park** — two members assigned the SAME goal tile → the dance damper converts both to Immovable holds → the squad parks Engaged forever without acting (GROUP-UP bed geometry, members at (46-48,21-23) vs a tower at (46,23)). Bar: goal assignment excludes tiles already claimed this tick (or the damper never freezes two members on one tile); repro = the 0023 S5 GROUP-UP bed with the staging moved onto the tower's flank. (0025a residual closed 2026-08-23.) WS-VAL grew the harness: stronghold + border gauntlet corpus + boosted self-play lane (2026-08-23). Documented corpus approximations to revisit ON EVIDENCE: fortifier rampart-repair unresolved (no creep-repair intent in the sim), defender micro = `Hold` (not the engine's coordinated spot-walk), L5 anti-nuke fortify out of scope, roads/containers omitted.
-- `0033` — BOTH P4 items DONE (WS-4): kite retune = defaults confirmed via `s4_weights_retune`; corpus-wide fence = `full_corpus_evaluation_is_deterministic` (spread==0 over 21, H 0.9625).
-- `0041` — P0–P3 SHIPPED dark 2026-08-23 (flag `boost_military` OFF); remaining: O4 market valuation, the deliberate activation shakedown, P4 rung sweep (over the WS-VAL boosted basket) **→P3**. WS-VAL verified the T3 unlock in sim (L1 fields; T0 defers everything — the quantified boost case).
+- `0041` — deltas written back 2026-09-07; open design items: O4 `mineral_value_e` resolver, D2 supply reservation, the 0031b sizing re-sweep half of P4, boost-tile routing **→P3**; first boosted live engagement **→WATCH** (§1).
 
 ---
 
 ## 7. Cross-cutting work with no ADR owner
 
-- **UNOWNED-8 · LIVE MMO ECONOMIC COLLAPSE (operator-reported 2026-09-07, diagnosis IN
-  PROGRESS).** Measured at tick ~5484870: 7 owned rooms (W5N48 + one more LOST since 2026-08-24),
-  46 creeps, storage energy 0 in EVERY room, spawns idle (W13N52 RCL 8: 5 creeps, spawns at 13
-  energy), W13N51 ramparts all decayed, W5N49 ramparts at 601, 720k OXYGEN hoarded (market
-  features all `false`), every room's market floor unmet (10000; W2N49 1,000,000), invader Secure
-  objectives recurring on W7N47/W2N49, seg-57 vm_starts 2771 / aborted ticks 2687 (cumulative).
-  **DIAGNOSED 2026-09-07** → [`../reviews/mmo-collapse-diagnosis-2026-09-07.md`](../reviews/mmo-collapse-diagnosis-2026-09-07.md)
-  (six lanes, adversarially verified). TWO ROOTS: **(A) rover movement wedge** — the 20k path-ops
-  pool is RESERVED per search (`rooms×2000`, ×2 stuck, never refunded), so ~5 stuck creeps drain it
-  every tick, every other search returns `PathNotFound`, and a `PathNotFound` creep is posted as an
-  UNSHOVEABLE `stationary_occupant` — haulers freeze ADJACENT to empty extensions until TTL death
-  (owner: ADR 0033 / rover); **(B) spawn-queue head-of-line deadlock** — `spawnsystem.rs` `break`s
-  on the first unaffordable body while the hauler bid is 99,999 for ANY body (`body_roi` ≡ 750k)
-  and capacity-sized (1800–2000e), so 550e miners never spawn behind it and no starvation arm
-  exists (owner: ADR 0040/0043 spawn policy). AMPLIFIERS: defense fan-out to all 7 homes from a
-  border harasser (`iamgqr`, W7N47/W2N49) with forming give-up marking OWN rooms unwinnable (0027/
-  0035/war.rs); tower SURVIVAL bid 1e6 + never-refilled peace towers (0044 sink pricing); 19
-  standing 1300e reserver requests for outposts with 0 miners (0018/reserve.rs). REFUTED: VM
-  resets/panics (counters flat), market-off as an energy cause, mineral mining, boosts/labs, the
-  20% military reserve, remotes/SK as sinks. Trigger: `iamgqr` harassment of the SW flank from
-  2026-08-24. Ranked live flips + code fixes in the report §3. **RULING-11 flips applied tick
-  5486228** (`pathfinding_cpu_budget` 50, `remote_mine.reserve` false); **effect at tick 5486355
-  (+127 ticks): ops_used 0 of 50,000 (was 20,000/20,000 every tick), repath_count 0, creeps
-  46→72, five rooms spawning, W13N52 lane 301→1205, storage energy reappearing (W9N46 210).**
-  Roots A+B code fix = the RULING-11 lane (rides the WS-CLOSE batch). **F12 (2026-09-07, ~1.5 h post-swap): the bucket dipped below `bucket_burst_threshold` 9500 and the NORMAL-mode pathing headroom (`pathfinding_headroom = movement_cap` = never start a search) froze every path again (`move_failed_budget` 29, ops pool untouched, W13N52 lane 4427→1039) — a second wedge arm; mitigation flip `bucket_burst_threshold` 9500→2000 applied tick 5492700 (same class as flip 1; wiped by `reset.features`); code fix = finite normal-mode headroom (rides the batch).**
-
-- **UNOWNED-1 · Ship WFV 28.** No ADR owns "soak and deploy". Owned here as **WS-1**.
-- **UNOWNED-2 · H5 sim-vs-server parity oracle — assigned to ADR 0006** (2026-08-22; 0008 had
-  mis-routed it to 0028). No `parity.rs`, no golden vectors, no nightly gate. Blocked on B-1.
-  Listed under 0006 in §6.
-- ~~**UNOWNED-3**~~ **CLOSED 2026-08-23** (ws-triage): the crate-wide allow is GONE; 115 warnings triaged to zero. The compiler now IS the dead-code register. New annotations carry an owner tag (KEEP/TEST-PINNED/FOLLOW-UP).
-- ~~**UNOWNED-4 · `remote_mine.search_radius` still defaults to `1`**~~ **CLOSED 2026-08-23**
-  (struck 2026-09-07 — §3 Phase 0 recorded the close, this line never was): default now `2`
-  (`features.rs:219`), live-reconciled via the `reset.features` one-shot.
-- ~~**UNOWNED-5**~~ **CLOSED 2026-08-23**: the `SourceKeeperFeatures` container doc contradicted
-  its own field default for two months; it now records the operator's real 2026-06-18 default-ON
-  decision.
-- ~~**UNOWNED-6**~~ **CLOSED 2026-08-23**: `construction.allow_replan` **deleted** (declared but
-  read by no code — an operator flipping it silently got nothing). Re-add a replan flag together
-  with its consumer when discretionary replan lands (0009).
-- ~~**UNOWNED-7 · Stale `Memory._features` overrides**~~ **CLOSED 2026-08-22** by the
-  `reset.features` one-shot (`77dc9cc`): setting `Memory._features.reset.features = true` rebuilds
-  the persisted tree from compiled defaults next tick (self-clearing, like the other reset flags).
-  Fired and live-verified on MMO the same day — `military.offense` reconciled `false→true`, new
-  keys appeared, flag self-cleared. **Deliberate retunes now go through this pattern**, never a
-  hand-edit that then shadows future defaults.
-- ~~**CHORE-1 · 29 ADR headers are stale.**~~ **CLOSED 2026-08-22 by the design/implementation
-  split.** All 56 ADRs were rewritten as pure end-state designs; status moved here and to
-  [`../implementation/`](../implementation/). The drift class is now structurally impossible — an
-  ADR header can no longer make a claim about code. Rollback tag: `pre-doc-split`.
+- **UNOWNED-8 · live MMO economic collapse (operator-reported 2026-09-07)** — DIAGNOSED → [`../reviews/mmo-collapse-diagnosis-2026-09-07.md`](../reviews/mmo-collapse-diagnosis-2026-09-07.md); roots **A** (rover ops-pool movement wedge — ADR 0033 delta) + **B** (spawn-queue head-of-line deadlock — ADR 0040/0043 deltas) FIXED in `3d0e998`, Docker-validated on the collapsed July world (creeps 30→253) and LIVE (`53a3c66f9633`: `ops_used` 6589/50000, 0 move failures, W13N52 lane 301→4079); **F12** second wedge arm FIXED `8c3cece` (ADR 0004 delta); amplifiers D/E/F **→BATCH-2** (§1 (a)); live flips (`pathfinding_cpu_budget` 50, `remote_mine.reserve=false`) persisted but wiped by `reset.features` (§1 WATCH).
+- ~~**UNOWNED-1 · Ship WFV 28**~~ CLOSED 2026-08-23 as WS-1.
+- ~~**UNOWNED-2 · H5 sim-vs-server parity oracle**~~ CLOSED 2026-09-07 — the oracle exists (ADR 0006, `screeps-combat-engine::parity` + `screeps-ibex-eval parity`).
+- ~~**UNOWNED-3**~~ CLOSED 2026-08-23 (ws-triage): the crate-wide `#![allow(dead_code)]` is gone; the compiler IS the dead-code register (new annotations carry a KEEP / TEST-PINNED / FOLLOW-UP owner tag).
+- ~~**UNOWNED-4 · `remote_mine.search_radius` defaulted to `1`**~~ CLOSED 2026-08-23: default `2`, live-reconciled via `reset.features`.
+- ~~**UNOWNED-5**~~ CLOSED 2026-08-23: the `SourceKeeperFeatures` container doc now records the operator's real 2026-06-18 default-ON decision.
+- ~~**UNOWNED-6**~~ CLOSED 2026-08-23: `construction.allow_replan` deleted (declared, read by no code); re-add a replan flag together with its consumer when discretionary replan lands (0009).
+- ~~**UNOWNED-7 · Stale `Memory._features` overrides**~~ CLOSED 2026-08-22 by the `reset.features` one-shot (`77dc9cc`): rebuilds the persisted tree from compiled defaults, self-clearing. **Deliberate retunes go through this pattern**, never a hand-edit that shadows future defaults — NB it also wipes the RULING-11 flips (§1).
+- ~~**CHORE-1 · 29 ADR headers are stale.**~~ CLOSED 2026-08-22 by the design/implementation split (status moved here and to `../implementation/`; the drift class is structurally impossible now). Rollback tag: `pre-doc-split`.
 
 ---
 
@@ -525,89 +280,52 @@ review D1/D11/D24/D25/D26/D27/R22 (Wave A).
 
 Append one line per closed item. Newest first.
 
+- **2026-09-07 (close-out)** — **WS-CLOSE CLOSED — the RULING-10 clean stopping point reached.** `7dde003` (Phase A+B: M17/M18 unify, M20–M23 both sides, 0023/0023a S5 + rout bed + `MultiRoom`, the H5 Docker-free half, 0004 prep, 0028 beds 1+3, the 0041 P3 boosted bed, engine seam fidelity F1; + the collapse diagnosis) → `3d0e998` (RULING-11 roots A+B + Phase D write-backs into 20 ADRs) → `8c3cece` (Phase C: H5 byte-exact ×5 on the real server, F10, F12, lint sweep). Docker `cbcd88671d5e` + MMO hot swap `53a3c66f9633` (= `3d0e998`). Durable record → `reviews/ws-close-evidence-2026-09-07.md` (program, D1–D8, F1–F12, evidence table). Seven impl docs deleted (ws-2, wvc-1, wvc-2, ws-4, ws-5, ws-val, ws-closeout); §1 empty by design; §5/§6 collapsed; F11 → 0047 delta, F12 → 0004 delta.
+- **2026-09-07** — **ws-2 Wave B CLOSED** (shipped `0d9524f2668f` 2026-08-23): D2/D3 → ADR 0008a "Safe mode as built", D28 → 0027 delta, T1/T2 → 0037 delta, D9/D10 rover-side; closed on pins + write-back — the Docker pass exercised the offense lifecycle (three squad generations, FU2 backoff, two Dismantle objectives, one core razed) but recorded no dedicated churn-signature row; D4/D5 stay pinned offline.
+- **2026-09-07** — **wvc-1 CLOSED** (shipped `e08162810921`): T-HEAL-3a, readiness tranche, S5-CAP, FU2 `RetreatClock`, L8, D6c, K3/K4 `claim_pacing` in ADR deltas (0008a/0035/0026/0034/0028/0020); live canary on Docker: a Secure objective fielded a 6/6 in-room defense squad within 30 s (S5-CAP / defense claim PASS); FU2 backoff observed on W7N5.
+- **2026-09-07** — **wvc-2 CLOSED** (shipped `1fb233b30416`): T-POS-5 / T-DEF-1 / T-DEF-5 as built in 0008a (+0019 delta), 0037 T3 closed by ruling (0037 delta), lane contention → 0028 bed 3; T-DEF-1 anchoring / T-DEF-5 arm NOT provoked live (fight too short) → §1 WATCH.
+- **2026-09-07** — **ws-4 CLOSED** (shipped `9913ef980109`): R19 winner + the 0026a reversal → 0026/0026a; 0031a/b w_energy=1.0 → 0031b §5 + 0031 delta; S4-TUNE / FU#4 / kite → 0019/0024 deltas; the winner was superseded by `a2-i6-tight` (item 6) under the RULING-9 currency.
+- **2026-09-07** — **ws-5 CLOSED**: P0–P3 as built + P4-as-merged + activation provenance → ADR 0041 "WS-CLOSE write-back"; L0 as shipped → ADR 0010 delta; 0020 rows corrected; the apply loop validated offline (`boosted_roster_routes_to_the_labs_and_departs_boosted`, `stock_loss_mid_await_boost_falls_through_at_the_deadline`); first boosted live engagement → WATCH.
+- **2026-09-07** — **ws-val CLOSED**: corpus → ADR 0023a "WS-VAL corpus write-back" + `screeps-combat-eval/README.md`; kernel work → ADR 0025 deltas A–G; the boost-blind seam → 0041; parity audit updated (M4/M6 struck, M14 → 0048 D3, M17/M18/M20–M23 FIXED).
+- **2026-09-07** — **ADR 0004 CLOSED**: governor calibration run on evidence (`runs/pressure-critical-hover-3d0e998-20260907-200026`, warm 10-room world): tiers fire as designed (normal→conserve 6945/−10 → critical 3128/−54; recovery 1764 → 4195), constants CONFIRMED; F11 found → 0047; F12 delta recorded.
+- **2026-09-07** — **ADR 0006 H5 oracle LANDED + LIVE-VALIDATED** (UNOWNED-2 closed): `screeps-combat-engine::parity` + `screeps-ibex-eval parity capture|report|nightly`; five SERVER-CAPTURED byte-exact vectors (melee-1v1 7 frames, tough-ladder 9, kite-r3 11, heal-race 13, tower-rampart 13; 0 placeholders); layer 2 report-only with `parity-budget.json`; Q1 answered (DB-inserted creeps tick). Remaining = the budget promotion (operator number).
+- **2026-09-07** — **ADR 0028 CLOSED**: bed 3 (`run_multi_forming`, both K4 arms) + bed 1 at N=2 + the 0041 P3 boosted bed (`run_boosted_forming`) + M20–M23 shared clocks; live canary: defense claim/surge fielded 6/6 in-room on Docker.
+- **2026-09-07** — **ADR 0023 / 0023a CLOSED**: S5 GROUP-UP + STUCK-MEMBER-TIMEOUT beds, the squad rout bed, the `MultiRoom` generator (48-index family + builder aliases), engine seam fidelity fixed at source (F1); cross-room Flee closed per D4 — the seam-stitched field stays a 0024/0025 design item.
+- **2026-09-07** — **ADR 0039 P2–P4 re-parked** (D7): H5 supplies the fidelity bound §0 assumed; no harness dependency remains.
+- **2026-09-07** — **UNOWNED-8 roots A+B FIXED + LIVE** (`3d0e998` = wasm `53a3c66f9633`): rover ops refund + `PathBudgetExhausted` / displaceable occupant + first-path round-robin (ADR 0033 delta); miners CRITICAL + bootstrap floors + need-scaled hauler bid + starvation sizing (ADR 0040/0043 deltas). Docker before/after: creeps 30→253, 3 new rooms; MMO: `ops_used` 6589/50000, 0 failures, W13N52 lane 301→4079. **F12** second wedge arm FIXED `8c3cece` (ADR 0004 delta); amplifiers D/E/F → the second batch.
+- **2026-09-07 (close)** — **ADR 0036 CLOSED** (live raze reaches 0 on Docker under the F10-fixed build: W7N7 4,000→0 and 18,270→0). **F13** visuals-off flip + default. Live MMO after the day: creeps 46→112, storage energy back in 4 of 7 rooms, cpu 68/140, bucket climbing +44/tick, zero budget failures.
+- **2026-09-07** — **F10 rally-room flap FIXED** (`8c3cece`, ADR 0034 delta): evidence classifier over the persisted visibility record; 10 RED pins. **0036 D3/D4 live-confirmed** (W7N7 core 29600→4000 under Dismantle; W7N5 razed); the reaches-0 re-observation is pending.
+- **2026-09-07** — **Parity M17/M18 (tower/kernel unification, D1/D2) + M20–M23 FIXED** — audit updated.
 - **2026-09-07** — **RULING-10 recorded; WS-CLOSE opened** (the tie-off program, §1). Movement-CPU watch CLOSED on evidence (zero over-budget lines two weeks post-swap); segment capacity MEASURED 4/4 chunks, 169 KB/205 KB (watch-only by ruling); §4 ledger refreshed to `e1595e7745f5`/WFV 29; UNOWNED-4 struck (closed 2026-08-23, never marked).
-
 - **2026-08-24 (latest)** — **Phase 4.5 item 8b: ADR 0048 multi-squad assault doctrine DRAFTED** (N coordinated 8-squads, 4 coordination points, joint sizing = the item-8a machinery; closes parity M14 as a by-product). Awaiting operator review — the LAST Phase 4.5 item. Item-8a batch deployed to MMO (wasm `e1595e7745f5`, tail clean).
-
 - **2026-08-24 (latest)** — **Phase 4.5 item 8a: siege clamp lift MACHINERY LANDED, WIRED OFF (measured red)** + shipped by-products: honest gauntlet verdicts (Killed = core RAZED), in-contact stall gate BOTH sides (fixed the border-g1 period-2 room-edge flap), kernel out-of-contact handoff (fixed the mid-room rigid-body park) — border g1/g2 now kill END-TO-END. L2+ path = item 8b multi-squad doctrine. decision `d693229`, agent `380ceb3`, eval `6c01505`.
-
 - **2026-08-24 (latest)** — **Phase 4.5 item 7 (parity remainder) ACHIEVED**: H6/H8/H9 + M10/M11/M12 landed both sides (sim shove depth 10, flee-knob parity, live engaged-ladder retreat arm, live tower heal_reaching + chip fallback deleted, forming_state departed gate); LIVE friendly_creep_distance 15->5 (pre-tournament hand-tune, made crossings arrive strung out). Remainder: M14+M17/M18 -> item 8/design fork; M20-M23 -> harness lane.
-
 - **2026-08-24 (latest)** — **boost_military ACTIVATED on live MMO (WATCHED)**: Memory._features.military.boost_military = true on shardX via the new rest-api console example (`eeabd42` — POST /api/user/console, shard auto-injected); verified by console echo of the military tree; 0 panics post-flip. WATCH: first boosted engagement (labs fill BoostQueue, AwaitBoost job, offense sized per tier); attribute lab/spawn/sizing changes here first.
-
 - **2026-08-24 (latest)** — **Phase 4.5 item 6 (boosted re-tune, merges 0041 P4) ACHIEVED**: `open_combat` -> `a2-i6-tight` (decision `173cd5f`) via the new joint tier x terrain 9-cell maximin (eval `8997234`); the R19 profile regressed to worst -852 under the RULING-9 currency. Battery + fence green. Unblocks the watched boost_military flip.
-
-- **2026-08-24 (latest)** — **RULING-9 one-currency EV redesign ACHIEVED + shipped** (decision `f8b97a6`, agent `34152cd`, eval `04c7414`): progress-diluted heal value_per_hp (triage form) + MARGINAL self-risk price (flat NET_RISK_MULT deleted) + kite dead-zone fall-through + our_dps=0 focus gate + heal-incumbency dead-band. All 6 gates + 1537 workspace + fence green. Full detail in §3 Phase 4.5.
-
+- **2026-08-24 (latest)** — **RULING-9 one-currency EV redesign ACHIEVED + shipped** (decision `f8b97a6`, agent `34152cd`, eval `04c7414`): progress-diluted heal value_per_hp (triage form) + MARGINAL self-risk price (flat NET_RISK_MULT deleted) + kite dead-zone fall-through + our_dps=0 focus gate + heal-incumbency dead-band. All 6 gates + 1537 workspace + fence green. Full detail in ADR 0025 Design deltas A.
 - **2026-08-23 (late)** — **ADR 0041 P0–P3 consumer side complete, dark, shipped** (`00cf29b552ff`): EV axis + per-tier winnability (decision `04cc020`), supply table/clamp (`d217a3d`), persisted tier + required_boosts (`78e70b8`), apply wire (`2fd8253`+`82f2e83` — queue/labs/AwaitBoost/renew-skip). 7 RED-verified pins; fence ×2; byte-identical live at T0. `boost_military` = the activation switch.
 - **2026-08-23 (late)** — **Live validation PASS** (CPU 34/140, bucket full, 0 panics, seg ~18%, INTEGRITY scrubs = benign REC-009b backstop) + **Phase 5 P0a landed dark** (decision `04cc020`): BoostTier EV axis, per-tier ceiling assessment, T-TOWER-3 proof green, 3 RED-verified pins; not separately deployed (byte-identical at T0). ADR 0041-P2 WFV bump obviated by 0047 (design delta).
 - **2026-08-23 (late)** — **Phase 4 / WS-4 R19 re-tune DONE + shipped** (`9913ef980109`): `chokepoint_comp_basket` + maximin tournament (eval `940f739`); `open_combat` → a0-i3-d14-K3-s2 (decision `a7acb0b` — only cross-regime-positive config; old profile NEGATIVE vs untuned default, 0026a rejection reversed-with-reconciliation); 0031a/b re-swept at w_energy=1.0 → defaults confirmed, margin knobs inert (0031b §5); S4-TUNE/FU#4-presets/0033-kite-retune closed defaults-confirmed (`s4_weights_retune`, eval `bbc1184`); 0033 corpus-wide fence promoted (rover-eval `ab3e818`, spread==0/21, H 0.9625); L6c + value_e re-tagged →P6 (consumer/bed-gated). Process: run fences in RELEASE (18s vs 385s).
 - **2026-08-23 (late)** — **WvC-2 code-complete + shipped** (hot swap `1fb233b30416`): T-POS-5 exit-tile surcharge (decision `3d451ac`), T-DEF-1 rampart cover via `ThreatField::build_covered` (`47a163a` — TAKEN/EV-risk/survival-veto/traversal all inherit the redirect from one point), T-DEF-5 predictive safe-mode arm (`8502af9`); 0037-T3 emission closed by ruling (contradicts the ADR's no-new-aggression seam + D27), 0028 lane-contention re-routed to the harness closeout. Fence green ×2 this session.
 - **2026-08-23 (late)** — **WvC-1 code-complete, all 7 items**: T-HEAL-3a winnability inputs (`c5a06c8`), defender spawn-readiness wired + tower half deleted as U-TOWER-superseded (`81ee72f`), S5-CAP empire-scaled cap + defense surge (`7a87df5` → shared kernel `13112e6`), 0035 FU2 closed (veto attempt `4d044be` reverted `4d186d8` after 2 eval-bed regressions — the probe bounce is load-bearing; final = stall-aware give-up clock + engaged-gated stall streaks, agent `0c57c45`), 0026 L8 observed-owner coordination (`0455298`), 0034 D6c renewable-rally bias (`e6aa3ce`), 0028 K3/K4 resolved as-built (ADR rewritten). Ship + live-watch pending.
 - **2026-08-23** — **Operator reorder: military first.** Boost pipeline (largest NEW build) demoted behind the military completion waves (WvC-1 correctness+wiring, WvC-2 defensive features) and the P4 re-tune — finish partial machinery + kill the bug farm before feeding it boosts. WvC promoted out of the old Phase-6 into Phase 3; NOW = WvC-1.
-
 - **2026-08-23** — **WS-6 SHIPPED + CLOSED: ADR 0047 live at WFV 29** (msgpack struct-map stream + foreman Plan shrink `5c89f30` — road_network deleted, build_order on-demand; plans ~70% smaller). The LAST format-transition reset paid; additive changes are now reset-free. Live: 2.8% of segment budget mid-rebuild (proj. 12–14% full), named decode FASTER than old bincode. Costs recorded: wasm +71% (48.5% of code limit). Operator constraint recorded: plans are durable state, never recompute-after-reset. ws-6 doc deleted.
-
 - **2026-08-23** — **ADR 0047 → DECIDED**: whole-stream msgpack struct-map, ONE encoding (operator simplicity steer, confirmed by round-2 data: 30.4% of the real 400KB segment budget; RoomPlanData=86% of bytes and shape-stable; real-world named round-trip works; sectioning rejected as unnecessary). WS-6 remaining: the game_loop swap (one WFV bump, batched).
-
 - **2026-08-23** — **Phase 2 (triage) CLOSED**: final sweep phase-tagged every §6 line (P3/P4/P5/P6/WvC/HARNESS/WATCH); 0005 containment ratified as-shipped → Closed; ws-triage doc deleted. WS-6 (0047 benches) is NOW.
-
 - **2026-08-23** — **WS-1 CLOSED: C1–C5 ALL PASS.** The pipeline claimed **W7N47** (dist 4, above-ring, score 0.835) — 8 rooms; RemoteBuildMission constructing. L2 ruled OBVIATED by 0046's bounded-retry machinery. 0046→Live, 0038→Closed. WS-1 doc deleted per lifecycle.
-
 - **2026-08-23** — Triage decisions ratified (operator): 0030 Withdrawn (tempo→0031), 0025a residual documented-mitigated, 0039 P2–P4→harness lane, 0020 S5–S7 kept-scheduled (after Phase 4); **0047 pulled forward as Phase 2.5 (WS-6)**. `search_radius` 1→2 shipped + live-reconciled (wasm `bd6eebcc0f56`, hot swap, pattern proven twice). UNOWNED-4 closed.
-
 - **2026-08-23** — **Wave B SHIPPED to live MMO** (hot swap `0d9524f2668f` per RULING-8; vm_starts 2749, missions persisted, 0 deser). RULING-8 recorded (deploy-to-live batched; B-1 demoted); ADR 0047 drafted (reset-tolerant serialization).
-
-- **2026-08-24 (latest)** — **Phase 4.5 item 4 (parity H0): FIXED** — `is_combat_targetable` in
-- **2026-08-24 (item 5 partial)** — drain delivery honesty + heal-premium rebalance shipped
-- **2026-08-24 (item 5 COMPLETE)** — the threat/traversal unification cluster is CLOSED both
-  sides: sim field = shared build_room_threat_field + M2 (agent `4e68de4`), plateau tie-break
-  (decision `71c6e0a`), drain-aware placement (eval `1736ea6`), live mover threat overlay
-  (H3/M13: RoomThreatCosts + ThreatOverlayCostSource, rover `fae493b` merge_from) and room-correct
-  decide callback (M4/M6) — super `1abcc8f`. 1537 + fence + wasm green.
-  (decision `acf3600`, agent `bed5f0e`); the sim-field delegation + M2 + live mover threat layer
-  DEFERRED into a drain-rework sub-batch with four precisely-traced findings (form-into-the-nest
-  tank bleed is pre-existing and invariant; the drain canary passes on remnant luck). SQ_DEBUG
-  trace instrumentation landed. 1537 + fence + wasm green.
-  squad_combat.rs: the execution-side structure list now includes neutral constructed walls with
-  hits (both the cached arm and the live find fallback), so kernel-chosen wall breaches resolve
-  instead of silently dropping. H5/M0 also closed (item-2 batch). Parity report triage updated;
-  no native pin (JS types) — live-verify on the next neutral-wall breach. Master replay index
-  (all six lenses) generated + delivered.
-
-- **2026-08-24 (later)** — **Phase 4.5 item 2: border crossing — ACHIEVED** (decision `b0b7ea0`,
-  agent `1fbff1b`, eval `8dab84d`; root-caused live from the operator's replay observation "one
-  creep enters and everything outside the room stalls"): bloc crossing gate + full-roster views
-  (parity H5) + fight-room kernel anchoring (the centroid-room V-1 aliasing) + room-gated mover
-  anchor + exit-edge pricing + room-local tower assessment + rout-to-rally + state decay + a
-  latent twin_room_siege fixture bug. **Every fielding gauntlet rung now KILLS** (L1
-  open/choke/choke-multi + border g1×2/g2 — pinned). Replay viewer regenerated + sent; 1537
-  workspace + fence + wasm green. Item 1's choke trickle-in tail closed by the same batch.
-- **2026-08-24** — **Phase 4.5 item 1: cohesion under focused fire — open-layout bar ACHIEVED**
-  (decision `be725c9` + agent `e3660d8` + eval `17d2d74`): four composing EV-kernel fixes
-  (deliverable heal, siege risk-currency floor + ×4 uncovered steepener, lockstep healer
-  advertising, evidence-gated urgent heal triage). L1-open@T3 → Killed/151 ticks/zero losses
-  (was timeout-freeze → 611-tick kill with 5 deaths). Floor pin upgraded; permanent `probe_rung`
-  trace instrument; healers-first-sort attempt reverted on the oscillation gate (documented in
-  kernel.rs). 1537 workspace + fence + wasm green. Remaining item-1 tail: choke trickle-in.
-- **2026-08-23 (later)** — **WS-VAL phase closed out**: MMO hot swap tail-verified clean (new
-  `tail.rs --server` reads `.screeps.yaml` directly — no more env-token dance); found work swept
-  into §3 **Phase 4.5** (the defect program, queued next per operator), §6 refreshed
-  (0010/0041/0025/0023 were stale vs shipped code), §8 BoostQueue row closed.
-- **2026-08-23 (late)** — **WS-VAL corpus landed**: engine-exact stronghold gauntlet + border
-  gauntlet + boosted self-play lane; boost-blind seam fixed live+sim (shared `effective_output`,
-  heal_power un-latched); ultracode parity audit (43 findings; H4/H7/M15/M16/M19 fixed, rest
-  triaged in `docs/reviews/live-sim-parity-audit-2026-08-23.md`); pre-existing `screeps-prospector`
-  breakage fixed (`Plan.build_order` → `compute_build_order`). 1536 workspace tests + fence + wasm
-  green. Honest baseline tables in the ws doc; tactical follow-ups queued (cohesion under fire is
-  the binding defect).
+- **2026-08-24 (latest)** — **Phase 4.5 item 4 (parity H0): FIXED** — `is_combat_targetable` in squad_combat.rs: the execution-side structure list now includes neutral constructed walls with hits (both the cached arm and the live find fallback), so kernel-chosen wall breaches resolve instead of silently dropping. H5/M0 also closed (item-2 batch). Parity report triage updated; no native pin (JS types) — live-verify on the next neutral-wall breach. Master replay index (all six lenses) generated + delivered.
+- **2026-08-24 (item 5 partial)** — drain delivery honesty + heal-premium rebalance shipped (decision `acf3600`, agent `bed5f0e`); the sim-field delegation + M2 + live mover threat layer DEFERRED into a drain-rework sub-batch with four precisely-traced findings (form-into-the-nest tank bleed is pre-existing and invariant; the drain canary passes on remnant luck). SQ_DEBUG trace instrumentation landed. 1537 + fence + wasm green.
+- **2026-08-24 (item 5 COMPLETE)** — the threat/traversal unification cluster is CLOSED both sides: sim field = shared build_room_threat_field + M2 (agent `4e68de4`), plateau tie-break (decision `71c6e0a`), drain-aware placement (eval `1736ea6`), live mover threat overlay (H3/M13: RoomThreatCosts + ThreatOverlayCostSource, rover `fae493b` merge_from) and room-correct decide callback (M4/M6) — super `1abcc8f`. 1537 + fence + wasm green.
+- **2026-08-24 (later)** — **Phase 4.5 item 2: border crossing — ACHIEVED** (decision `b0b7ea0`, agent `1fbff1b`, eval `8dab84d`; root-caused live from the operator's replay observation "one creep enters and everything outside the room stalls"): bloc crossing gate + full-roster views (parity H5) + fight-room kernel anchoring (the centroid-room V-1 aliasing) + room-gated mover anchor + exit-edge pricing + room-local tower assessment + rout-to-rally + state decay + a latent twin_room_siege fixture bug. **Every fielding gauntlet rung now KILLS** (L1 open/choke/choke-multi + border g1×2/g2 — pinned). Replay viewer regenerated + sent; 1537 workspace + fence + wasm green. Item 1's choke trickle-in tail closed by the same batch.
+- **2026-08-24** — **Phase 4.5 item 1: cohesion under focused fire — open-layout bar ACHIEVED** (decision `be725c9` + agent `e3660d8` + eval `17d2d74`): four composing EV-kernel fixes (deliverable heal, siege risk-currency floor + ×4 uncovered steepener [later deleted by RULING-9 — only the `g_us.max(unit)` floor survives], lockstep healer advertising, evidence-gated urgent heal triage). L1-open@T3 → Killed/151 ticks/zero losses (was timeout-freeze → 611-tick kill with 5 deaths). Floor pin upgraded; permanent `probe_rung` trace instrument; healers-first-sort attempt reverted on the oscillation gate (documented in kernel.rs). 1537 workspace + fence + wasm green. Remaining item-1 tail: choke trickle-in.
+- **2026-08-23 (later)** — **WS-VAL phase closed out**: MMO hot swap tail-verified clean (new `tail.rs --server` reads `.screeps.yaml` directly — no more env-token dance); found work swept into §3 **Phase 4.5** (the defect program, queued next per operator), §6 refreshed (0010/0041/0025/0023 were stale vs shipped code), §8 BoostQueue row closed.
+- **2026-08-23 (late)** — **WS-VAL corpus landed**: engine-exact stronghold gauntlet + border gauntlet + boosted self-play lane; boost-blind seam fixed live+sim (shared `effective_output`, heal_power un-latched); ultracode parity audit (43 findings; H4/H7/M15/M16/M19 fixed, rest triaged in `docs/reviews/live-sim-parity-audit-2026-08-23.md`); pre-existing `screeps-prospector` breakage fixed (`Plan.build_order` → `compute_build_order`). 1536 workspace tests + fence + wasm green. Honest baseline tables in the ws doc (now ADR 0023a); tactical follow-ups queued (cohesion under fire is the binding defect).
 - **2026-08-23** — **Wave B CODE-COMPLETE**: D9/D10 landed (`1a85a57` + rover `850a06b` — shared engaged ladder now ONE implementation in rover, wired live; flee uses partial paths); T1/T2 ruled retained-by-design. 15 pins total. The 2026-07-09 review Tier −1 work list is closed; soak pending B-1. World checks 1–3 healthy.
-
 - **2026-08-22 (late)** — Wave B 6/8: D2/D3 safe-mode (`8fa0c60`), D4/D5/D6 roster churn (`be5ce24`), D28 vacuous clear (`b26eba4` + decision/eval submodules). 13 RED-verified pins; fence green; ADR 0027 amended. D9/D10 + 0037 decision remain. WS-1 observation healthy through 3 checks (claim pipeline live, C2 signature absent).
-
 - **2026-08-22** — **WFV 28 DEPLOYED TO LIVE MMO** (`77dc9cc`, wasm `d9b748497e4a`; operator inverted soak order, MMO-first). Loud reset clean: 0 panics, CPU 52→37/140, bucket 10000. `reset.features` one-shot built + fired + verified — live config at compiled-default parity (offense back ON; Wave A fixes in-artifact). Closes UNOWNED-7. Observation window open (C1–C5).
 - **2026-08-22** — Completion roadmap (Phases 0–6) recorded in §3; §1 updated to MMO-first.
-
 - **2026-08-22** — **Design/implementation split.** All 56 ADRs rewritten as pure end-state designs; status moved here and to `../implementation/`. Status vocabulary reduced to Decided/Draft/Superseded/Withdrawn (+ note types). Closes CHORE-1 structurally. Adversarial verify caught 4 design-loss regressions and 19 lesser ones, all remediated and re-verified. Rollback tag: `pre-doc-split`.
 - **2026-08-22** — Full ADR-corpus reconciliation (56 verified, 29 drifted); this tracker created; rulings 1–7 recorded.
 - **2026-08-22** — Repo tie-off: ADR 0046 merged (WFV 28), working tree emptied, all branches/worktrees removed, master + 49 submodule commits pushed, ADR 0044a renumbered, 0038/0042 headers fixed.

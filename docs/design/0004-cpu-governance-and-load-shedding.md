@@ -143,3 +143,24 @@ The seam is the **`CpuGovernor` resource read + the pathfinding facade**; the in
   private server's ≈82/tick refill). Whether that early Critical is desired, and whether the
   100-tick trend window is the right horizon, is the Phase C decision on the run evidence; the
   constants are unchanged here.
+- **Calibration run on evidence (WS-CLOSE Phase C, `runs/pressure-critical-hover-3d0e998-20260907-200026`,
+  warm 10-room private world, own cost ~75 cpu).** The tiers fired exactly as designed — normal→conserve
+  at bucket 6945 / trend −10, →critical at 3128 / −54 (mission pool 20000→10000→5000; movement pool /4,
+  then the 2000 floor, then 0), critical→conserve→normal on the recovery leg at 1764 / 4195 in the
+  expected order; creeps 372→412 through the hold (progress continued). **Constants CONFIRMED, no diff.**
+  The shipped scenario JSONs are the fresh-colony schedule (own ~18 cpu): re-derive `ms` per world
+  (warm: ramp ~65, hover ~30). The run's three VM kills at bucket≈0 and ONE corrupt-gzip world reset are
+  ADR 0047's F11, not a governor finding.
+- **F12 — normal-mode pathfinding headroom is FINITE (RULING-11's second wedge arm, `8c3cece`).**
+  `MovementUpdateSystem` hands the rover a headroom: the CPU that must remain under the movement cap
+  before a `find_route` may start. Normal mode (bucket below `pathing.bucket_burst_threshold`, default
+  9500) set it EQUAL to the cap — "never start a search" — so the moment the live MMO bucket dipped to
+  9487 every creep without a cached path failed on the budget arm (seg-57 `move_failed_budget` 29 with
+  the ops pool untouched; the W13N52 lane 4427→1039, storage 1275→0, creeps 117→98): the same freeze as
+  ADR 0033's ops-pool wedge on a different arm. Now `pathfinding_headroom_for(normal_mode, movement_cap)`
+  = `min(NORMAL_MODE_PATHFINDING_HEADROOM = 20, cap − 1)` in normal mode (searches continue at reduced
+  throughput and can never be forbidden outright) and the 80-CPU one-pathfind headroom in burst mode;
+  pinned (`normal_mode_headroom_is_finite_and_strictly_below_the_cap`). This is the §Decision
+  `MIN_PATHFIND_OPS` intent applied to the headroom arm: a creep never fully freezes for want of a
+  search. The interim live mitigation (`bucket_burst_threshold` 9500→2000, tick 5492700) was reverted to
+  9500 after it drained the bucket — the code fix is the answer, not the flip.
