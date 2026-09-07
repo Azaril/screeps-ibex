@@ -238,3 +238,31 @@ decision differs from the recommendation, the "delta" column says why.
 3. **Which tier first (the "T1 first" cost/benefit).** The prompt says T1 first — but T1 boosts are a *weaker* multiplier for *less* mineral refinement (the T3 catalyzed ×4 is the decisive one; T1 is a smaller bump). Do we ladder T0→T1→T2→T3 (gradual, cheaper stock) or T0→T3 (only the decisive tier, simpler stock, skip the marginal middle)? Recommendation: **T0→T3 only for v2** (the middle tiers rarely pay for their extra lab chain-time — ADR 0010 §arithmetic; the ×4 is what unblocks the blocked targets); expose the full ladder only if the sweep (P4) shows T1/T2 EV-wins on some bed.
 4. **The boost cost currency.** `target_value` is energy-equivalent (`value_e`, `objective_value.rs`); the boost mineral cost needs a mineral→energy exchange rate to enter `cost(C)` on the same axis. Use the market price of the compound (ADR 0012's price feed) or a fixed conservative constant? Recommendation: a **fixed conservative `BOOST_MINERAL_VALUE_E` constant** for v2 (the market-priced version is an ADR-0012-coupled follow-up), tuned in P4.
 5. **Defense-boost latency.** ADR 0010 §4 keeps a *pre-loaded defense-boost lab* so the first defense wave boosts with zero haul latency. Is a boosted *defense* comp in scope for v2, or is v2 offense-only (defense stays T0-immediate, the current always-field floor)? Recommendation: **offense-first**; defense stays T0-immediate and gains the boost-upgrade path only once the pre-loaded-lab supply (ADR 0010 L1) is proven, so defense responsiveness is never traded for a boost.
+
+---
+
+## Design deltas (2026-09-07)
+
+- **§7 P3 validated offline — the lifecycle half (WS-CLOSE Phase B, ADR 0028 harness).**
+  `screeps-combat-eval/src/harness/lifecycle.rs::run_boosted_forming(BoostedFormingScenario)` mirrors
+  the as-built P3 state machine as harness state, in the live tick order: the PRODUCER (`SquadManager`
+  re-files each boosted-tier member's `remaining_for_parts` into the ephemeral `BoostQueue` while it is
+  at home, inside the age window, with unboosted parts) → the FULFILLER (`LabsMission::service_boosts`:
+  one lab per distinct compound in file order, READY only when the lab can hold the creep's full
+  30/part from the home's stock) → the CONSUMER (`AwaitBoost::tick`: feature/T0 release, fully-boosted
+  release, the age deadline, else walk to the ready lab and apply one compound per visit). The harness
+  does not depend on the bot crate: `AWAIT_BOOST_DEADLINE` (300) is MIRRORED (`pub(crate)` in
+  `jobs/squad_combat.rs` — the mirror carries a MUST-mirror note), the stock is a plain ledger, and the
+  boost tile is a walk distance. Pins (each RED-verified by flipping the fixture):
+  `boosted_roster_routes_to_the_labs_and_departs_boosted` (T3 duo, stock = `required_boosts()` →
+  departs fully boosted, one `boostCreep` per family compound, a few ticks after its T0 twin);
+  `stock_loss_mid_await_boost_falls_through_at_the_deadline` (stock lost mid-`AwaitBoost` → both members
+  depart unboosted at the last member's `AWAIT_BOOST_DEADLINE`, no hold — the EP-4.5 bounded contract)
+  with its RED twin `without_the_deadline_a_stock_loss_holds_the_roster_forever`;
+  `t0_rosters_never_touch_the_boost_stage` (no request, no visit, byte-identical to `run_forming`);
+  `boost_stage_is_inert_while_boost_military_is_off`; `boosted_forming_is_deterministic`.
+- **The "kills a towered core the unboosted comp cannot" half of the P3 validate line** is the engine
+  gate `t3_twin_decisively_beats_unboosted_twin` (`screeps-combat-eval/src/tournament.rs`) — the bed
+  above covers forms → routes to the labs → boosts → deploys; the two together are the §7 P3 proof.
+  Not covered offline: the transfer-system haul latency into the lab (modelled as "stock ⇒ loaded"),
+  the plan boost-tile geometry, and the one-lab-per-compound overflow beyond six families.

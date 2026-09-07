@@ -37,6 +37,11 @@ pub const DESER_FAILURE_MARKERS: &[&str] =
 /// `(ERROR) <target>: ...` — the fern console format (logging.rs:32).
 pub const ERROR_LOG_PREFIX: &str = "(ERROR)";
 
+/// screeps-ibex/src/eval_parity.rs `PV1_MARKER` — the H5 parity driver's
+/// per-tick creep/roster line (`(INFO) screeps_ibex::eval_parity: PV1 {...}`).
+/// The parity capture parses everything after this marker as JSON.
+pub const PV1_MARKER: &str = "PV1 ";
+
 /// The bot's live-stats segment (segments.rs, `LIVE_STATS_SEGMENT`).
 pub const STATS_SEGMENT: u8 = 99;
 
@@ -126,6 +131,8 @@ mod tests {
             &["Failed deserialization:", "Failed to decode stats history"]
         );
         assert_eq!(ERROR_LOG_PREFIX, "(ERROR)");
+        // eval_parity.rs PV1_MARKER — the H5 driver's per-tick line.
+        assert_eq!(PV1_MARKER, "PV1 ");
         // segments.rs LIVE_STATS_SEGMENT — the seg-99 live-stats JSON.
         assert_eq!(STATS_SEGMENT, 99);
         // segments.rs METRICS_SEGMENT — the seg-57 metrics block.

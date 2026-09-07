@@ -109,3 +109,19 @@ ADR 0028 (war lifecycle / rally kernels — the `step_toward` FSM repro), 0031/0
 tournament/exploitability), 0034/0035 (rally/travel/convergence, engage cascade), 0025a (terrain import).
 Formation fix commit `db4ad3c` (transit-room hold). Rover exoneration test
 `screeps-rover/tests/border_oscillation.rs`.
+
+## Disposition (2026-09-07 — WS-CLOSE decision D7, recorded by the H5 lane)
+
+P1 landed earlier; **P2–P4 are re-parked as design items, not closed by H5.** The tracker (2026-08-23)
+had folded them into the harness lane pending the H5 sim-vs-server parity oracle; that oracle now
+exists (ADR 0006 design delta 2026-09-07: `screeps-combat-engine::parity` + `screeps-ibex-eval parity
+capture|report|nightly`) and it supplies exactly the piece §0's "the sim is NOT a toy" claim was
+missing — a measured fidelity bound (layer-1 byte-exact vectors for the engine, a layer-2 divergence
+budget for the fielded tactics from first contact). None of P2 (formation-cohesion kernel extraction
+into `screeps-combat-decision::formation`), P3 (one engine-backed lead-up loop: size → spawn → rally →
+travel → commit) or P4 (tournament-driven render corpus) is a harness deliverable: P2 is a decision-
+crate extraction with a live-bot refactor risk (§4), P3/P4 are sim-driver work. They carry no
+dependency on H5 any more and no schedule; re-activate on their own merits when cross-room formation
+behaviour needs an offline repro. Tracker line to write: "`0039` — P1 landed; P2–P4 **re-parked**
+(2026-09-07, D7): H5 supplies the fidelity bound §0 assumed; P2 = decision-crate extraction item,
+P3/P4 unscheduled sim-driver work; no harness dependency remains."

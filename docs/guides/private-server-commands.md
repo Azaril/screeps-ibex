@@ -189,7 +189,9 @@ scoutable. Re-verify: ghosts → 0 and a frozen keeper changes position.
 4. Watch: `console --user ibex --grep "Dismantle|Secure|Squad|breach|War" --seconds 120`
    and the seg-57 cohesion canary. **Pass = a `Dismantle` objective is produced, a
    cohesive squad travels in, breaches the rampart, and the core is CLEARED**, with
-   defense not starved under `MAX_CONCURRENT_SQUADS` (4).
+   defense not starved under the empire-scaled cap (`max_concurrent_squads(owned_rooms)`,
+   2..8, plus `DEFENSE_SURGE_SQUADS` for defense — `claim_pacing.rs`; the old flat
+   `MAX_CONCURRENT_SQUADS (4)` wording was stale since S5-CAP, WvC-1).
 5. Off-ramp / reset to peace: remove the target or `Memory._features.military.offense=false`.
 
 ## Sources

@@ -226,9 +226,6 @@ impl Mission for TowerMission {
             return Ok(MissionResult::Running);
         }
 
-        // Collect our tower positions for damage calculations.
-        let tower_positions: Vec<Position> = my_towers.iter().map(|t| t.pos()).collect();
-
         // Analyze hostile creeps for coordinated targeting.
         let hostile_creeps = creeps.hostile();
 
@@ -322,155 +319,60 @@ impl Mission for TowerMission {
         let confirmed_drainers = self.get_confirmed_drainers();
 
         if !hostile_creeps.is_empty() {
-            // ─── U-TOWER: combined squad+tower fire when a squad is defending this room ───
-            // Look up the defending squad's shared focus (id + the DPS the squad lands on it). When one
-            // exists, the pure `decide_towers` kernel sizes the tower commit to close the REMAINING heal
-            // gap after the squad's own fire (combined fire beats either alone), redirecting the freed
-            // towers to the next-highest threat and holding rather than over-killing. With NO defending
-            // squad the tower keeps its existing drain-sawtooth / bounded-probe / chip-fire path below
-            // (the passive-base defensive path, unchanged).
+            // ─── U-TOWER: the ONE tower-firing decision, squad or no squad (parity M17, 2026-09-07) ───
+            // The pure `decide_towers` kernel picks every tower's target: with a defending squad's
+            // shared focus (id + the DPS the squad lands on it) it sizes the tower commit to close the
+            // REMAINING heal gap after the squad's own fire (combined fire beats either alone) and
+            // redirects the freed towers to the next-highest threat; with NO squad (`squad_focus ==
+            // None`, the common passive-base case) it is pure kernel target selection — the same
+            // `threat_value` order the squad ranks by (ATTACK/RANGED/HEAL/WORK/CLAIM), gap-sized
+            // minimal commit (no N×600 dogpile into a scout), hostile-rampart exclusion, and hold-fire
+            // when nothing is killable (`full_tower_damage <= heal` — the out-healed drainer bait).
+            // The old forked no-squad heuristic (dangerous-part flag then min-hits, all towers on one
+            // target, the near-edge `is_likely_tower_drain` guess) is DELETED: the kernel's hold-fire
+            // subsumes it, and the sim only ever validated the kernel. This mission keeps ONLY the
+            // game→DTO seam, the persisted drain-sawtooth tracker + bounded probe (fed in as
+            // `conserve`), and the executor below.
             let squad_focus = find_squad_focus_for_room(system_data.squad_contexts, system_data.creep_owner, system_data.entities, room_name);
 
-            if let Some(sf) = squad_focus {
-                // Conserve against confirmed drainers EXCEPT ones under an active bounded probe (those we
-                // deliberately test-fire this tick). Same semantics as the no-squad path's probe budget.
-                let conserve: std::collections::HashSet<RawObjectId> = confirmed_drainers
-                    .iter()
-                    .filter(|id| !engaged_ids.contains(id))
-                    .map(|id| RawObjectId::from(*id))
-                    .collect();
-
-                let tower_dtos: Vec<crate::combat::tower_fire::TowerDto> = my_towers
-                    .iter()
-                    .map(|t| crate::combat::tower_fire::TowerDto {
-                        pos: t.pos(),
-                        energy: t.store().get_used_capacity(Some(ResourceType::Energy)),
-                    })
-                    .collect();
-                let hostile_dtos: Vec<_> = hostile_creeps.iter().map(crate::jobs::squad_combat::creep_to_dto).collect();
-                let structure_dtos: Vec<_> = structures.all().iter().map(crate::jobs::squad_combat::structure_to_dto).collect();
-
-                let decision = crate::combat::tower_fire::decide_towers(&tower_dtos, &hostile_dtos, &structure_dtos, Some(sf), &conserve);
-
-                for order in &decision.orders {
-                    let Some(tower) = my_towers.get(order.tower_idx) else { continue };
-                    let Some(target) = order.target else { continue };
-                    // Re-resolve the target creep by its STABLE id (never the priced position, which can be
-                    // stale by a tick — the tower reads LAST tick's focus, see the tick-order note above).
-                    let target_id: ObjectId<Creep> = target.id.into();
-                    if let Some(creep) = target_id.resolve() {
-                        let _ = tower.attack(&creep);
-                        // Record a probe volley against a drainer under test so next tick judges the result.
-                        if engaged_ids.contains(&target_id) {
-                            if let Some(tracker) = self.drain_trackers.get_mut(&target_id) {
-                                tracker.probe_fired = true;
-                            }
-                        }
-                    }
-                }
-
-                return Ok(MissionResult::Running);
-            }
-
-            // ─── No defending squad: the passive-base defensive path (drain-sawtooth / probe / chip) ───
-            // Per-hostile sustain for the net-damage gate — the KERNEL's `heal_reaching` over the
-            // same DTOs the squad path prices with (parity H8, 2026-08-24): every hostile healer
-            // in range of the candidate + hostile towers, boost-aware. The old own-body-only sum
-            // read a HEAL-less tank at 0 sustain while its adjacent healer kept it alive — the
-            // canonical mid-room drainer bait (never edge-confirmed by the sawtooth tracker), and
-            // the towers bled at it indefinitely.
-            let hostile_dtos: Vec<_> = hostile_creeps.iter().map(crate::jobs::squad_combat::creep_to_dto).collect();
-            let structure_dtos: Vec<_> = structures.all().iter().map(crate::jobs::squad_combat::structure_to_dto).collect();
-            let hostile_infos: Vec<_> = hostile_creeps
+            // Conserve against confirmed drainers EXCEPT ones under an active bounded probe (those we
+            // deliberately test-fire this tick under the probe budget).
+            let conserve: std::collections::HashSet<RawObjectId> = confirmed_drainers
                 .iter()
-                .map(|c| {
-                    let heal_per_tick = crate::combat::heal_reaching(&hostile_dtos, &structure_dtos, c.pos()) as f32;
-                    let is_confirmed_drainer = c.try_id().map(|id| confirmed_drainers.contains(&id)).unwrap_or(false);
-                    (c, heal_per_tick, is_confirmed_drainer)
-                })
+                .filter(|id| !engaged_ids.contains(id))
+                .map(|id| RawObjectId::from(*id))
                 .collect();
 
-            // Find the best target: prefer targets where we can do net positive damage.
-            // Skip confirmed drainers -- they're wasting our energy on purpose.
-            let best_target = hostile_infos
+            let tower_dtos: Vec<crate::combat::tower_fire::TowerDto> = my_towers
                 .iter()
-                .filter(|(_, _, is_drainer)| !is_drainer)
-                .filter(|(c, heal, _)| {
-                    // Only fire if we can do net damage (overcome healing).
-                    let total_damage = crate::military::damage::total_tower_damage(&tower_positions, c.pos());
-                    total_damage > *heal
+                .map(|t| crate::combat::tower_fire::TowerDto {
+                    pos: t.pos(),
+                    energy: t.store().get_used_capacity(Some(ResourceType::Energy)),
                 })
-                .min_by(|(a, _, _), (b, _, _)| {
-                    // Prefer dangerous creeps first. CLAIM counts (D27/T-DEF-4 half): a controller
-                    // attacker/declaimer is a first-class threat — pre-fix it sorted LAST (behind the
-                    // hits tie-break) despite being able to block upgrades / unclaim the room.
-                    let a_dangerous = a
-                        .body()
-                        .iter()
-                        .any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Work | Part::Claim));
-                    let b_dangerous = b
-                        .body()
-                        .iter()
-                        .any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Work | Part::Claim));
+                .collect();
+            let hostile_dtos: Vec<_> = hostile_creeps.iter().map(crate::jobs::squad_combat::creep_to_dto).collect();
+            let structure_dtos: Vec<_> = structures.all().iter().map(crate::jobs::squad_combat::structure_to_dto).collect();
 
-                    match (a_dangerous, b_dangerous) {
-                        (true, false) => std::cmp::Ordering::Less,
-                        (false, true) => std::cmp::Ordering::Greater,
-                        _ => a.hits().cmp(&b.hits()),
-                    }
-                })
-                .map(|(c, _, _)| *c);
+            let decision = crate::combat::tower_fire::decide_towers(&tower_dtos, &hostile_dtos, &structure_dtos, squad_focus, &conserve);
 
-            // Detect tower drain: hostile at room edge that can heal through all tower damage,
-            // OR confirmed drainer based on enter/exit tracking.
-            let is_drain = best_target.is_none()
-                && hostile_infos.iter().any(|(c, heal, is_drainer)| {
-                    *is_drainer || crate::military::damage::is_likely_tower_drain(c.pos(), *heal, &tower_positions)
-                });
-
-            if is_drain {
-                // Tower drain detected: conserve energy. Fire at non-drainers
-                // normally; fire at a confirmed drainer only while it is under an
-                // active bounded probe (the budgeted test for a dead healer).
-                let non_drainer_target = hostile_infos
-                    .iter()
-                    .filter(|(_, _, is_drainer)| !is_drainer)
-                    .min_by_key(|(c, _, _)| c.hits())
-                    .map(|(c, _, _)| *c);
-
-                let probe_drainer = hostile_infos
-                    .iter()
-                    .filter(|(c, _, is_drainer)| *is_drainer && c.try_id().map(|id| engaged_ids.contains(&id)).unwrap_or(false))
-                    .min_by_key(|(c, _, _)| c.hits())
-                    .map(|(c, _, _)| *c);
-
-                let target = non_drainer_target.or(probe_drainer);
-
-                if let Some(target) = target {
-                    for tower in &my_towers {
-                        let _ = tower.attack(target);
-                    }
-                    // Record a probe volley so next tick can judge the result.
-                    if let Some(tid) = target.try_id() {
-                        if engaged_ids.contains(&tid) {
-                            if let Some(tracker) = self.drain_trackers.get_mut(&tid) {
-                                tracker.probe_fired = true;
-                            }
+            for order in &decision.orders {
+                let Some(tower) = my_towers.get(order.tower_idx) else { continue };
+                let Some(target) = order.target else { continue };
+                // Re-resolve the target creep by its STABLE id (never the priced position, which can be
+                // stale by a tick — the tower reads LAST tick's focus, see the tick-order note below).
+                let target_id: ObjectId<Creep> = target.id.into();
+                if let Some(creep) = target_id.resolve() {
+                    let _ = tower.attack(&creep);
+                    // Record a probe volley against a drainer under test so next tick judges the result.
+                    if engaged_ids.contains(&target_id) {
+                        if let Some(tracker) = self.drain_trackers.get_mut(&target_id) {
+                            tracker.probe_fired = true;
                         }
                     }
                 }
-                // Otherwise, don't fire -- save energy against drainers.
-            } else if let Some(target) = best_target {
-                // Coordinated fire: all towers focus the same target.
-                for tower in &my_towers {
-                    let _ = tower.attack(target);
-                }
             }
-            // No net-positive target and not classified drain: HOLD FIRE (parity H8, 2026-08-24).
-            // The old fallback fired all towers at the weakest hostile with no net-damage check —
-            // exactly the out-healed dogpile the kernel refuses (pinned by
-            // `holds_fire_against_an_out_healed_drainer`). If it out-heals us, feeding it energy
-            // is the attacker's plan; ramparts + the defense mission are the answer, not chip.
+            // Towers with no order HOLD fire (no killable hostile / over-kill / conserve) — the kernel
+            // discipline (parity H8): feeding an out-healed drainer energy is the attacker's plan.
 
             return Ok(MissionResult::Running);
         }
@@ -530,7 +432,8 @@ impl Mission for TowerMission {
 /// `AttackController`, …) included, not just `DefendRoom` — because combined tower+squad fire helps an
 /// offensive squad fighting IN our room just as much as a defensive one (the towers finish what the
 /// squad's fire can't overcome). Returns `None` when no such squad has a live creep focus standing in
-/// this room (→ the tower keeps its own passive-base target selection).
+/// this room (→ `decide_towers` runs its `squad_focus == None` passive-base target selection — the
+/// same kernel, parity M17).
 ///
 /// TICK-ORDER LAG (documented, harmless by id-match): `TowerMission` runs in `RunMissionSystem`
 /// (`game_loop.rs`) BEFORE `SquadManagerSystem` writes THIS tick's focus, so the `focus_target_id` read
@@ -540,7 +443,7 @@ impl Mission for TowerMission {
 /// computed from the members' CURRENT positions/bodies, so the combined-fire sizing uses this tick's
 /// reality even though the *choice of focus* is one tick old — which is correct: the focus is stable
 /// across ticks in a sustained engagement, and a one-tick-stale focus on the first engagement tick
-/// simply defers combined fire by one tick (the tower's own path fires meanwhile).
+/// simply defers combined fire by one tick (the kernel's no-squad selection fires meanwhile).
 fn find_squad_focus_for_room(
     squad_contexts: &WriteStorage<SquadContext>,
     creep_owner: &ReadStorage<CreepOwner>,

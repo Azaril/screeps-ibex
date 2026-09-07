@@ -1263,6 +1263,11 @@ pub fn tick() {
             panic!("eval fault injection: deliberate panic at tick {}", game::time());
         }
 
+        // H5 parity-oracle scripted driver (ADR 0006 §B.4): inert unless
+        // `eval.parity_script` names a scenario. Runs BEFORE the systems so
+        // its guarded-sink records land in this tick's IntentRecorder digest.
+        crate::eval_parity::run(&mut env.world, &features);
+
         //
         // Execution — systems run sequentially with maintain() after each.
         //

@@ -107,3 +107,39 @@ The seam is the **`CpuGovernor` resource read + the pathfinding facade**; the in
 5. **Persist / warm the route + cost-matrix cache (depends on [0002](0002-serialization.md) IBEX-013):** persist `RoomRouteCache`; rely on 0002's dedicated cost-matrix segment + disjointness assert so seg-55 survives a reset; reduce cost-matrix ephemeral rebuild to change-event/TTL on the stable layers (IBEX-017/IBEX-038). **Validate:** force a reset, assert `load_cost_matrix_cache` is non-empty and the post-reset tick does **not** re-run the full route storm (bucket does not collapse on the reinstantiation tick).
 
 **Breaking-change labels:** Steps 1, 2 — **None**. Steps 3, 4 — **Behavioral** (load-shedding changes *when* optional work runs under pressure; no Memory/format change — no serialized field is added or reordered). Step 5 — **None** for this ADR (the persist/warm rides on [0002](0002-serialization.md)'s already-labelled cost-matrix-segment change; this ADR adds no new format break). No state drop is introduced by this pillar; it is non-format-breaking end-to-end, exactly so it can land early without a cutover.
+
+## Design deltas (2026-09-07)
+
+- **Thresholds are named constants, not config (resolves the Consequences "Tuning surface" wording
+  against EP-4.6).** The line "Set them in config so they are reproducible and diffable" is
+  superseded: calibratable bot-side thresholds are **named constants** in
+  `screeps-ibex/src/cpugovernor.rs` (`CRITICAL_BUCKET`, `CRITICAL_DRAIN`, `CONSERVE_BUCKET`,
+  `CONSERVE_DRAIN`) and the per-tier budgets in `pathfinderservice.rs` / `movementsystem.rs`
+  (`MIN_PATHFIND_OPS`), so the pure kernel `compute_tier` stays runtime-free and every calibration
+  lands as a reviewed diff with before/after evidence (EP-4.6; harness *gate* numbers remain the
+  one-reviewed-config case, EP-6.7). Reproducibility comes from the diff + the run citations, not
+  from a config file. The colony-health validation rule stands unchanged: a threshold change is
+  graded by `screeps-ibex-eval compare` against a same-SHA baseline so over-shed shows as a
+  regression.
+- **The calibration bed is data + a reader, not bot code.** The harder-burn ladder the P1.C5
+  ledger deferred lives as schema-v1 scenario files in `screeps-ibex-eval/scenarios/`
+  (`pressure-critical-hover`, `pressure-release`, `pressure-reset-under-critical`); each
+  `description` carries the burn arithmetic (private server limit 100 cpu/tick; empirical
+  break-even burn ≈ 90 ms from `runs/pressure-bbe86e0-20260611-060159`; ramp 220 ms × 62 ticks
+  → ≈1940, hover 96 ms → ≈ −6/tick, ≥ 300-tick recovery tail) and the one-knob retune rules, and
+  `report.rs` replays every shipped schedule through the same nominal drain model as a pin
+  (never pinned at 0, Critical by level reached, full recovery). The evidence reader is
+  `screeps-ibex-eval report --run <dir>` (seg-57 bucket / trend / tier / pool / creep / fault /
+  `vm_starts` series + tier transitions). The scheduler's `scheduler: shed N system(s)` line is
+  `debug!` under an `Info` logger, so **the seg-57 `governor.tier` + `pathing.*_ops_pool` series is
+  the Critical-shed evidence**, not the console.
+- **A bucket pinned at 0 is an artefact, not a finding.** With the bucket empty the engine caps the
+  tick at the per-tick limit and a non-sheddable synthetic burner above it kills every tick — a
+  restart loop no governor can prevent. The bed therefore hovers in `[~300, CRITICAL_BUCKET)`;
+  any zero-bucket sample invalidates the run for calibration purposes (shorten the ramp).
+- **Observation for the constants decision (not a decision).** With `CRITICAL_DRAIN = −10` applying
+  whenever `bucket < CONSERVE_BUCKET`, any monotone drain that reaches 4000 is already Critical by
+  trend; Conserve-by-level is reachable only on the way up (the recovery leg, ≈30 ticks at the
+  private server's ≈82/tick refill). Whether that early Critical is desired, and whether the
+  100-tick trend window is the right horizon, is the Phase C decision on the run evidence; the
+  constants are unchanged here.

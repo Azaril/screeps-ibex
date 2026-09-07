@@ -1,0 +1,8 @@
+{
+  "_note": "H5 layer-2 divergence budget (ADR 0006 B.4 layer 2). Seeded REPORT-ONLY on 2026-09-07 before any server report existed; re-seed from the first three `parity report` runs and promote to `gating` only by operator decision after the ADR 0015 earned-promotion count (7 consecutive green nightlies). Numbers are ceilings on the WORST per-frame delta from first contact.",
+  "v": 1,
+  "mode": "report-only",
+  "max_position_delta": 1,
+  "max_hits_delta": 50,
+  "max_death_tick_delta": 2
+}

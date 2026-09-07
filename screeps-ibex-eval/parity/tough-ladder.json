@@ -1,0 +1,26 @@
+{
+  "v": 1,
+  "scenario": "tough-ladder",
+  "room": "W9N7",
+  "owners": [ { "user": "ibex", "player": 0 }, { "user": "ibex-2", "player": 1 } ],
+  "ticks": 8,
+  "creeps": [
+    { "name": "pv-tough-ladder-0", "owner": 0, "x": 24, "y": 24, "parts": [ { "part": "attack" }, { "part": "move" } ] },
+    { "name": "pv-tough-ladder-1", "owner": 1, "x": 25, "y": 24, "parts": [ { "part": "tough", "boost": "GO" }, { "part": "tough", "boost": "GO" }, { "part": "move" } ] },
+    { "name": "pv-tough-ladder-2", "owner": 0, "x": 24, "y": 26, "parts": [ { "part": "attack" }, { "part": "move" } ] },
+    { "name": "pv-tough-ladder-3", "owner": 1, "x": 25, "y": 26, "parts": [ { "part": "tough", "boost": "GHO2" }, { "part": "tough", "boost": "GHO2" }, { "part": "move" } ] },
+    { "name": "pv-tough-ladder-4", "owner": 0, "x": 24, "y": 28, "parts": [ { "part": "attack", "boost": "UH" }, { "part": "move" } ] },
+    { "name": "pv-tough-ladder-5", "owner": 1, "x": 25, "y": 28, "parts": [ { "part": "tough", "boost": "XGHO2" }, { "part": "tough", "boost": "XGHO2" }, { "part": "move" } ] }
+  ],
+  "script": [
+    { "t": 0, "intents": [ { "creep": "pv-tough-ladder-0", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-1" } ] }, { "creep": "pv-tough-ladder-2", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-3" } ] }, { "creep": "pv-tough-ladder-4", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-5" } ] } ] },
+    { "t": 1, "intents": [ { "creep": "pv-tough-ladder-0", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-1" } ] }, { "creep": "pv-tough-ladder-2", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-3" } ] }, { "creep": "pv-tough-ladder-4", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-5" } ] } ] },
+    { "t": 2, "intents": [ { "creep": "pv-tough-ladder-0", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-1" } ] }, { "creep": "pv-tough-ladder-2", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-3" } ] }, { "creep": "pv-tough-ladder-4", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-5" } ] } ] },
+    { "t": 3, "intents": [ { "creep": "pv-tough-ladder-0", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-1" } ] }, { "creep": "pv-tough-ladder-2", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-3" } ] }, { "creep": "pv-tough-ladder-4", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-5" } ] } ] },
+    { "t": 4, "intents": [ { "creep": "pv-tough-ladder-0", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-1" } ] }, { "creep": "pv-tough-ladder-2", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-3" } ] }, { "creep": "pv-tough-ladder-4", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-5" } ] } ] },
+    { "t": 5, "intents": [ { "creep": "pv-tough-ladder-0", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-1" } ] }, { "creep": "pv-tough-ladder-2", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-3" } ] }, { "creep": "pv-tough-ladder-4", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-5" } ] } ] },
+    { "t": 6, "intents": [ { "creep": "pv-tough-ladder-0", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-1" } ] }, { "creep": "pv-tough-ladder-2", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-3" } ] }, { "creep": "pv-tough-ladder-4", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-5" } ] } ] },
+    { "t": 7, "intents": [ { "creep": "pv-tough-ladder-0", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-1" } ] }, { "creep": "pv-tough-ladder-2", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-3" } ] }, { "creep": "pv-tough-ladder-4", "actions": [ { "kind": "attack", "target": "pv-tough-ladder-5" } ] } ] }
+  ],
+  "frames": []
+}

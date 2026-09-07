@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "scenario": "tower-rampart",
+  "room": "W9N7",
+  "owners": [ { "user": "ibex", "player": 0 }, { "user": "ibex-2", "player": 1 } ],
+  "ticks": 12,
+  "creeps": [
+    { "name": "pv-tower-rampart-0", "owner": 1, "x": 25, "y": 25,
+      "parts": [ { "part": "tough" }, { "part": "tough" }, { "part": "tough" }, { "part": "tough" }, { "part": "tough" }, { "part": "move" } ] }
+  ],
+  "structures": [
+    { "id": "r0", "kind": "rampart", "owner": 1, "x": 25, "y": 25, "hits": 5000, "hits_max": 5000 }
+  ],
+  "towers": [
+    { "id": "t0", "owner": 0, "x": 20, "y": 25, "energy": 1000, "hits": 3000, "hits_max": 3000 }
+  ],
+  "script": [
+    { "t": 0, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 1, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 2, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 3, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 4, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 5, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 6, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 7, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 8, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 9, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 10, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] },
+    { "t": 11, "towers": [ { "tower": "t0", "action": { "kind": "attack", "target": "pv-tower-rampart-0" } } ] }
+  ],
+  "frames": []
+}

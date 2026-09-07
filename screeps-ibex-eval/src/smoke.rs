@@ -34,17 +34,22 @@ pub struct SmokeReport {
 }
 
 /// The classic smoke loop — a thin wrapper over the scenario runner
-/// with the built-in smoke scenario.
-pub async fn smoke(cfg: &KitConfig, ticks: u64) -> Result<SmokeReport> {
-    run_scenario(cfg, &crate::scenario::Scenario::builtin_smoke(ticks)).await
+/// with the built-in smoke scenario. `keep_world` skips the world reset
+/// (WS-CLOSE D8: the warm private world is the seeded world for every
+/// Docker lane).
+pub async fn smoke(cfg: &KitConfig, ticks: u64, keep_world: bool) -> Result<SmokeReport> {
+    run_scenario(cfg, &crate::scenario::Scenario::builtin_smoke(ticks), keep_world).await
 }
 
 /// Run a scenario end to end. Returns `Ok` with the report even when
 /// the gates fail — the caller decides the exit code. Infrastructure
 /// failures (server, bootstrap, deploy, capture) are `Err` as usual.
+/// `keep_world` = no `bootstrap --reset` (D8); the bootstrap step still
+/// runs WITHOUT reset so users/spawns/tick rate converge to the config.
 pub async fn run_scenario(
     cfg: &KitConfig,
     scenario: &crate::scenario::Scenario,
+    keep_world: bool,
 ) -> Result<SmokeReport> {
     let mut spec = crate::gates::capture_spec();
     spec.console_injections = scenario.injections();
@@ -59,8 +64,12 @@ pub async fn run_scenario(
     tracing::info!("scenario 1/4: server up");
     screeps_server_kit::docker::up(&cfg.stack).await?;
 
-    tracing::info!("scenario 2/4: bootstrap --reset (fresh world)");
-    let outcome = screeps_server_kit::server::bootstrap(cfg, true).await?;
+    if keep_world {
+        tracing::info!("scenario 2/4: bootstrap (keeping the warm world — D8)");
+    } else {
+        tracing::info!("scenario 2/4: bootstrap --reset (fresh world)");
+    }
+    let outcome = screeps_server_kit::server::bootstrap(cfg, !keep_world).await?;
     tracing::info!("bootstrap complete:\n{outcome}");
 
     tracing::info!("scenario 3/4: deploy (release)");

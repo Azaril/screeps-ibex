@@ -731,3 +731,29 @@ Ordered so foundations (1v1 arithmetic, focus-fire, kiting) validate before comp
 - drain_body_heavy is undersized: it carries 20 HEAL (240/tick), below the 300/tick two edge towers deal, so it slowly dies unboosted. Raise the unboosted heavy drain to 25 HEAL, or gate 2+ tower drains behind XLHO2 boost (the `drain_body_for_tower_dps` switch fires at >13 required HEAL but the heavy body still under-delivers)? Operator picks the cost/safety tradeoff.
 - Anti-flap persistence windows (escort-release 20t, abort-persistence 20t, establishment-stall 3000t, avoid-cooldown, abandon-hysteresis 5t) are tuned-live-only per ADR 0017 — too eager abandons winnable rooms, too patient bleeds creeps. The operator must set the live observation budget and acceptable false-abandon vs false-persist rates, since the sim cannot fully model a real attacker's cadence.
 - Stronghold boosted-vs-unboosted economic break-even per level (T-NPC-7/8): at what stored-energy/loot ratio is a boosted quad worth it vs letting an L4/L5 collapse on its 75000-tick timer? The war.rs energy gates (30K/100K/200K) are coarse vs the actual loot value (coreAmounts 1K/16K/60K/400K/3M) — operator sets the loot floor.
+
+## Design deltas (2026-09-07)
+
+- **T-DEF-4 as built — `claim_target_priority` is not a separate rule; it is a term of the one shared
+  `threat_value`** (WS-CLOSE lane (a), RULING-10 (ii), decision D1; parity M18). The shared
+  `screeps_combat_decision::threat_value` (the currency behind squad focus EV `ev_target_order`, the
+  ADR 0025 kill ledger, and the `decide_towers` redirect order) now sums ATTACK·30 + RANGED·10 +
+  HEAL·12 + **WORK·`DISMANTLE_POWER` (50)** + **CLAIM·`CONTROLLER_ATTACK_PER_PART` (300)**, each
+  boost-aware through `effective_output`. One CLAIM part = ten ATTACK parts, so a declaimer outranks
+  any realistically-sized breacher — "highest (above ATTACK/RANGED/WORK)" falls out of the additive
+  currency rather than a lexicographic tower-only flag; the `engage_range` (controller within 4 tiles)
+  bump is NOT built — the CLAIM term applies room-wide, which is stricter than the trigger described
+  above. The parameter-table row `claim_target_priority = highest` reads as "CLAIM term = 300/part".
+- **WORK is a first-class ranking term, unconditional.** The dismantle ruling (operator 2026-07-01)
+  stands: WORK is the STRUCTURE-threat channel and force SIZING never folds it into creep dps
+  (`force_sizing::StructureThreat`); ranking/priority may use the danger proxy, and now does — a
+  dismantler team chewing a rampart is a priority target for towers and squads alike, in offense too
+  (an enemy repairer/upgrader = repair pressure against our siege).
+- **§C tower handling — one kernel, both cases (parity M17, decision D2).** The live `TowerMission`
+  routes the no-squad passive-base case through `decide_towers(squad_focus = None)` exactly as the
+  squad-defended case; the forked legacy heuristic (dangerous-part flag then min-hits, all-towers
+  dogpile, the near-edge `is_likely_tower_drain` guess and its `total_tower_damage` duplicate) is
+  deleted. The kernel's `full_tower_damage <= heal` hold-fire subsumes the near-edge drain guess, so
+  T-DEF-3's second trigger arm ("OR `is_likely_tower_drain` fires") no longer exists — an un-killable
+  hostile is simply never fired at, edge or not; the persisted drain-sawtooth tracker + bounded probe
+  (T-DEF-3's first arm and its params) are unchanged and feed the kernel as `conserve_ids`.

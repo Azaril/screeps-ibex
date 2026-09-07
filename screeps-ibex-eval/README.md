@@ -40,6 +40,63 @@ Every metric (CPU, creep counts, error-line counts) is printed but
 --reset` wipes all data including memory segments). Run artifacts land
 in the repo-root `runs/` tree (gitignored), exactly as before the split.
 
+## The H5 parity oracle (`src/parity.rs`, ADR 0006 §B.4)
+
+The sim-vs-server conformance lane. The pure schema/replay/diff is
+`screeps_combat_engine::parity` (its layer-1 gate is
+`screeps-combat-engine/tests/conformance.rs`, ZERO tolerance); this
+crate owns the catalog (`parity/<name>.json`, golden vectors WITHOUT
+frames), the seeding/capture/report orchestration and the budget.
+
+**Docker-free** (no stack needed):
+
+```
+cargo run -- parity list                     # catalog entries
+cargo run -- parity synth --scenario <name>  # replay through the sim → tests/conformance/<name>.json
+                                             # as a PLACEHOLDER (provenance says so)
+cargo run -- parity check <vector.json>      # replay a vector / catalog entry and print the diff
+```
+
+**Layer 1 — scripted capture** (the warm private world; both owners in
+the bed, `ibex` and `ibex-2`, must be `bots:` entries in
+`config/local.yml`):
+
+```
+cargo run -- parity capture --scenario <name> [--room R] [--activate-rooms]
+```
+
+Seeds the entry's creeps/structures/towers into the (neutral) bed room
+through the kit's `cmd_insert_*` builders, arms the bot's driver
+(`screeps-ibex::eval_parity`: `Memory.parity_script` +
+`Memory._features.eval.parity_script`) for both owners with one
+absolute start tick, captures the per-tick `PV1 ` console lines
+(creeps, labelled structures/towers, the absent/gone roster), builds
+the frames, writes the vector with server provenance over the
+placeholder, and prints the immediate sim-vs-capture verdict.
+`--activate-rooms` flags frozen neutral rooms active and restarts the
+stack (the flag is read at boot) — prefer batching that into the one
+restart WS-CLOSE D8 already schedules. Nothing here wipes the world.
+
+**Layer 2 — the unscripted bed** (report-only until
+`parity/parity-budget.json` says `gating`; promotion is an operator
+decision under ADR 0015's earned-promotion rule):
+
+```
+cargo run -- parity report --scenario <bed> [--run <dir>]   # one bed (or grade an existing run dir)
+cargo run -- parity nightly                                 # every catalog bed
+cargo test -p screeps-ibex-eval -- --ignored parity_nightly # the same, as the #[ignore] test lane
+```
+
+The live side is the driver in `trace` mode (frames only; the bot's own
+systems decide); the sim side is `IbexAgent` vs `IbexAgent` seeded from
+the live first-contact frame over the identical world; the diff from
+contact is graded against the budget and written to
+`runs/parity-<sha>-<stamp>/report-<bed>.json`.
+
+`smoke` and `scenario` take `--keep-world` to skip `bootstrap --reset`;
+the parity bed commands keep the world by default (`--reset-world` to
+wipe first — WS-CLOSE D8 says don't).
+
 ## The gates (`src/gates.rs`)
 
 The canonical ibex-specific strings, pinned by tests against the bot

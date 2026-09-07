@@ -49,13 +49,17 @@ from the verified audit output).
 5. ~~**H8**~~ **FIXED 2026-08-24** (live tower.rs + decision `heal_reaching` export): the no-squad
    path prices sustain with the KERNEL's `heal_reaching` (adjacent healers + hostile towers,
    boost-aware) and the no-net-damage weakest-hostile chip fallback is DELETED (hold fire — the
-   kernel discipline). M17 (full no-squad decide_towers unification) and M18 (threat_value has no
-   WORK/CLAIM term — a DESIGN fork: it feeds focus EV too) REMAIN — queued below.
+   kernel discipline). ~~M17 (full no-squad decide_towers unification) and M18 (threat_value has no
+   WORK/CLAIM term — a DESIGN fork: it feeds focus EV too) REMAIN — queued below.~~ **Both FIXED
+   2026-09-07** (WS-CLOSE lane (a), RULING-10 (ii) — see the M17/M18 entries).
 6. ~~**H9**~~ **FIXED 2026-08-24** (squad_manager): `forming_state` takes `departed` (stamped by
    the SquadTrace phase pass the tick the rally gate releases, cumulative per generation), and
    `traveling` accepts a released under-strength squad — the progress-gated travel lease, matching
-   the harness drivers. M20–M23 (harness never exercises forming_in_flight/vacuous_clear/
-   retreat-budget/economic-give-up inputs) REMAIN — harness-lane work, queued there.
+   the harness drivers. ~~M20–M23 (harness never exercises forming_in_flight/vacuous_clear/
+   retreat-budget/economic-give-up inputs) REMAIN — harness-lane work, queued there.~~ **All four
+   FIXED 2026-09-07** (WS-CLOSE lane (b1), RULING-10 (iv), D3 — see the M20–M23 entries): each Seam-7
+   input is now computed by BOTH sides from one shared kernel (no mirrored constants) and driven
+   end-to-end through a lifecycle-harness flow with RED-verified pins.
 7. **M4 / M6** — live `room_callback` returns the TARGET room's matrix for every requested room.
 
 ---
@@ -228,12 +232,35 @@ SIM: screeps-combat-agent/src/squad.rs:686 — `heal_power: f.working_parts(Part
 CONSEQUENCE: A mauled healer whose HEAL parts are destroyed still reports full heal capacity to the live kernel: assess_engage's bleed-out veto (`unkillable_dps + tower_dps > our_heal`) fails to trip so the squad holds a fight it is now bleeding out of, drain_sustains over-credits the soak, and the heal-assignment kernel assigns heals (expected_heal > 0) to a healer that can no longer heal — all divergent from the per-tick-degrading inputs the sim validated against.
 
 ### [M17] Seam 6 — tower behavior (from towers)
+**FIXED 2026-09-07** (WS-CLOSE lane (a), RULING-10 (ii), D2): `missions/tower.rs` now builds the DTOs + the
+`conserve` set (confirmed drainers minus the active bounded probe) ONCE and calls `decide_towers` for
+BOTH cases — `squad_focus = Some(sf)` when a squad's focus is in the room, `None` (the kernel's
+passive-base selection) otherwise — with the single id-re-resolving executor + probe stamp kept. The
+forked legacy heuristic (dangerous-part flag then min-hits, all-towers dogpile, `is_drain` /
+`is_likely_tower_drain` near-edge guess) is deleted, as are `military/damage.rs::total_tower_damage`
+(the kernel's `full_tower_damage` duplicated) and `is_likely_tower_drain` (subsumed by the kernel's
+`full_tower_damage <= heal` hold-fire; the near-edge nuance is not kept). The drain-sawtooth tracker is
+untouched (it only feeds `conserve`). No serialized-shape change (no WFV). Pin:
+`tower_fire::no_squad_fallback_prefers_claim_then_work_over_a_grunt` (RED-verified) covers the
+`None` path's ordering; the existing `None`-focus kernel pins are now the live behavior.
 CLAIM: The live no-squad (passive-base) tower path never calls the shared decide_towers kernel at all — it runs a forked legacy heuristic, while every sim validation of tower fire (kernel unit tests incl. the squad_focus=None fallback, and the U7 harness) runs decide_towers; the sim's only non-kernel tower model is scripted nearest-enemy fire, a third behavior that matches neither.
 LIVE: screeps-ibex/src/missions/tower.rs:375-478 — "No defending squad: the passive-base defensive path (drain-sawtooth / probe / chip)" builds its own hostile_infos/best_target/is_drain logic and issues `tower.attack(target)` for ALL towers on one target (lines 462-465), never constructing DTOs or calling decide_towers; the kernel path (line 353) is reached only when find_squad_focus_for_room returns S
 SIM: screeps-combat-decision/src/tower_fire.rs:374-387 (`no_squad_fallback_targets_highest_threat_killable` validates the kernel's None-focus passive behavior live never runs) and tower_fire.rs:136-137 (kernel docs call None-focus "the common passive-base case"); screeps-combat-eval/src/harness/tower_fire.rs:187-199 (`towers_alone_intents` = nearest-enemy scripted fire, described as "the passive-base b
 CONSEQUENCE: The most common live tower situation (hostiles present, no managed squad defending — every invader/harass event in a passive room) executes target selection, hold-fire, and commit-sizing logic that no sim ever measured: all towers dogpile one target with no gap-sizing (N×600 into a 150-HP scout = pure energy overkill the kernel's minimal-commit prevents), a threat order (dangerous-part flag then min-hits) different from the kernel's threat_value ranking, and no rampart-shield exclusion. The U7 "
 
 ### [M18] Seam 6 — tower behavior (from towers)
+**FIXED 2026-09-07** (WS-CLOSE lane (a), RULING-10 (ii), D1): the shared `threat_value` now carries a
+WORK term (`effective_output(Work, DISMANTLE_POWER)` = 50/part, UNCONDITIONAL — a ranking proxy for the
+structure-threat channel; force SIZING still never folds WORK into creep dps) and a CLAIM term
+(`effective_output(Claim, CONTROLLER_ATTACK_PER_PART)` = 300/part, the engine's controller-damage unit —
+one CLAIM = ten ATTACK, so a declaimer outranks any realistically-sized breacher: T-DEF-4 falls out of
+the one additive currency). Both boost-aware through `effective_output`. Every consumer moves together:
+squad focus EV (`ev_target_order` → `select_focus_target` / `assign_focus_fire`), the ADR 0025 kill
+ledger (`plan_squad_ev`), and the tower redirect order (`decide_towers`) — live AND sim, since the live
+no-squad path now runs the kernel too (M17). Pins (RED-verified):
+`ev_order_ranks_declaimer_then_dismantler_over_a_grunt_and_boost_scales_work` (lib.rs) and
+`no_squad_fallback_prefers_claim_then_work_over_a_grunt` (tower_fire.rs). The six named eval gates were
+re-run under the new currency (verdicts in the WS-CLOSE report); nothing retuned.
 CLAIM: Recently introduced asymmetry (Wave A, ab692bd): CLAIM and WORK parts count as 'dangerous' in the live legacy tower target order (the T-DEF-4 'half'), but the shared threat_value used by the kernel's redirect ordering on the squad-defended path scores CLAIM and WORK as zero — so exactly when a squad is defending, a controller-attacker or dismantler is the LAST tower target instead of a priority one.
 LIVE: screeps-ibex/src/missions/tower.rs:402-412 — comparator marks `Part::Attack | Part::RangedAttack | Part::Work | Part::Claim` dangerous, with the comment "CLAIM counts (D27/T-DEF-4 half)"; this ordering exists only on the no-squad legacy path.
 SIM: screeps-combat-decision/src/lib.rs:416-423 — threat_value = ATTACK·30 + RANGED·10 + HEAL·12 only (no WORK, no CLAIM term); tower_fire.rs:231-237 sorts the kernel's redirect targets by this value descending, so a pure CLAIM/WORK creep sorts to the bottom (threat 0).
@@ -246,24 +273,76 @@ SIM: screeps-combat-decision/src/lib.rs:119-122 (CombatBodyPart carries part+hit
 CONSEQUENCE: A T3-boosted drainer self-healing 48/part is modeled at 12/part: `squad_dps + full_tower_damage <= heal` (tower_fire.rs:270) evaluates false when the real heal exceeds our fire, so on the squad-defended path the towers commit and bleed energy into an actually-out-healed target — the exact failure mode the hold-fire discipline was built and sim-validated to prevent. This is distinct from the accepted threatmap flat-x4 note (that is the enemy-boost OVER-estimate in threat sizing; this is the tower
 
 ### [M20] Seam 7 — lifecycle/reconcile inputs: forming_in_flight (from lifecycle)
+**FIXED 2026-09-07** (WS-CLOSE lane (b1), decision D3 — Option A, MEASURE live): `queue_slot_spawn` now
+returns whether it actually queued the slot (`false` on both silent roster-stall points: no home in spawn
+range / `build_body` None); Phase B records the per-objective result in the EPHEMERAL, never-serialized
+`SquadFormingProgress.queued_last_tick` (`BTreeSet`, membership only; cleared on retire/reassign/merge —
+no WFV bump), and Phase A feeds `forming_in_flight = forming && (queued_last_tick || member_total >
+present_count)` (a rostered member without a position yet = one still spawning). The harness churn drivers
+already computed the same composite (`completing || syncing || slots_to_spawn non-empty`); the three
+one-member flow drivers keep `forming_in_flight = forming` because their forming IS the one member's spawn
+in flight (documented at each site). Pin (RED-verified with the degenerate feed → 0 generations):
+`unbuildable_remainder_lapses_the_forming_lease` — a roster whose remaining slot can never be built lapses
+its +400 lease and re-fields repeatedly inside a 2500t budget instead of holding a claim slot to 3000t.
 CLAIM: Live feeds the kernel a degenerate `forming_in_flight = forming` (constant true while forming), while the harness computes a real queued/in-flight signal — so the kernel's lapse-while-forming-with-nothing-in-flight path validated offline can never occur live, and the live constant-true feed was never validated offline.
 LIVE: screeps-ibex/src/military/squad_manager.rs:1908 `let forming_in_flight = forming;` (comment: an unfilled slot is re-queued by Phase B every tick, so it is assumed in-flight whenever forming).
 SIM: screeps-combat-eval/src/harness/lifecycle.rs:536 (also 992, 1594) `let forming_in_flight = !completing.is_empty() || !syncing.is_empty() || any_queued;` fed as `forming_in_flight: forming && forming_in_flight` (693/1136/1898).
 CONSEQUENCE: A live forming squad whose spawn genuinely cannot be queued (dead/blocked spawns, slots_to_spawn empty) still refreshes its lease every tick until the 3000-tick MAX_FORMING_BUDGET or the economic give-up, whereas the harness-validated behavior lets the base +400 lease lapse in that gap. The live Phase-B assumption ('unfilled slot is always re-queued') is baked into the input instead of measured, so the two sides drive different kernel branches for the same world state.
 
 ### [M21] Seam 7 — lifecycle/reconcile inputs: D28 vacuous_clear (from lifecycle)
+**FIXED 2026-09-07** (WS-CLOSE lane (b1)): `ChurnTarget.live_visible_clear` (default `false` — every
+vision-gap fixture keeps its pre-D28 meaning, R10) feeds `run_lifecycle_churn` the manager's exact evidence
+form `vacuous_clear = in_target_room && live_visible_clear && !is_defend`; an offense arrival at a live-visible
+EMPTY room no longer short-circuits to `DeployedAndEngaged` (no focus exists) and the kernel's literal verdict
+is reported as `ChurnOutcome::VacuouslyResolved{withdraw, mark_unwinnable}`. `run_v1_flow` gained
+`is_defend` + `live_visible_clear` (an arrival that finds the threat already gone does not latch
+`engaged_once`) and counts `vacuous_reassignments`. Pins (each RED-verified by flipping the feed / the
+kernel's `is_defend` guard): `live_visible_empty_room_resolves_vacuously_on_arrival` (Retire{Resolved,
+withdraw:true, mark_unwinnable:false} on the arrival tick, `engaged_once` never latched; R10 control),
+`defend_garrison_is_excluded_from_the_vacuous_clear` (Garrisoned, one generation),
+`vacuous_clear_drives_reassign_with_withdraw_old` (Reassign{withdraw_old:true} via the vacuous path,
+same generation; non-visible control has zero vacuous rebinds).
 CLAIM: The live-default-ON D28 vacuous-clear input (live-visible empty room resolves without engagement) is fed `false` by every one of the six harness lifecycle drivers — no harness flow ever exercises the vacuous Resolve, only kernel unit tests do.
 LIVE: screeps-ibex/src/military/squad_manager.rs:2049-2055 — `vacuous_clear` = objective room in `game::rooms()` AND cached-lazily-refreshed same-tick DTO (room/data.rs:724-732 refreshes when `game::time() != last_updated`) shows `hostile().is_empty()`.
 SIM: screeps-combat-eval/src/harness/lifecycle.rs:688, 1131, 1893, 2374, 2683, 2926 — all six ReconcileSnapshot constructions hardcode `vacuous_clear: false` (comments: 'the pre-D28' behavior / 'not exercised').
 CONSEQUENCE: The recently introduced (§7.2a) resolve-without-engagement terminal — including its interactions the kernel tests cannot see (withdraw-as-clean-win feeding Reassign's `withdraw_old`, racing the forming/travel refresh, or a stale-visibility flap re-fielding after a vacuous withdraw) — runs live-only with zero harness soak; a regression in the D28 gate would pass the whole lifecycle eval suite.
 
 ### [M22] Seam 7 — lifecycle/reconcile inputs: retreat_budget_exhausted / stall-aware retreat clock (from lifecycle)
+**FIXED 2026-09-07** (WS-CLOSE lane (b1)): the clock and the tracker are now SHARED pure kernels in
+`screeps_combat_decision::lifecycle` — `MAX_RETREAT_BUDGET` (600), `RetreatClock{retreating_since}` with
+`holds(state_retreating, stalemate_latched)` / `advance(now, ..) -> exhausted`, and
+`EnemyStallTracker{enemy_stall: Option<(hits, streak)>}` with `advance(hits, engaged)` / `latched()` (reads
+`ENEMY_STALL_TICKS`). Live `squad_manager` stores them per objective (ephemeral, no WFV) and calls them in
+Phase A / Phase B (`enemy_stall` and its REC-062 `structure_stall` twin both use the tracker); the live
+truth-table tests moved with the code into the kernel. New harness driver `run_stall_flow` scripts the
+in-room fight per tick (`StallScript::{BounceFlat, BounceDecreasing, DisengagedFlat}`, optional `clear_at`)
+and runs Phase A → Phase B in the manager's order. Pins (RED-verified against the pre-FU2 clock, a
+non-resetting / always-growing tracker, and the REC-061 guard removed): the flat period-2 bounce
+force-aborts `Retire{GaveUp, mark_unwinnable:true}` at EXACTLY `clock_start + 600` with
+`clock_start = arrival + 2·ENEMY_STALL_TICKS` despite the in-room focus; decreasing hits never trip
+(streak < 40 through 3000t); disengaged flat hits keep the streak at 0; a clear on the exhaust tick resolves
+(`withdraw:true, mark_unwinnable:false`) while one tick later force-aborts; the driver is deterministic.
 CLAIM: The REC-003 retreat force-abort input, including the NEW stall-aware `retreat_clock_holds` extension (clock keeps running on Engaged ticks while the enemy-HP stall streak is latched), is fed `false` by every harness driver — the composed manager-side clock is validated only by isolated unit tests.
 LIVE: screeps-ibex/src/military/squad_manager.rs:472-474 `fn retreat_clock_holds(state_retreating, stalemate_latched) { state_retreating || stalemate_latched }`; 1976-1988 stalemate latch from `enemy_stall` streak >= ENEMY_STALL_TICKS(40) and `retreating_since` clock vs MAX_RETREAT_BUDGET=600 (284).
 SIM: screeps-combat-eval/src/harness/lifecycle.rs:702, 1147, 1907, 2388, 2697, 2940 — every driver hardcodes `retreat_budget_exhausted: false` ('not exercised by this driver'); the harness has no MAX_RETREAT_BUDGET constant at all (its const block at 267-278 stops at MAX_TRAVEL_BUDGET).
 CONSEQUENCE: The period-2 Engaged/Retreating probe-bounce zombie the FU2 fix targets — the clock accruing across the bounce, the streak advancing only on engaged ticks (advance_enemy_stall, 476+), and the terminal dominating the in-room focus-refresh through the full retire+mark_unwinnable flow — has never run end-to-end in any offline scenario; live is the first integration test of the interaction between the enemy_stall tracker (also consumed by Phase B's `enemy_stalled` kite input, 3207-3213) and the Phas
 
 ### [M23] Seam 7 — lifecycle/reconcile inputs: forming_budget_remaining (economic give-up) (from lifecycle)
+**FIXED 2026-09-07** (WS-CLOSE lane (b1)): the K-latch is the SHARED
+`screeps_econ_decision::spawn_policy::{FORMING_ABANDON_STREAK (20), EconomicGiveUp{streak}.advance(abandon_now)
+-> fired}`; the live const + inline latch are deleted and `squad_manager` advances the shared latch. All six
+harness reconcile drivers now compute `forming_budget_remaining = clock && !economic_giveup` with
+`abandon_now = !target_safe_mode && should_abandon_forming(objective_rate_milli, forming_burn_rate_milli(present
+slots' body cost), 0)` (the churn drivers price the present roster from the K3 build energy — the live
+`roster_present_cost`; the one-member flow drivers have nothing present while forming ⇒ burn 0, documented).
+`ChurnTarget.target_safe_mode` carries the exemption. Fixtures that form a multi-slot roster are re-based
+from `objective_rate_milli: 0` to a covering rate (`covering_rate_milli` = burn of the whole roster + 1) so
+the lease/travel pins keep their meaning. Pins (RED-verified by dropping the term / the exemption):
+`below_burn_objective_abandons_forming_early` (a rate-0 roster whose next member banks ~1000t abandons +
+re-fields ≥2× inside a budget of exactly MAX_FORMING_BUDGET, where the clock-only backstop cannot fire;
+its covering-rate control deploys), `safe_mode_target_exempts_the_economic_giveup`,
+`covering_rate_covers_the_whole_roster_burn` (+ the kernel latch pin
+`economic_giveup_latches_on_the_kth_consecutive_abandon_and_resets_on_cover`).
 CLAIM: Live folds the ADR 0042/0043 ECONOMIC forming give-up (R_net rate vs roster burn, 20-reconcile streak, safe-mode skip) into `forming_budget_remaining`; every harness driver computes it as the pure MAX_FORMING_BUDGET clock — the economic early-abandon path is never exercised offline.
 LIVE: screeps-ibex/src/military/squad_manager.rs:1919-1947 — `economic_giveup` via `should_abandon_forming(forming_objective_rate_milli, forming_burn_rate_milli, 0)` latched at FORMING_ABANDON_STREAK=20 (261), then 1947 `let forming_budget_remaining = budget_clock_remaining && !economic_giveup;`.
 SIM: screeps-combat-eval/src/harness/lifecycle.rs:673 (also 1110, 1878, 2380, 2689, 2932) `let forming_budget_remaining = tick.saturating_sub(gen_start) < MAX_FORMING_BUDGET;` — clock only, no economic term.

@@ -1,0 +1,30 @@
+{
+  "v": 1,
+  "scenario": "heal-race",
+  "room": "W9N7",
+  "owners": [ { "user": "ibex", "player": 0 }, { "user": "ibex-2", "player": 1 } ],
+  "ticks": 12,
+  "creeps": [
+    { "name": "pv-heal-race-0", "owner": 0, "x": 25, "y": 25,
+      "parts": [ { "part": "attack" }, { "part": "move" } ] },
+    { "name": "pv-heal-race-1", "owner": 1, "x": 26, "y": 25,
+      "parts": [ { "part": "tough" }, { "part": "tough" }, { "part": "move" } ] },
+    { "name": "pv-heal-race-2", "owner": 1, "x": 27, "y": 25,
+      "parts": [ { "part": "heal" }, { "part": "heal" }, { "part": "move" } ] }
+  ],
+  "script": [
+    { "t": 0, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 1, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 2, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 3, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 4, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 5, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 6, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 7, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 8, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 9, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 10, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] },
+    { "t": 11, "intents": [ { "creep": "pv-heal-race-0", "actions": [ { "kind": "attack", "target": "pv-heal-race-1" } ] }, { "creep": "pv-heal-race-2", "actions": [ { "kind": "heal", "target": "pv-heal-race-1" } ] } ] }
+  ],
+  "frames": []
+}

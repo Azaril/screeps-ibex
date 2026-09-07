@@ -1,0 +1,26 @@
+{
+  "v": 1,
+  "scenario": "kite-r3",
+  "room": "W9N7",
+  "owners": [ { "user": "ibex", "player": 0 }, { "user": "ibex-2", "player": 1 } ],
+  "ticks": 10,
+  "creeps": [
+    { "name": "pv-kite-r3-0", "owner": 0, "x": 22, "y": 25,
+      "parts": [ { "part": "ranged_attack" }, { "part": "ranged_attack" }, { "part": "move" }, { "part": "move" } ] },
+    { "name": "pv-kite-r3-1", "owner": 1, "x": 25, "y": 25,
+      "parts": [ { "part": "attack" }, { "part": "move" } ] }
+  ],
+  "script": [
+    { "t": 0, "intents": [ { "creep": "pv-kite-r3-0", "actions": [ { "kind": "ranged_attack", "target": "pv-kite-r3-1" } ], "move": "left" }, { "creep": "pv-kite-r3-1", "move": "left" } ] },
+    { "t": 1, "intents": [ { "creep": "pv-kite-r3-0", "actions": [ { "kind": "ranged_attack", "target": "pv-kite-r3-1" } ], "move": "left" }, { "creep": "pv-kite-r3-1", "move": "left" } ] },
+    { "t": 2, "intents": [ { "creep": "pv-kite-r3-0", "actions": [ { "kind": "ranged_attack", "target": "pv-kite-r3-1" } ], "move": "left" }, { "creep": "pv-kite-r3-1", "move": "left" } ] },
+    { "t": 3, "intents": [ { "creep": "pv-kite-r3-0", "actions": [ { "kind": "ranged_attack", "target": "pv-kite-r3-1" } ], "move": "left" }, { "creep": "pv-kite-r3-1", "move": "left" } ] },
+    { "t": 4, "intents": [ { "creep": "pv-kite-r3-0", "actions": [ { "kind": "ranged_attack", "target": "pv-kite-r3-1" } ], "move": "left" }, { "creep": "pv-kite-r3-1", "move": "left" } ] },
+    { "t": 5, "intents": [ { "creep": "pv-kite-r3-0", "actions": [ { "kind": "ranged_attack", "target": "pv-kite-r3-1" } ], "move": "left" }, { "creep": "pv-kite-r3-1", "move": "left" } ] },
+    { "t": 6, "intents": [ { "creep": "pv-kite-r3-0", "actions": [ { "kind": "ranged_attack", "target": "pv-kite-r3-1" } ], "move": "left" }, { "creep": "pv-kite-r3-1", "move": "left" } ] },
+    { "t": 7, "intents": [ { "creep": "pv-kite-r3-0", "actions": [ { "kind": "ranged_attack", "target": "pv-kite-r3-1" } ], "move": "left" }, { "creep": "pv-kite-r3-1", "move": "left" } ] },
+    { "t": 8, "intents": [ { "creep": "pv-kite-r3-0", "actions": [ { "kind": "ranged_attack", "target": "pv-kite-r3-1" } ], "move": "left" }, { "creep": "pv-kite-r3-1", "move": "left" } ] },
+    { "t": 9, "intents": [ { "creep": "pv-kite-r3-0", "actions": [ { "kind": "ranged_attack", "target": "pv-kite-r3-1" } ], "move": "left" }, { "creep": "pv-kite-r3-1", "move": "left" } ] }
+  ],
+  "frames": []
+}

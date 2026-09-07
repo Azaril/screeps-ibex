@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "name": "pressure-release",
+  "ticks": 1000,
+  "description": "ADR 0004 governor calibration rung (d): hover in Critical, then RELEASE and watch the recovery ladder Critical -> Conserve -> Normal over a ~490-tick tail (nearly five BUCKET_WINDOWs, so the trend window fully clears and steady-state Normal is re-confirmed). Same model + evidence as pressure-critical-hover (L=100, BE~90 from runs/pressure-bbe86e0-20260611-060159, d(ms) ~ ms - BE, refill ~82/tick; DrainModel::PRIVATE_FRESH). STAGE 1 (ramp, 300..361): ms=220, 62 ticks -> ~1940; burn-free tick 362 -> ~2022. STAGE 2 (hover, 363..512, ON one tick after stage-1 OFF): ms=96, 150 ticks -> -900 -> ~1120 (< CRITICAL_BUCKET=1500 from ~hover tick 87, i.e. ~63 ticks of Critical by level; a shorter hold than the hover rung because the object here is the ladder, not the hold). RELEASE at 513: nominal recovery from ~1120 at ~82/tick -> crosses 1500 at +5 ticks (Critical -> Conserve, level rule), 4000 at +35 ticks (Conserve -> Normal: bucket >= CONSERVE_BUCKET with a positive trend), 10000 at +108. NOTE the governor has no latch (per-tick optimal): the asymmetry you observe (enter Critical at 1500 going down, leave Conserve at 4000 going up) is the level ladder, not hysteresis state; the Conserve leg is ~30 ticks = 1-2 sampler samples at 100 ms/tick. Also note CRITICAL_DRAIN=-10 with bucket<4000 means a monotone ramp is ALWAYS Critical-by-trend before it is Conserve-by-level; Conserve-by-level is reachable only on the way UP (calibration-relevant for the Phase C constants decision). Error budget + retune rules as in pressure-critical-hover; warm-world caveat: subtract (pre-burn mean cpu.used - 18) from every ms.",
+  "faults": [
+    { "kind": "cpu_burn", "at_observed_tick": 300, "ms": 220, "duration_ticks": 62 },
+    { "kind": "cpu_burn", "at_observed_tick": 363, "ms": 96, "duration_ticks": 150 }
+  ]
+}

@@ -18,6 +18,7 @@ mod cpugovernor;
 mod creep;
 mod energy_stress;
 mod entitymappingsystem;
+mod eval_parity;
 mod expansion;
 mod features;
 mod findnearest;

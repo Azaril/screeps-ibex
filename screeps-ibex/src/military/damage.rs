@@ -10,21 +10,14 @@ use screeps_combat_decision::damage::tower_attack_damage_at_range;
 // and the `boosts` T3 compound table. This module keeps the game-coupled
 // tower-over-`Position` damage math + the defender spawn-readiness decision.
 
-/// Tower DPS at a typical drain position (room edge, north side).
-/// Drains sit at the edge to maximize range from towers; this approximates that.
+/// Tower DPS at a typical drain position (room edge, north side) — the summed engine falloff of every
+/// tower against that tile. Drains sit at the edge to maximize range from towers; this approximates
+/// that. (Feeds `RoomData`'s tower-danger estimate for the expansion/claim veto — NOT tower fire.)
 pub fn tower_dps_at_room_edge(room_name: RoomName, tower_positions: &[Position]) -> f32 {
     let edge_pos = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(0).unwrap(), room_name);
-    total_tower_damage(tower_positions, edge_pos)
-}
-
-/// Calculate total tower damage from multiple towers against a target at a given position.
-pub fn total_tower_damage(tower_positions: &[Position], target_pos: Position) -> f32 {
     tower_positions
         .iter()
-        .map(|tp| {
-            let range = tp.get_range_to(target_pos);
-            tower_attack_damage_at_range(range) as f32
-        })
+        .map(|tp| tower_attack_damage_at_range(tp.get_range_to(edge_pos)) as f32)
         .sum()
 }
 
@@ -32,25 +25,11 @@ pub fn total_tower_damage(tower_positions: &[Position], target_pos: Position) ->
 // single-target helpers were DELETED as superseded — the U-TOWER `decide_towers` kernel
 // (`screeps_combat_decision::tower_fire`) already makes the heal-aware fire decision, and better:
 // it sizes the tower commit against `heal_reaching` per target and refuses out-healed dogpiles,
-// where the helpers only compared one target's flat heal total.)
-
-/// Check if a hostile creep at the room edge is likely performing a tower drain attack.
-/// Tower drain: hostile sits at max range (edge), heals through tower damage to waste energy.
-pub fn is_likely_tower_drain(target_pos: Position, target_heal_per_tick: f32, tower_positions: &[Position]) -> bool {
-    let x = target_pos.x().u8();
-    let y = target_pos.y().u8();
-
-    // Check if near room edge (within 3 tiles of border).
-    let near_edge = x <= 3 || x >= 46 || y <= 3 || y >= 46;
-
-    if !near_edge {
-        return false;
-    }
-
-    // If the target can heal through all tower damage, it's a drain.
-    let total_damage = total_tower_damage(tower_positions, target_pos);
-    target_heal_per_tick >= total_damage
-}
+// where the helpers only compared one target's flat heal total. WS-CLOSE D2 (parity M17,
+// 2026-09-07) deleted the last two live-tower helpers the same way: `total_tower_damage` was the
+// kernel's `full_tower_damage` duplicated, and `is_likely_tower_drain` (near-edge + out-heals-all-
+// towers) is subsumed by the kernel's `full_tower_damage <= heal` hold-fire — the near-edge nuance
+// is not kept; the persisted drain-sawtooth tracker in `missions/tower.rs` is the drainer memory.)
 
 // ── Defender spawn-readiness model ───────────────────────────────────────────
 //

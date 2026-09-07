@@ -106,6 +106,38 @@ pub fn should_abandon_forming(r_o_completed_milli: u32, burn_milli: u32, opportu
     r_o_completed_milli < burn_milli.saturating_add(opportunity_floor_milli)
 }
 
+/// ADR 0042 §5 / ADR 0043 A3 — consecutive reconciles the ECONOMIC forming give-up must hold before it
+/// fires (`should_abandon_forming` true: the completed objective's rate can't cover the present roster's
+/// burn). K-tick latch so a transient p_win/intel dip does not abandon a valuable squad; small (a fraction
+/// of a creep life) so a genuinely worthless/unwinnable objective is dropped in ~a scout cycle, LONG before
+/// the manager's `MAX_FORMING_BUDGET` (3000) liveness backstop — the demotion the R_net give-up is about.
+/// SHARED (parity M23): the live `SquadManager` and the offline lifecycle harness latch on this ONE
+/// constant through [`EconomicGiveUp`] — never a mirrored copy.
+pub const FORMING_ABANDON_STREAK: u32 = 20;
+
+/// The K-tick latch over [`should_abandon_forming`] (ADR 0042 §5) — the per-objective streak of
+/// consecutive reconciles the economic give-up has held. Pure, `Copy`, ephemeral (the live manager keeps
+/// one per forming objective in its NON-serialized runtime resource; the harness keeps one per driver
+/// generation) — a VM reload restarts the streak, still bounded. Reset on any covering reconcile (the
+/// completed rate covers the burn again) and by the caller whenever the squad stops forming / re-fields.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EconomicGiveUp {
+    /// Consecutive reconciles `abandon_now` has held.
+    pub streak: u32,
+}
+
+impl EconomicGiveUp {
+    /// Advance one reconcile with this tick's `abandon_now` (= `!target_safe_mode &&
+    /// should_abandon_forming(r_o, burn, floor)` — the caller composes the safe-mode exemption, a bounded
+    /// window that is not permanent unwinnability). Returns whether the give-up has FIRED: the streak has
+    /// reached [`FORMING_ABANDON_STREAK`]. A covering tick resets the streak to zero (no hysteresis — the
+    /// latch is the K-tick debounce the ADR specifies, not a relaxed re-arm).
+    pub fn advance(&mut self, abandon_now: bool) -> bool {
+        self.streak = if abandon_now { self.streak.saturating_add(1) } else { 0 };
+        self.streak >= FORMING_ABANDON_STREAK
+    }
+}
+
 /// Bounded lerp between two u32 bids (integer, saturating — the milli lane never overflows within
 /// the band range). Replaces the old f32 `lerp::Lerp::lerp_bounded` on the deleted bands; `t` is
 /// clamped to `[0, 1]`. Deterministic integer math (no float reaches an ordering).
@@ -670,11 +702,11 @@ mod tests {
         assert_eq!(SPAWN_BID_MEDIUM, 50_000);
         assert_eq!(SPAWN_BID_LOW, 25_000);
         assert_eq!(SPAWN_BID_NONE, 0);
-        assert!(SPAWN_BID_CRITICAL > SPAWN_BID_COMBAT_FORMING, "income is never preempted");
+        const _: () = assert!(SPAWN_BID_CRITICAL > SPAWN_BID_COMBAT_FORMING, "income is never preempted");
         assert_eq!(SPAWN_BID_COMBAT_FORMING, SPAWN_BID_HIGH, "a forming squad SHARES the HIGH band — it must not starve the economy");
-        assert!(SPAWN_BID_HIGH > SPAWN_BID_MEDIUM);
-        assert!(SPAWN_BID_MEDIUM > SPAWN_BID_LOW);
-        assert!(SPAWN_BID_LOW > SPAWN_BID_NONE);
+        const _: () = assert!(SPAWN_BID_HIGH > SPAWN_BID_MEDIUM);
+        const _: () = assert!(SPAWN_BID_MEDIUM > SPAWN_BID_LOW);
+        const _: () = assert!(SPAWN_BID_LOW > SPAWN_BID_NONE);
     }
 
     #[test]
@@ -717,6 +749,29 @@ mod tests {
             should_abandon_forming(/*r_o*/ 5_000, /*burn*/ 1_867, /*floor*/ 4_000),
             "when the economy alternative beats (r_o − burn), abandon"
         );
+    }
+
+    /// ADR 0042 §5 (parity M23) — the shared K-tick latch: the economic give-up FIRES on exactly the
+    /// `FORMING_ABANDON_STREAK`-th consecutive abandon reconcile, never earlier; ONE covering reconcile
+    /// resets the streak (a transient dip does not abandon a valuable squad); the latch has no memory
+    /// past the reset (no hysteresis — a fresh streak must run the full K again).
+    #[test]
+    fn economic_giveup_latches_on_the_kth_consecutive_abandon_and_resets_on_cover() {
+        let mut g = EconomicGiveUp::default();
+        for k in 1..FORMING_ABANDON_STREAK {
+            assert!(!g.advance(true), "reconcile {k} (< K={FORMING_ABANDON_STREAK}) must not fire");
+        }
+        assert!(g.advance(true), "the K-th consecutive abandon reconcile fires");
+        assert_eq!(g.streak, FORMING_ABANDON_STREAK);
+        assert!(g.advance(true), "and it stays fired while the abandon holds");
+
+        // ONE covering reconcile resets the streak entirely.
+        assert!(!g.advance(false), "a covering reconcile un-fires the give-up");
+        assert_eq!(g.streak, 0, "the streak resets to zero on cover (no partial memory)");
+        for _ in 1..FORMING_ABANDON_STREAK {
+            assert!(!g.advance(true));
+        }
+        assert!(g.advance(true), "a fresh streak needs the full K again");
     }
 
     /// `lerp_bid` is a deterministic integer lerp (descending band lerps are exact) and the label

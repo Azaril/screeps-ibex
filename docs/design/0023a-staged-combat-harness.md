@@ -223,7 +223,31 @@ dep (the harness is eval-side, which already depends on engine+decision+agent).
 ADR 0023 (sim beds), ADR 0022 P-FORCE (the oracle), `combat-agent/src/{objective_bed,scenario}.rs`
 (`run_siege` / `ScenarioBuilder` — the evaluate/generate primitives this generalizes).
 
+## Design deltas (2026-09-07 — WS-CLOSE lane (b2))
+
+- **`MultiRoom` folds the standing multi-room builders in as enumerated indices** rather than
+  re-deriving them: index 0 aliases the twin-room siege (`Designed#4`), 1–4 the border-gauntlet
+  grades (`BorderGauntlet::build(grade, 3)`), 5–14 the strongholds staged in the neighbour room
+  (`StrongholdScenario::build(level, {Open, Chokepoint}, multi_room = true, 1)`), byte-identical to
+  the builders (pinned) so a `run_suite` over `MultiRoom` grades the very rungs the stronghold floor
+  pins. The composed family (48 indices: staging layout × target layout × `ForceSpec`) is the
+  per-room composition this ADR specified: `ScenarioBuilder::empty(staging).in_room(target)`, the
+  objective carrying the target room, the entry the staging room; the seed (the index) draws the
+  target's rampart hits + tower count so the family spans undefended → towered.
+- **The staging-room layout is MIRRORED** (x → 49 − x around the rally) so the corridor gap /
+  swamp band / bunker gap lies between the rally and the exit the squad must reach; the single-room
+  layouts assume a west approach, and the target keeps that convention by putting the staging room
+  to the target's WEST (the crossing is the target's west edge). Pinned.
+- **`MultiRoom::decode(index) -> MultiRoomCase`** is the public, pure index → case map (the
+  "layout pair, ForceSpec, seed" decode), so a sweep can label or filter by case without
+  generating the world.
+
 ## Landed
 - `12b19c0` (eval) / `8189383` (super) — Phase A: the Generation/Evaluation/Validation seams, calibration re-landed behavior-identically.
 - `0d67830` (engine) / `c56ad6e` (agent) / `5427dff` (eval) / `dafcd73` (super) — Phase V: per-frame room + the interactive HTML replay player.
+- `9139b8f` (eval) — Phase B, single-room half: terrain-rich `Layout`s (`Corridor`/`SwampApproach`/`Bunker`), the `Designed` fixtures (incl. the twin-room siege) and the `Permutations` enumerator.
 - `978f92d` (eval) — Phase C: `ForceSpec` opponent forces + the `ManagedSquadIntegration` traversal lens.
+- `2fbf5a5` (eval) — Phase D: the `SizingWins` validator + the replay dashboard (`report::write_dashboard`, the contact-sheet index).
+- `6dd6bfb` (eval) — Phase F: `ForemanGenerator` (foreman-planned realistic bases over real terrain; ADR 0025 §12 Stage 3).
+- `287a689` (eval) — Phase G: `ImportedRoom` (captured-room fixtures × objective kinds × comps, single + multi-room; ADR 0025 §12 Stage 2).
+- WS-CLOSE 2026-09-07 batch (eval; SHA on the parent's commit) — Phase B, multi-room half: the `MultiRoom` generator (`generate.rs`), its pins (determinism, seam staging, builder aliasing, calibration assessability, mirrored staging layout, twin-index crossing) + the `multi_room_traversal_sweep` dashboard; the border ROUT bed (`stronghold::run_border_rout`, ADR 0023 cross-room Flee squad side).

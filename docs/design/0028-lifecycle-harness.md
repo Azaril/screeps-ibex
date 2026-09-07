@@ -285,7 +285,89 @@ The model omits real pathing/CPU, true intel-staleness timing, and engine quirks
 doesn't implement. A small live `[Lifecycle]`/`[SpawnQueue]` capture stays the final check
 before trusting any deploy.
 
+## Design deltas (2026-09-07)
+
+- **The four Seam-7 reconcile inputs are shared-kernel computations, exercised end-to-end (WS-CLOSE
+  lane (b1), parity M20–M23, RULING-10 (iv)).** The "kernels in `screeps-combat-decision`, adapters in
+  the bot" seam above now also covers the lifecycle CLOCKS, not only the verdicts: the REC-003 / ADR
+  0035 FU2 give-up clock is `lifecycle::{RetreatClock, MAX_RETREAT_BUDGET}` and the REC-036 enemy-HP
+  stall streak is `lifecycle::EnemyStallTracker` (both pure, `Copy`, ephemeral — never serialized);
+  the ADR 0042 §5 economic give-up latch is `screeps_econ_decision::spawn_policy::{EconomicGiveUp,
+  FORMING_ABANDON_STREAK}`. The live `SquadManager` and every harness reconcile driver advance the
+  SAME objects, so the harness's "MUST mirror the bot's" constant block does not grow (only
+  `COMMITMENT_BUDGET` / `MAX_FORMING_BUDGET` / `MAX_TRAVEL_BUDGET` remain mirrored — a follow-up of
+  the same shape).
+- **`forming_in_flight` is MEASURED on both sides (decision D3, Option A).** Live: `queue_slot_spawn`
+  returns whether it queued; the ephemeral `queued_last_tick` set feeds `forming && (queued_last_tick
+  || a member is still spawning)`. The harness churn drivers' composite (`completing || syncing ||
+  slots_to_spawn non-empty`) is the same signal one tick earlier; the one-member flow drivers keep
+  in-flight ≡ forming because their forming IS the one spawn in flight. Consequence: a forming roster
+  whose remainder can never be queued lapses its +400 lease instead of holding a claim slot to the
+  3000t backstop (`unbuildable_remainder_lapses_the_forming_lease`).
+- **Economic give-up in the drivers.** `forming_budget_remaining = clock && !economic_giveup`, with
+  the burn priced from the PRESENT slots' K3 body cost and `ChurnTarget.target_safe_mode` carrying the
+  exemption. Existing multi-slot fixtures are re-based from `objective_rate_milli: 0` (which now means
+  "worthless objective") to a covering rate, so they keep pinning the lease/travel envelope.
+- **D28 vacuous clear in the flows.** `ChurnTarget.live_visible_clear` and
+  `V1FlowScenario.{is_defend, live_visible_clear}` feed the manager's exact evidence form; the new
+  `ChurnOutcome::VacuouslyResolved` reports the kernel's literal verdict and
+  `ChurnOutcome::Reassigned.vacuous_reassignments` counts rebinds driven by it.
+- **New driver `run_stall_flow` (the in-room phase every other driver exits before).** Scripts the
+  fight per tick (`StallScript`), runs Phase A → Phase B in the manager's order, and returns the
+  kernel's literal terminal (`StallOutcome`). It is where the FU2 probe-bounce zombie, the frozen
+  disengaged streak, and REC-061 (resolved dominates the exhaust tick) are pinned end-to-end.
+- **Scenario coverage note.** `oversized_defense_roster_churns_never_deploys` no longer exercises the
+  in-flight refresh: today's `optimize_composition` sizes that roster small enough to complete inside
+  one lease window (engage at ~t330). The trickle-bank M23 bed (two 3000e members, 3e/t) is now the
+  fixture whose forming genuinely outlasts `COMMITMENT_BUDGET`.
+- **Bed 3 is a CLAIM BOARD, and it drives BOTH K4 arms (WS-CLOSE Phase B, 2026-09-07).**
+  `run_multi_forming(MultiSquadFormingScenario)` runs the live `SquadManager` phase order per tick —
+  Phase A `lifecycle::reconcile` (shared kernel; M20 measured in-flight, M23 economic give-up) → Phase C
+  K4 claim → Phase B K3 field + K1 `spawn_step` over the SHARED home lanes (claim-order requests,
+  cross-home de-dup, per-objective `homes_in_range` = the `MAX_SPAWN_DISTANCE` filter) → K0 proceed gate
+  — over a ranked `Vec` board (`BoardObjective`: composition, `is_defense`, `available_at`, static or
+  ADR 0042 value bid, `fight_ticks`, `wins_or_stalls_at`). `ClaimArm::ClaimsAllowed{max_concurrent,
+  max_forming}` is the offense-only budget the bed text names (it REPRODUCES the `forming-cap=1`
+  lockup); `ClaimArm::ClaimAdmission` is the live S5-CAP policy over `max_concurrent_squads(homes)`
+  (it SHOWS the fix). The proceed gate is `d9_proceed_gate`: the live composition
+  `winnable_fast_path_allowed || ready_to_depart_gate || deploy_then_retreat_allowed` (ADR 0029 D9 AS
+  BUILT is the P(win) fast-path over a live-visible owned room — there is no kind-based bypass; the
+  Lanchester verdict is a fixture present-count, the driver has no room view) vs the pre-D9 count-only
+  `squad_ready_to_depart`. A `Resolved` fight withdraws the objective from the board; a `GaveUp +
+  mark_unwinnable` backs it off for the rest of the budget (the live floor ≥2000t exceeds every bed's
+  remainder); a Defend `GaveUp` returns to the board and re-claims (generation counted). Refills for a
+  departed squad and renew are out of the bed's scope. Beds 5/6 stay out (WvC-2 ruling names 1+3).
+- **What bed 3 measured.** (i) The lockup shape (one trickle home, a heavy quad whose 4th member lands
+  after its 1st aged out, two finishable duos ranked behind it): `claims_allowed(max_forming=1)` at
+  87.5 claims only the quad, standing combat peaks at N-1 for 2500t, the duos are never claimed, and the
+  unaffordable 87.5 slot head-of-line-breaks the HIGH hauler to ZERO spawns — the live capture's
+  "combat: 2 2 2 2 0 2 3 / carry dipped" in one fixture. Under `claim_admission` + value bids both duos
+  form, depart and resolve beside the still-stuck quad. (ii) The defender board (ADR 0029 §11, four
+  defense quads two-per-home at 5e/t): under the count-only gate + offense-shaped pace the first
+  defender per home sits at 3/4 for the whole budget and the one queued behind it never fields a member
+  — it re-claims every +400 (a Defend GaveUp is never backed off), 6 generations; under D9/D10 as built
+  all four deploy at their winning duo. (iii) S5-CAP: a defense claim appearing with the offense board
+  at `max_concurrent_squads(2) = 3` is admitted the same tick (`active_at_claim == cap`) while the 4th
+  offense claim stays refused; the offense-only budget never claims it. (iv) The completing board (six
+  duos, four homes): `forming-cap=2` runs exactly two rosters in parallel, keeps the hauler spawning, and
+  finishes the board earlier than `forming-cap=1`. Bed 1 at N=2 over shared lanes: MEDIUM fields no
+  member on either home (both lapse at +400); 87.5 completes both, serialized, the second later than the
+  lone roster.
+- **The 0041 §7 P3 boosted lifecycle bed lives here too** (`run_boosted_forming`) — see ADR 0041's
+  2026-09-07 delta.
+
 ## Landed
 
+- 2026-09-07 WS-CLOSE Phase B (lane B(i)): bed 3 (`run_multi_forming`, both K4 arms, pins
+  `forming_cap_one_locks_the_claim_board` / `claim_admission_unlocks_the_board_behind_the_stuck_roster`
+  / `forming_cap_two_at_high_serializes_and_completes` / `forming_cap_one_finishes_the_completing_board_later`
+  / `four_defenders_stall_at_n_minus_one_under_the_count_gate` / `four_defenders_deploy_with_d9_d10` /
+  `defense_claim_admitted_past_a_full_offense_board` / `multi_forming_is_deterministic`) + bed 1 re-run
+  at N=2 over shared lanes (`n_squads_below_economy_never_field_over_shared_lanes` /
+  `n_squads_above_economy_complete_every_roster_over_shared_lanes`); every pin RED-verified against the
+  un-fixed arm. The thin live canary (offense-soak `[Lifecycle]`/`[SpawnQueue]` capture) is the Phase C
+  Docker pass.
+- 2026-09-07 WS-CLOSE lane (b1): M20–M23 both sides (shared `RetreatClock`/`EnemyStallTracker`/
+  `EconomicGiveUp`, measured `forming_in_flight`, `run_stall_flow`, D28 flow pins).
 - `ebf3623` Phase B-renew + spawn-adjacent rally point for forming squads
 - `bf021dd` rally gate departs on requested-present, robust to oscillating requested size

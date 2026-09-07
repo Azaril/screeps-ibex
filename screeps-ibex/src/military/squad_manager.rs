@@ -72,8 +72,18 @@ pub struct SquadFormingProgress {
     /// fires far earlier than the `MAX_FORMING_BUDGET` clock (now a mere liveness backstop) when an objective
     /// is worthless/unwinnable. K-tick latched (kills per-tick oscillation); reset on any covering tick and
     /// SKIPPED under safe-mode (a bounded window, not permanent unwinnability). Ephemeral (NOT serialized —
-    /// no WFV bump). Cleared on retire.
-    economic_giveup_streak: std::collections::BTreeMap<ObjectiveId, u32>,
+    /// no WFV bump). Cleared on retire. Parity M23: the latch is the SHARED
+    /// `screeps_econ_decision::spawn_policy::EconomicGiveUp` (the harness runs the same one).
+    economic_giveup_streak: std::collections::BTreeMap<ObjectiveId, screeps_econ_decision::spawn_policy::EconomicGiveUp>,
+    /// Parity M20 (Option A — MEASURE the in-flight signal, never assume it): objective ids for which
+    /// Phase B actually QUEUED at least one unfilled slot LAST tick (`queue_slot_spawn` returned true).
+    /// Phase A reads it next tick as `forming_in_flight = forming && (queued_last_tick || a member is
+    /// still spawning)`, so a roster whose remaining slots can NEVER be queued (every `build_body` is
+    /// `None` at the in-range capacity, or no home in range) stops refreshing its forming lease and the
+    /// base +400 lapses instead of holding a claim slot to the 3000-tick backstop — the branch the
+    /// offline harness validates. Ephemeral (a `BTreeSet`, NOT serialized — no WFV bump; membership
+    /// only, no result-affecting iteration). Cleared on retire/reassign/merge.
+    queued_last_tick: std::collections::BTreeSet<ObjectiveId>,
     /// objective id → the tick the full-roster squad DEPARTED home (the travel-budget clock, Break #2 travel
     /// half). Bounds the travel-phase lease refresh — past `MAX_TRAVEL_BUDGET` ticks the squad gives up.
     departed_at: std::collections::BTreeMap<ObjectiveId, u32>,
@@ -137,29 +147,30 @@ pub struct SquadFormingProgress {
     /// "stalled" (the old single MIN signal) and one moving lead can't mask a stuck bulk. Ephemeral (NOT
     /// serialized — no WFV bump). Cleared on retire.
     member_target_dist: std::collections::BTreeMap<(ObjectiveId, u32), u32>,
-    /// REC-003 (the Retreating liveness bound) + ADR 0035 FU2: objective id → the tick the give-up
-    /// clock STARTED this stretch. The clock runs while the squad is `Retreating` OR while the
-    /// enemy-HP stall streak is latched (`retreat_clock_holds`) — so a period-2 probe bounce on a
-    /// no-headway fight cannot reset it on its Engaged ticks (the committed-never-progresses zombie).
-    /// A non-Retreating tick with the stall unlatched (genuine headway) removes the entry; past
-    /// [`MAX_RETREAT_BUDGET`] the reconcile kernel force-aborts (`retreat_budget_exhausted`).
-    /// Ephemeral (NOT serialized — no WFV bump; a VM reload restarts the clock, still bounded). Cleared
-    /// on retire/reassign.
-    retreating_since: std::collections::BTreeMap<ObjectiveId, u32>,
-    /// REC-036 (the `enemy_stalled` input): objective id → (last-observed total alive enemy hits,
-    /// consecutive in-room ticks that sum did NOT decrease). Mirrors the sim driver's stalemate tracking
-    /// (combat-agent `ManagedSimSquad`) so the live bot and the sim report the one input the stalemate
-    /// valve reads the SAME way. Accumulates ONLY while a member is in the target room (cached intel is
-    /// frozen while nobody is there — an en-route squad must not accrue a vacuous stall from a constant
-    /// snapshot). Ephemeral (NOT serialized — no WFV bump). Cleared on retire/reassign + on room exit.
-    enemy_stall: std::collections::BTreeMap<ObjectiveId, (u32, u32)>,
+    /// REC-003 (the Retreating liveness bound) + ADR 0035 FU2: objective id → the give-up clock (the
+    /// SHARED `lifecycle::RetreatClock`, parity M22 — the harness runs the same one). The clock runs
+    /// while the squad is `Retreating` OR while the enemy-HP stall streak is latched — so a period-2
+    /// probe bounce on a no-headway fight cannot reset it on its Engaged ticks (the
+    /// committed-never-progresses zombie). A non-Retreating tick with the stall unlatched (genuine
+    /// headway) clears it; past `MAX_RETREAT_BUDGET` the reconcile kernel force-aborts
+    /// (`retreat_budget_exhausted`). Ephemeral (NOT serialized — no WFV bump; a VM reload restarts the
+    /// clock, still bounded). Cleared on retire/reassign.
+    retreating_since: std::collections::BTreeMap<ObjectiveId, lifecycle::RetreatClock>,
+    /// REC-036 (the `enemy_stalled` input): objective id → the SHARED `lifecycle::EnemyStallTracker`
+    /// (last-observed total alive enemy hits, consecutive in-room ticks that sum did NOT decrease).
+    /// Mirrors the sim driver's stalemate tracking (combat-agent `ManagedSimSquad`) so the live bot and
+    /// the sim report the one input the stalemate valve reads the SAME way. Accumulates ONLY while a
+    /// member is in the target room (cached intel is frozen while nobody is there — an en-route squad
+    /// must not accrue a vacuous stall from a constant snapshot). Ephemeral (NOT serialized — no WFV
+    /// bump). Cleared on retire/reassign + on room exit.
+    enemy_stall: std::collections::BTreeMap<ObjectiveId, lifecycle::EnemyStallTracker>,
     /// REC-062 (the `structure_stalled` input — the STRUCTURE twin of `enemy_stall`): objective id →
-    /// (last-observed total hits of the TARGET hostile structures, consecutive in-room ticks that sum did
-    /// NOT decrease). Same cadence/reset/room-gating as `enemy_stall` (and the sim driver's
-    /// `prev_structure_hits`), so the harmless-turtle disengage distinguishes a genuinely-unrazable turtle
-    /// (structure hits flat) from a slow structure-raze (hits DROPPING ⇒ NOT stalled ⇒ keep grinding).
-    /// Ephemeral (NOT serialized — no WFV bump). Cleared on retire/reassign + on room exit.
-    structure_stall: std::collections::BTreeMap<ObjectiveId, (u32, u32)>,
+    /// the same tracker over the summed hits of the TARGET hostile structures. Same cadence/reset/
+    /// room-gating as `enemy_stall` (and the sim driver's `prev_structure_hits`), so the harmless-turtle
+    /// disengage distinguishes a genuinely-unrazable turtle (structure hits flat) from a slow
+    /// structure-raze (hits DROPPING ⇒ NOT stalled ⇒ keep grinding). Ephemeral (NOT serialized — no WFV
+    /// bump). Cleared on retire/reassign + on room exit.
+    structure_stall: std::collections::BTreeMap<ObjectiveId, lifecycle::EnemyStallTracker>,
     /// REC-015b (EP-3.5 warn-once latch): (objective, slot_index) pairs whose `build_body → None`
     /// roster-stall has ALREADY been warned this fielded generation, so the unconditional warning fires
     /// once per stalled slot instead of every tick. Cleared on retire/reassign (a re-field re-warns).
@@ -253,13 +264,6 @@ const COMMITMENT_BUDGET: u32 = 400;
 /// banking gap can exceed COMMITMENT_BUDGET, which is exactly why the per-present++ refresh was insufficient).
 const MAX_FORMING_BUDGET: u32 = 3000;
 
-/// ADR 0042 §5 / ADR 0043 A3 — consecutive ticks the ECONOMIC forming give-up must hold before it fires
-/// (`should_abandon_forming` true: the completed objective's rate can't cover the present roster's burn).
-/// K-tick latch so a transient p_win/intel dip does not abandon a valuable squad; small (a fraction of a
-/// creep life) so a genuinely worthless/unwinnable objective is dropped in ~a scout cycle, LONG before the
-/// `MAX_FORMING_BUDGET` (3000) liveness backstop — the demotion the R_net give-up is about.
-const FORMING_ABANDON_STREAK: u32 = 20;
-
 /// Deep-reach fix (Break #2 travel half) — absolute bound on the travel-phase lease refresh. A full-roster
 /// squad that has not arrived within this many ticks of departing home gives up. Covers the longest realistic
 /// multi-room hop (MAX_SPAWN_DISTANCE=10 rooms ≈ 500 tiles) with margin. REC-004: the departure stamp is
@@ -273,15 +277,6 @@ const MAX_TRAVEL_BUDGET: u32 = 1000;
 /// over — a bounded retry for a transient hiccup (spawn drought, a blocked corridor that clears), a hard
 /// stop for the structural never-departs loop the 2026-07 live root cause exposed (Generation 28+).
 const NEVER_DEPARTED_GIVEUP_LIMIT: u32 = 2;
-
-/// REC-003 — the Retreating liveness budget (EP-2.7 bounded liveness, NOT hysteresis): a squad that sits
-/// in `Retreating` this many ticks without re-engaging is force-aborted (`GaveUp` + backoff) by the
-/// reconcile kernel. The engage/retreat dead band (retreat ≤ −band, re-engage ≥ +band AND HP above the
-/// re-engage band) can otherwise park a squad `Retreating` forever while its in-room focus refreshes the
-/// lease each tick. 600 covers a full worst-realistic heal-back (a multi-member deficit at ranged-heal
-/// rates is a few hundred ticks) plus margin, and stays well under `CREEP_LIFE_TIME` so the slot is freed
-/// with most of a lifetime to spare.
-const MAX_RETREAT_BUDGET: u32 = 600;
 
 /// Chebyshev distance between two rooms.
 fn room_distance(a: RoomName, b: RoomName) -> u32 {
@@ -463,41 +458,6 @@ fn clear_departure_clock(traveling: bool, engaged_once: bool) -> bool {
 /// fix — see the kernel's `unwinnable_contact`). Pure so the empty-room protection is host-testable.
 fn lost_in_room_verdict(in_room_any: bool, hostile_threat_present: bool, present_wins_or_stalls: bool) -> bool {
     in_room_any && hostile_threat_present && !present_wins_or_stalls
-}
-
-/// REC-036: one step of the per-objective enemy-stall tracker — `(prev_enemy_hits, stall_ticks)` →
-/// the new pair given this tick's total alive enemy hits. The sim driver's exact rule (combat-agent
-/// `ManagedSimSquad`): the streak grows while the sum does not DECREASE (kills/damage shrink it;
-/// heal-back/reinforcement keep it flat-or-up = no headway) and resets on any decrease. Pure.
-/// ADR 0035 FU2 — whether the REC-003 give-up clock RUNS this tick. It runs while the squad is
-/// `Retreating` (the original REC-003 bound) OR while the enemy-HP stall streak is LATCHED
-/// (`ENEMY_STALL_TICKS` of engaged no-headway ticks) — so the period-2 Retreating↔Engaged probe bounce
-/// a borderline position-dependent fight legitimately runs (re-enter, test the water, maybe this time
-/// the geometry favours us) cannot reset the clock on its Engaged ticks and become IMMORTAL (the
-/// committed-never-progresses zombie). The clock CLEARS only on a non-Retreating tick with the stall
-/// unlatched — which genuine headway produces (any damage landed resets the streak). Pure.
-fn retreat_clock_holds(state_retreating: bool, stalemate_latched: bool) -> bool {
-    state_retreating || stalemate_latched
-}
-
-fn advance_enemy_stall(prev: Option<(u32, u32)>, enemy_hits_now: u32, engaged: bool) -> (u32, u32) {
-    // FU2 (the re-engage-veto companion): a DECREASE resets the streak in ANY state — headway is
-    // headway, and a kiting/parting-shot retreat that lands damage is real progress (freezing it
-    // deadlocked the multi-room assault bed: the un-latch that used to release the stalemate never
-    // fired). The streak GROWS only on ENGAGED ticks: a squad not in contact cannot *fail* to make
-    // headway, so a recovery retreat under flat enemy hits must not accrue toward the re-engage veto
-    // (a winning raze that dipped out of tower range would otherwise latch a stall at range). Flat
-    // hits while disengaged FREEZE the streak — a genuine stall latched while engaged survives the
-    // disengage (dropping it would re-open the period-2 oscillation).
-    match prev {
-        Some((prev_hits, _)) if enemy_hits_now < prev_hits => (enemy_hits_now, 0),
-        Some((prev_hits, stall)) if engaged => {
-            debug_assert!(enemy_hits_now >= prev_hits);
-            (enemy_hits_now, stall.saturating_add(1))
-        }
-        Some(frozen) => frozen,
-        None => (enemy_hits_now, 0),
-    }
 }
 
 /// REC-017 — the renew-to-SUFFICIENCY TTL target for a member held/forming at a home room, from its
@@ -1480,6 +1440,7 @@ fn apply_merges(data: &mut SquadManagerSystemData, merges: &[MergeDecision], _no
         if let Some(donor_obj) = data.squad_contexts.get(donor).and_then(|c| c.objective_id) {
             data.forming_progress.forming_started_at.remove(&donor_obj);
             data.forming_progress.economic_giveup_streak.remove(&donor_obj);
+            data.forming_progress.queued_last_tick.remove(&donor_obj);
             data.forming_progress.departed_at.remove(&donor_obj);
             data.forming_progress.last_present.remove(&donor_obj);
             data.forming_progress.last_target_dist.remove(&donor_obj);
@@ -1836,7 +1797,7 @@ impl<'a> System<'a> for SquadManagerSystem {
             // Snapshot the squad facts (Copy) in one borrow.
             // ADR 0034 D5: also collect PER-MEMBER (entity, room-distance-to-target) so the travel lease can
             // refresh on a MAJORITY closing (not the single min). `member_dists` is empty while forming.
-            let (wiped, has_focus, engaged_once, in_target_room, has_members, present_count, target_dist, member_dists, state_retreating) = data
+            let (wiped, has_focus, engaged_once, in_target_room, has_members, present_count, member_total, target_dist, member_dists, state_retreating) = data
                 .squad_contexts
                 .get(squad_entity)
                 .map(|ctx| {
@@ -1874,13 +1835,17 @@ impl<'a> System<'a> for SquadManagerSystem {
                         in_room,
                         !ctx.members.is_empty(),
                         present,
+                        // Parity M20: the rostered member count INCLUDING still-spawning ones (a member
+                        // whose spawn was accepted but has no position yet) — `member_total > present`
+                        // is the "a member is in flight" half of the measured forming in-flight signal.
+                        ctx.members.len(),
                         dist,
                         dists,
                         // REC-003: last tick's squad state — feeds the time-in-Retreating clock below.
                         ctx.state == SquadState::Retreating,
                     )
                 })
-                .unwrap_or((false, false, false, false, false, 0, None, Vec::new(), false));
+                .unwrap_or((false, false, false, false, false, 0, 0, None, Vec::new(), false));
             // ADR 0035 D4: the squad's PREVIOUS-tick LOSE VERDICT over the REAL in-room view, CARRIED from
             // Phase B (`compute_squad_orders` stamps `lost_in_room` AFTER `apply_squad_decision`) — the
             // GENUINE lose `engaged_once && in_room_any && !present_force_wins_or_stalls`, NOT the broader
@@ -1915,11 +1880,18 @@ impl<'a> System<'a> for SquadManagerSystem {
             data.forming_progress.last_present.insert(obj_id, present_count);
 
             // ── Deep-reach fix (Break #1, the forming-lease): a forming squad has a slot still QUEUED or
-            // IN FLIGHT (an unfilled slot Phase B re-queues every tick = a member banking/spawning) whenever
-            // it is forming — so refresh the lease through the inter-member banking gap, NOT only on the exact
-            // present++ tick (which lapsed between members under contention → re-field churn). BOUNDED by a
-            // per-generation forming clock: past MAX_FORMING_BUDGET the refresh stops and the squad gives up.
-            let forming_in_flight = forming;
+            // IN FLIGHT (a member banking/spawning) — refresh the lease through the inter-member banking gap,
+            // NOT only on the exact present++ tick (which lapsed between members under contention → re-field
+            // churn). BOUNDED by a per-generation forming clock: past MAX_FORMING_BUDGET the refresh stops
+            // and the squad gives up. Parity M20 (Option A, WS-CLOSE D3): the signal is MEASURED, not
+            // assumed — Phase B records whether it actually queued an unfilled slot last tick
+            // (`queued_last_tick`), and a rostered member without a position yet is one still spawning.
+            // The pre-fix `forming_in_flight = forming` baked in Phase B's "an unfilled slot is always
+            // re-queued" assumption, so a roster whose remaining slots could NEVER be queued (every
+            // `build_body` None at the in-range capacity / no home in range) refreshed its lease to the
+            // 3000-tick backstop while holding a claim slot; now the base +400 lapses in that gap — the
+            // branch the offline lifecycle harness validates (`unbuildable_remainder_lapses_the_lease`).
+            let forming_in_flight = forming && (data.forming_progress.queued_last_tick.contains(&obj_id) || member_total > present_count);
             let forming_started_at = *data.forming_progress.forming_started_at.entry(obj_id).or_insert(now);
             let budget_clock_remaining = now.saturating_sub(forming_started_at) < MAX_FORMING_BUDGET;
 
@@ -1945,15 +1917,12 @@ impl<'a> System<'a> for SquadManagerSystem {
                         );
                         screeps_econ_decision::spawn_policy::should_abandon_forming(r_o, burn, 0)
                     });
-                let streak = data.forming_progress.economic_giveup_streak.entry(obj_id).or_insert(0);
-                if abandon_now {
-                    *streak = streak.saturating_add(1);
-                } else {
-                    *streak = 0;
-                }
-                *streak >= FORMING_ABANDON_STREAK
+                // Parity M23: the SHARED K-tick latch (`FORMING_ABANDON_STREAK` lives with it in the
+                // econ-decision kernel) — the offline lifecycle harness advances the identical latch.
+                data.forming_progress.economic_giveup_streak.entry(obj_id).or_default().advance(abandon_now)
             } else {
                 data.forming_progress.economic_giveup_streak.remove(&obj_id);
+                data.forming_progress.queued_last_tick.remove(&obj_id);
                 false
             };
             // The forming lease is refreshed only while the budget clock has time AND the squad is not
@@ -1982,27 +1951,24 @@ impl<'a> System<'a> for SquadManagerSystem {
                 now
             };
             let travel_budget_remaining = now.saturating_sub(departed_at) < MAX_TRAVEL_BUDGET;
-            // ── REC-003: the time-in-Retreating clock. Entered on the first Retreating tick. ADR 0035
-            // FU2: cleared only by a non-Retreating tick with NO LATCHED STALEMATE (`retreat_clock_holds`)
+            // ── REC-003: the time-in-Retreating clock — the SHARED `lifecycle::RetreatClock` (parity M22:
+            // the offline harness runs the identical clock). Entered on the first holding tick. ADR 0035
+            // FU2: cleared only by a non-Retreating tick with NO LATCHED STALEMATE (`RetreatClock::holds`)
             // — a probe re-engage during a latched stall (the period-2 Retreating↔Engaged bounce a
             // borderline position-dependent fight legitimately runs to test the water) does NOT reset it,
             // so the committed-never-progresses zombie is bounded: the clock accrues ACROSS the bounce
             // and force-aborts at MAX_RETREAT_BUDGET (GaveUp + backoff). Genuine headway (damage landed)
             // resets the stall streak → the stall unlatches → the next non-Retreating tick clears the
             // clock — a fight that is actually progressing never trips this. Past MAX_RETREAT_BUDGET the
-            // kernel force-aborts (its terminal dominates the in-room focus-refresh). ──
-            let stalemate_latched = data
+            // kernel force-aborts (its terminal dominates the in-room focus-refresh). The stall latch is
+            // read from LAST tick's Phase-B advance (the live order the harness mirrors). ──
+            let stalemate_latched = data.forming_progress.enemy_stall.get(&obj_id).is_some_and(|t| t.latched());
+            let retreat_budget_exhausted = data
                 .forming_progress
-                .enemy_stall
-                .get(&obj_id)
-                .is_some_and(|&(_, streak)| streak >= screeps_combat_decision::ENEMY_STALL_TICKS);
-            let retreat_budget_exhausted = if retreat_clock_holds(state_retreating, stalemate_latched) {
-                let since = *data.forming_progress.retreating_since.entry(obj_id).or_insert(now);
-                now.saturating_sub(since) >= MAX_RETREAT_BUDGET
-            } else {
-                data.forming_progress.retreating_since.remove(&obj_id);
-                false
-            };
+                .retreating_since
+                .entry(obj_id)
+                .or_default()
+                .advance(now, state_retreating, stalemate_latched);
             // ── ADR 0034 D5 (RC-4/RC-8 — per-member + MAJORITY travel progress). Refresh the travel lease
             // while a MAJORITY of PRESENT members are CLOSING distance on the target (or arrived in it), NOT
             // while the single closest is. The old MIN-over-members signal let ONE stuck member pin the lease
@@ -2193,6 +2159,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.last_present.remove(&obj_id);
                 data.forming_progress.forming_started_at.remove(&obj_id);
                 data.forming_progress.economic_giveup_streak.remove(&obj_id);
+                data.forming_progress.queued_last_tick.remove(&obj_id);
                 data.forming_progress.departed_at.remove(&obj_id);
                 data.forming_progress.last_target_dist.remove(&obj_id);
                 // Introspection trackers too, so a re-field starts the phase-change/heartbeat trace fresh.
@@ -2276,6 +2243,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.last_present.remove(&obj_id);
                 data.forming_progress.forming_started_at.remove(&obj_id);
                 data.forming_progress.economic_giveup_streak.remove(&obj_id);
+                data.forming_progress.queued_last_tick.remove(&obj_id);
                 data.forming_progress.departed_at.remove(&obj_id);
                 data.forming_progress.last_target_dist.remove(&obj_id);
                 data.forming_progress.last_phase.remove(&obj_id);
@@ -2339,6 +2307,9 @@ impl<'a> System<'a> for SquadManagerSystem {
             // into a receiver via the deferred transfer). Queuing its unfilled slots now would spawn a surplus
             // creep the same tick the donor merges + is deleted (wasted energy + spawn occupancy).
             if merge_donors.contains(squad_entity) {
+                // Parity M20: nothing queued for the donor this tick — say so (a stale "queued" bit must
+                // not refresh a donor's forming lease next tick).
+                data.forming_progress.queued_last_tick.remove(obj_id);
                 continue;
             }
             // Read the composition off the objective each tick (the producer owns it). ADR 0042: the
@@ -2356,9 +2327,17 @@ impl<'a> System<'a> for SquadManagerSystem {
                             is_defense,
                         )
                     }
-                    None => continue,
+                    None => {
+                        // Parity M20: the bit is MEASURED every tick — an objective with no
+                        // composition queues nothing, so it must not carry last tick's bit.
+                        data.forming_progress.queued_last_tick.remove(obj_id);
+                        continue;
+                    }
                 },
-                None => continue,
+                None => {
+                    data.forming_progress.queued_last_tick.remove(obj_id);
+                    continue;
+                }
             };
 
             // WvC-1 — defender spawn-readiness wiring (`military::damage`): for a DEFENSE squad, judge
@@ -2407,6 +2386,9 @@ impl<'a> System<'a> for SquadManagerSystem {
             // fighter that lost the spawn race (the live W7N4 "5 Healers + 1 RangedDPS at present=1/2"
             // healer pile-up). The slot's stable `slot_index` (its composition position) is PRESERVED —
             // only the queue-attempt ORDER changes, so the engaged formation / member tracking is unchanged.
+            // Parity M20 (Option A): MEASURE whether any unfilled slot was actually queued this tick —
+            // Phase A reads it next tick as the forming in-flight signal (see `forming_in_flight`).
+            let mut any_queued = false;
             for slot_index in spawn_order_fighter_first(&slots) {
                 let slot = &slots[slot_index];
                 let already_filled = data
@@ -2417,7 +2399,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 if already_filled {
                     continue;
                 }
-                queue_slot_spawn(
+                any_queued |= queue_slot_spawn(
                     &mut data.spawn_queue,
                     &homes,
                     slot,
@@ -2430,6 +2412,11 @@ impl<'a> System<'a> for SquadManagerSystem {
                     &mut data.forming_progress.build_body_warned,
                     debug,
                 );
+            }
+            if any_queued {
+                data.forming_progress.queued_last_tick.insert(*obj_id);
+            } else {
+                data.forming_progress.queued_last_tick.remove(obj_id);
             }
         }
 
@@ -2767,7 +2754,9 @@ struct DefenseUrgency {
 }
 
 /// Queue one slot's spawn to every in-range home room, sharing a token so exactly
-/// one room fulfills it per tick.
+/// one room fulfills it per tick. Returns whether the slot was actually QUEUED (parity M20: the
+/// measured forming in-flight signal) — `false` on the two silent roster-stall points (no home in
+/// spawn range; `build_body` None at the strongest in-range home).
 #[allow(clippy::too_many_arguments)]
 fn queue_slot_spawn(
     spawn_queue: &mut SpawnQueue,
@@ -2781,7 +2770,7 @@ fn queue_slot_spawn(
     defense_urgency: Option<DefenseUrgency>,
     build_body_warned: &mut std::collections::BTreeSet<(ObjectiveId, usize)>,
     debug: bool,
-) {
+) -> bool {
     // Size the member's body ONCE to the STRONGEST in-range home (capped by the body's
     // `maximum_repeat`) — the composition's intended size — NOT per-home. Per-home sizing let a cheaper
     // idle home win the shared-token spawn and field an UNDERSIZED creep (e.g. a 3-repeat SK duo too
@@ -2808,7 +2797,7 @@ fn queue_slot_spawn(
                 obj_id, slot_index, slot.role, target_room, MAX_SPAWN_DISTANCE
             );
         }
-        return;
+        return false;
     };
     // Build via `build_body` so a force-SIZED slot (BodyType::Sized, R3) goes through the dynamic builder
     // and a template slot through create_body. CAP the build energy at PREFERRED_MEMBER_ENERGY: a force-
@@ -2873,7 +2862,7 @@ fn queue_slot_spawn(
                     best_capacity,
                 );
             }
-            return;
+            return false;
         }
     };
 
@@ -2922,6 +2911,7 @@ fn queue_slot_spawn(
         );
         spawn_queue.request(home.entity, request);
     }
+    true
 }
 
 /// Mint a `SquadContext` bound to the objective and claim it. Members spawn next
@@ -3237,7 +3227,7 @@ fn compute_squad_orders(
     // so a winning grind or a creepless structure siege (balance clamps positive) never trips it. On a
     // trip: Retreating → the exit is REC-003's retreat bound / re-engage — the disengage composes with
     // the lifecycle bounds instead of oscillating. Ephemeral tracker — no serialized state, no WFV bump.
-    // FU2: the streak ADVANCES only on ENGAGED ticks and FREEZES otherwise (see `advance_enemy_stall`) —
+    // FU2: the streak ADVANCES only on ENGAGED ticks and FREEZES otherwise (see `EnemyStallTracker`) —
     // paired with the kernel's stalemate re-engage veto, a recovery retreat can't latch a stall while a
     // genuinely latched one survives the disengage. `current_state` is the previous tick's applied state.
     // ... AND IN CONTACT (item-8a finding, 2026-08-24, sim parity — the sim driver carries the
@@ -3256,9 +3246,9 @@ fn compute_squad_orders(
     let stall_engaged = current_state == screeps_combat_decision::SquadOrderState::Engaged && in_contact;
     let enemy_stalled = if in_room_any {
         let enemy_hits_now: u32 = hostiles.iter().filter(|h| h.hits > 0).map(|h| h.hits).sum();
-        let advanced = advance_enemy_stall(forming_progress.enemy_stall.get(&obj_id).copied(), enemy_hits_now, stall_engaged);
-        forming_progress.enemy_stall.insert(obj_id, advanced);
-        advanced.1 >= screeps_combat_decision::ENEMY_STALL_TICKS
+        let tracker = forming_progress.enemy_stall.entry(obj_id).or_default();
+        tracker.advance(enemy_hits_now, stall_engaged);
+        tracker.latched()
     } else {
         forming_progress.enemy_stall.remove(&obj_id);
         false
@@ -3266,7 +3256,7 @@ fn compute_squad_orders(
 
     // ── REC-062 — the STRUCTURE twin: wire `structure_stalled` from the summed hits of the TARGET
     // hostile structures, using the SAME per-objective tracker/cadence/room-gating as `enemy_stalled`
-    // above (and the sim driver's `prev_structure_hits`) — `advance_enemy_stall` is the shared pure step
+    // above (and the sim driver's `prev_structure_hits`) — `EnemyStallTracker` is the shared pure step
     // (it tracks a summed-hits streak; structures reuse it verbatim). The harmless-turtle disengage
     // (decide_squad) requires BOTH signals, so a slow raze (dropping structure hits ⇒ the streak resets ⇒
     // NOT stalled) keeps grinding while a genuinely-unrazable turtle (flat hits) disengages. Ephemeral —
@@ -3277,9 +3267,9 @@ fn compute_squad_orders(
             .filter(|s| s.ownership == screeps_combat_decision::Ownership::Hostile && s.hits > 0)
             .map(|s| s.hits)
             .sum();
-        let advanced = advance_enemy_stall(forming_progress.structure_stall.get(&obj_id).copied(), structure_hits_now, stall_engaged);
-        forming_progress.structure_stall.insert(obj_id, advanced);
-        advanced.1 >= screeps_combat_decision::ENEMY_STALL_TICKS
+        let tracker = forming_progress.structure_stall.entry(obj_id).or_default();
+        tracker.advance(structure_hits_now, stall_engaged);
+        tracker.latched()
     } else {
         forming_progress.structure_stall.remove(&obj_id);
         false
@@ -5303,46 +5293,10 @@ mod tests {
         assert!(clear_departure_clock(false, true), "a genuine engage ends the travel phase — the clock may clear");
     }
 
-    /// ADR 0035 FU2 — the give-up clock survives the probe bounce: it RUNS on a Retreating tick AND
-    /// on an Engaged tick with the stall latched (the period-2 Retreating↔Engaged probe that made the
-    /// pre-fix clock immortal — every Engaged tick cleared it), and CLEARS only once the squad is
-    /// non-Retreating with the stall unlatched (genuine headway resets the streak → unlatches).
-    #[test]
-    fn giveup_clock_survives_the_probe_bounce() {
-        assert!(retreat_clock_holds(true, false), "Retreating alone runs the clock (REC-003 unchanged)");
-        assert!(retreat_clock_holds(true, true), "Retreating with a latched stall runs the clock");
-        assert!(
-            retreat_clock_holds(false, true),
-            "an Engaged PROBE tick during a latched stall must NOT clear the clock (the immortal-bounce fix)"
-        );
-        assert!(!retreat_clock_holds(false, false), "engaged with real headway (stall unlatched) clears it");
-    }
-
-    /// REC-036 — the enemy-stall streak mirrors the sim driver exactly (combat-agent `ManagedSimSquad`):
-    /// it grows while the total alive enemy hits do not DECREASE (out-healed / reinforced = no headway)
-    /// and resets on any decrease (damage landed / a kill). The threshold constant is shared with the
-    /// decision crate so live and sim report the stalemate input the same way. FU2: the streak advances
-    /// only on ENGAGED ticks and FREEZES otherwise — a recovery retreat neither latches a stall (which
-    /// the re-engage veto would then read, deadlocking a winning fight) nor releases a latched one
-    /// (which would re-open the period-2 disengage oscillation).
-    #[test]
-    fn enemy_stall_streak_grows_only_without_hp_progress() {
-        assert_eq!(advance_enemy_stall(None, 5_000, true), (5_000, 0), "first in-room reading starts a fresh streak");
-        assert_eq!(advance_enemy_stall(Some((5_000, 3)), 5_000, true), (5_000, 4), "flat (out-healed) grows the streak");
-        assert_eq!(advance_enemy_stall(Some((5_000, 3)), 6_000, true), (6_000, 4), "healed-up/reinforced is also no headway");
-        assert_eq!(advance_enemy_stall(Some((5_000, 30)), 4_990, true), (4_990, 0), "any decrease (damage landed) resets");
-        // FU2 refinements: a DECREASE resets in ANY state (a kiting/parting-shot retreat that lands
-        // damage is real headway — freezing it deadlocked the multi-room assault bed); flat hits on a
-        // non-engaged tick FREEZE the streak — no growth (a healing retreat under flat enemy hits must
-        // not accrue toward the re-engage veto) and no release of a latched stall.
-        assert_eq!(advance_enemy_stall(Some((5_000, 3)), 5_000, false), (5_000, 3), "frozen: flat hits don't grow the streak while disengaged");
-        assert_eq!(advance_enemy_stall(Some((5_000, 6)), 6_000, false), (5_000, 6), "frozen: healed-up while disengaged neither grows nor resets");
-        assert_eq!(advance_enemy_stall(Some((5_000, 41)), 4_000, false), (4_000, 0), "a decrease resets in ANY state — kiting fire is headway");
-        assert_eq!(advance_enemy_stall(None, 5_000, false), (5_000, 0), "first reading seeds without accrual");
-        // Parity pin: the shared threshold matches the sim driver's historical STALL_LIMIT (=40,
-        // combat-agent squad.rs) — the two surfaces must report the one stalemate input identically.
-        assert_eq!(screeps_combat_decision::ENEMY_STALL_TICKS, 40, "sim/live stall-threshold parity");
-    }
+    // REC-003 / ADR 0035 FU2 / REC-036 truth tables (`giveup_clock_survives_the_probe_bounce`,
+    // `enemy_stall_streak_grows_only_without_hp_progress`) moved WITH the code into the shared kernel
+    // (`screeps_combat_decision::lifecycle::{RetreatClock, EnemyStallTracker}`, parity M22) — one
+    // implementation, its pins beside it; the harness drives the same clock end-to-end.
 
     /// REC-017 — the renew-to-sufficiency target must COVER the D6a lifetime gate's requirement for every
     /// in-range rally geometry (rally ≤ one room off the member→target corridor, ≤ one room short of the

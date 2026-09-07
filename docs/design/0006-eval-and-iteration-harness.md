@@ -149,3 +149,74 @@ Inc C is the point at which fast iteration, introspection and a moving combat sc
 
 ## Sequencing & cross-ADR ordering
 This is the verification substrate every later increment validates against. **Part B (the combat sim) must precede ADR 0008's combat behavior overhaul**, so cohesion/orphan regressions are caught deterministically per-change. The cohesion metrics this ADR defines are the source for ADR 0008's force-abort/cohesion validation and ADR 0014's posture audit. Test-layer ownership (assertion forms, flake policy, seam registration of `TacticalAgent`/`CombatView`) stays with ADR [0015](0015-testing-and-validation-strategy.md).
+
+## Design deltas (2026-09-07 — WS-CLOSE lane (b3), H5 parity oracle)
+
+- **Crate split for §B.1 (`parity.rs`) — decision D5.** §B.1 placed `parity.rs` in `screeps-combat-eval`.
+  The pure half — the golden-vector schema (`GoldenVector`: room, row-major server terrain string,
+  owners, initial creeps with parts/hits/boost/fatigue, structures, towers, per-tick intent script,
+  per-tick frames of creep x/y/hits/fatigue + deaths + destroyed + damage events), `replay` (rebuild
+  the world, drive the real `resolve_tick`), `diff` (`ParityDiff`: first divergent tick + per-field
+  deltas), and the `ParityBudget`/`assess` grading — lives in **`screeps-combat-engine::parity`**,
+  because the layer-1 gate `screeps-combat-engine/tests/conformance.rs` is an integration test of
+  the engine crate and cannot depend on combat-eval without a cycle. The Docker-facing half —
+  seeding (`screeps-server-kit::server::cmd_insert_creeps` / `cmd_insert_structures` /
+  `cmd_room_creeps` / `cmd_remove_seeded` / `cmd_activate_rooms`, pure command builders over
+  `storage.db['rooms.objects']`), capture, the layer-2 report and the nightly runner — lives in
+  **`screeps-ibex-eval::parity`** (the policy crate that already owns `Fault`/scenarios;
+  `Fault::ParityScript` is the scenario-file form). The live-side determinism the oracle needs is
+  the bot's **scripted driver** `screeps-ibex::eval_parity` (`EvalFeatures.parity_script` +
+  `Memory.parity_script`): `pv-<scenario>-<n>` creeps execute a fixed per-tick intent table (combat
+  through the guarded intent sink so the `IntentRecorder` digest stays comparable; movement as a raw
+  `creep.move(dir)` so the vector measures the ENGINE's movement resolution, not the rover) and print
+  one `PV1 ` console line per visible scripted creep per tick, stamped with `Game.time` — which is
+  what makes the capture tick-exact despite the kit's 2 s sampling (§Context). Layer-1 tolerance is
+  ZERO (byte-exact, unchanged). `screeps-combat-eval/src/lib.rs` and its `Cargo.toml` still say the
+  oracle is "the follow-on increment" — stale wording, that crate is not the oracle's home.
+- **"Nightly gate" form — decision D6.** There is no CI. Layer 2 is a one-command Rust runner
+  (`screeps-ibex-eval parity nightly`, per-bed `parity report --scenario <bed>`) plus an `#[ignore]`
+  lane (`cargo test -p screeps-ibex-eval -- --ignored parity_nightly`) the operator schedules. It
+  starts **REPORT-ONLY** with `screeps-ibex-eval/parity/parity-budget.json` seeded before any server
+  report existed (position 1 / hits 50 / death-tick 2, ceilings on the worst per-frame delta from
+  first contact); the budget is re-seeded from the first reports and promoted to `gating` only by
+  operator decision under ADR 0015's earned-promotion count. The layer-2 sim side is
+  `IbexAgent` vs `IbexAgent` seeded from the live **first-contact frame** (the bot does not adopt
+  DB-seeded `pv-*` creeps into a squad, so the "unscripted bed" today is the driver in `trace` mode
+  over whatever the bot's own systems do; fielding the bed through the bot's real squads is a
+  follow-up in the squad manager, not here).
+- **Placeholders are not evidence.** Five catalog beds (`melee-1v1` attack-back, `kite-r3` ranged
+  kite at range 3, `heal-race` damage-then-heal netting, `tower-rampart` tower vs rampart-shielded
+  target, `tough-ladder` T1/T2/T3 TOUGH reduction) ship as `tests/conformance/*.json` **synthesized
+  by the sim itself** with `provenance.source = "sim-generated placeholder, replace on first Docker
+  capture"`; the conformance test prints the server-captured/placeholder mix every run. The first
+  Docker session (`parity capture --scenario <name>`, RULING-10 lane (c)) replaces them; the open
+  question it must answer first is whether the engine ticks DB-inserted creeps (fallback: spawn the
+  `pv-*` bodies through the bot's own spawn). Multi-room/border vectors stay out of the minimal set
+  (§B.3 single room); rover-vs-server movement parity is ADR 0033's question, deliberately bypassed
+  by the raw-move driver.
+
+### Design deltas (2026-09-07 — WS-CLOSE Phase B, lane B(iii): H5 must-fixes)
+
+- **Structure/tower frames are captured, not creep-only.** The bot driver prints, per tick, one
+  line per labelled structure still standing (`{"s":<label>,"hits"}`), one per labelled tower
+  (`{"tw":<label>,"hits","energy"}`), and the roster line now carries `gone` (labels no longer
+  standing at their tile — only computed with room vision, so no-vision ticks never read as mass
+  destruction) next to `absent`. `screeps-ibex-eval::parity::LiveTrace::frames` turns them into
+  `frame.structures` / `frame.towers` and attributes a label standing at `t-1` but gone at `t` to
+  frame `t-1`'s `destroyed` — the same convention `replay()` emits — so a `parity capture` of the
+  tower-rampart bed (the one exercising rampart redirect + break) diffs field for field against
+  the sim instead of tripping `Presence` on every structure row. The layer-2 seed
+  (`world_from_live`) now goes through the engine's own `build_world` with the standing
+  structures/towers (kind/owner/tile/`hits_max` from the catalog entry, hits/energy as observed),
+  and `sim_frames` uses the engine's `frame_of` + `destroyed_structures`, so the report's sim
+  frames carry the same fields as the live ones. A label the catalog does not declare is an error
+  (not a silent drop). Per-part hits are still not in the frame schema (the PV1 creep line carries
+  them if a schema bump wants them). A label resolves to the structure on its tile — the towers
+  table only matches towers and the structures table only non-towers, so a rampart sharing a
+  tower's tile is addressable.
+- **Q1 is closed** (recorded in `docs/implementation/ws-closeout-2026-09.md`, 2026-09-07): the
+  engine does tick `storage.db['rooms.objects']`-inserted creeps (persisted, in `Game.creeps`,
+  moved by the runtime). The spawn-through-the-bot fallback above is history, not a live option.
+- **Placeholder provenance stamp.** `parity synth` stamps the engine submodule's HEAD at synth
+  time; after the engine submodule commit that lands `parity.rs`, re-run `parity synth` so the
+  stamp names a tree that contains the module (cosmetic — placeholders are declared non-evidence).

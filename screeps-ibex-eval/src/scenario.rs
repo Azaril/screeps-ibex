@@ -28,6 +28,10 @@ pub struct Scenario {
     /// Schema version ([`SCENARIO_SCHEMA_VERSION`]).
     pub v: u32,
     pub name: String,
+    /// Free-text intent (the 0004 calibration schedules carry their burn arithmetic here);
+    /// additive, never gates.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     /// Observed ticks to capture.
     pub ticks: u64,
     #[serde(default)]
@@ -52,10 +56,20 @@ pub enum Fault {
     /// run's gates WILL report the panic line — that's the point; the
     /// verdict for containment scenarios is the counter inspection).
     PanicOnce { at_observed_tick: u64 },
+    /// H5 parity oracle (ADR 0006 §B.4): arm the bot's scripted-combat
+    /// driver for `scenario` at the given observed tick. The driver
+    /// (`screeps-ibex::eval_parity`) also needs the script itself in
+    /// `Memory.parity_script` — `parity capture` installs both with one
+    /// absolute start tick; this fault is the scenario-file form for
+    /// re-arming a bed whose script is already installed.
+    ParityScript {
+        at_observed_tick: u64,
+        scenario: String,
+    },
 }
 
 /// JS guard chain creating `Memory._features.<group>` then assigning.
-fn feature_set(group: &str, assignment: &str) -> String {
+pub(crate) fn feature_set(group: &str, assignment: &str) -> String {
     format!(
         "if(!Memory._features)Memory._features={{}};\
          if(!Memory._features.{group})Memory._features.{group}={{}};\
@@ -69,6 +83,7 @@ impl Scenario {
         Scenario {
             v: SCENARIO_SCHEMA_VERSION,
             name: "smoke".into(),
+            description: String::new(),
             ticks,
             faults: Vec::new(),
         }
@@ -81,6 +96,7 @@ impl Scenario {
         Scenario {
             v: SCENARIO_SCHEMA_VERSION,
             name: "pressure".into(),
+            description: String::new(),
             ticks,
             faults: vec![Fault::CpuBurn {
                 at_observed_tick: ticks / 3,
@@ -111,6 +127,7 @@ impl Scenario {
         Scenario {
             v: SCENARIO_SCHEMA_VERSION,
             name: "panic-containment".into(),
+            description: String::new(),
             ticks,
             faults: vec![Fault::PanicOnce {
                 at_observed_tick: ticks / 2,
@@ -181,6 +198,17 @@ impl Scenario {
                         label: "deliberate panic (containment probe)".into(),
                     });
                 }
+                Fault::ParityScript {
+                    at_observed_tick,
+                    scenario,
+                } => {
+                    let name = serde_json::to_string(scenario).expect("string serializes");
+                    out.push(ConsoleInjection {
+                        at_observed_tick: *at_observed_tick,
+                        expression: feature_set("eval", &format!("parity_script={name}")),
+                        label: format!("parity script '{scenario}' armed"),
+                    });
+                }
             }
         }
         out
@@ -218,6 +246,33 @@ mod tests {
             .contains("Memory._features.reset.environment=true"));
         // Guard chains so a fresh Memory tree can take the assignment.
         assert!(inj[0].expression.starts_with("if(!Memory._features)"));
+    }
+
+    /// The H5 fault arms the bot's driver flag with the scenario name as a
+    /// JS string literal (escaped, never interpolated raw).
+    #[test]
+    fn parity_script_fault_compiles_to_the_eval_flag() {
+        let s = Scenario {
+            v: SCENARIO_SCHEMA_VERSION,
+            name: "parity".into(),
+            description: String::new(),
+            ticks: 100,
+            faults: vec![Fault::ParityScript {
+                at_observed_tick: 10,
+                scenario: "melee-1v1".into(),
+            }],
+        };
+        let inj = s.injections();
+        assert_eq!(inj.len(), 1);
+        assert_eq!(inj[0].at_observed_tick, 10);
+        assert!(inj[0]
+            .expression
+            .ends_with(r#"Memory._features.eval.parity_script="melee-1v1";"#), "{}", inj[0].expression);
+        // Round-trips through the scenario JSON (kind tag = snake_case).
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""kind":"parity_script""#), "{json}");
+        let back: Scenario = serde_json::from_str(&json).unwrap();
+        assert!(matches!(&back.faults[0], Fault::ParityScript { scenario, .. } if scenario == "melee-1v1"));
     }
 
     #[test]

@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "name": "pressure-reset-under-critical",
+  "ticks": 900,
+  "description": "ADR 0004 governor calibration rung (c): the pressure-critical-hover schedule plus ONE state-preserving global reset (Memory._features.reset.environment=true: heap/env rebuild from segments, NOT a world wipe) in the middle of the Critical hold. Same model + evidence as pressure-critical-hover (L=100, BE~90 from runs/pressure-bbe86e0-20260611-060159, d(ms) ~ ms - BE, refill ~82/tick; DrainModel::PRIVATE_FRESH). STAGE 1 (ramp, 300..361): ms=220, 62 ticks -> ~1940; burn-free tick 362 -> ~2022. STAGE 2 (hover, 363..562, ON one tick after stage-1 OFF): ms=96, 200 ticks -> ~820. RESET at observed 493 = hover tick 130: nominal bucket ~2022 - 130*6 = ~1240 < CRITICAL_BUCKET=1500, so the tier is Critical by LEVEL on both sides of the reset (the level crossing is at ~hover tick 87 = observed ~450; the reset lands ~43 ticks into the level-Critical hold). EXPECTED: seg-57 vm_starts +1 EXACTLY (1 -> 2; a restart LOOP would show +N), one vm_fresh=true block (the sampler can miss it; vm_starts is the robust counter), faults.serialize_skipped_aborted and panics_caught unchanged (an environment reset is not an abort); the bucket window (heap-only, BUCKET_WINDOW=100) refills from empty after the reset so bucket_trend reads 0 for the first ticks and the tier is LEVEL-ONLY (Critical while bucket<1500) until the window has >= 2 samples; the burn continues across the reset because cpu_burn_ms lives in Memory (persisted), not the heap. The reset tick itself pays the wasm re-instantiation on top of the 96 ms burn: expect a one-tick bucket dip of a few tens, not a cliff. TAIL (563..900): recovery ladder as in pressure-critical-hover. Error budget + retune rules as in pressure-critical-hover; warm-world caveat: subtract (pre-burn mean cpu.used - 18) from every ms.",
+  "faults": [
+    { "kind": "cpu_burn", "at_observed_tick": 300, "ms": 220, "duration_ticks": 62 },
+    { "kind": "cpu_burn", "at_observed_tick": 363, "ms": 96, "duration_ticks": 200 },
+    { "kind": "global_reset", "at_observed_tick": 493 }
+  ]
+}

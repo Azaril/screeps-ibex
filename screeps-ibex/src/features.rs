@@ -711,6 +711,12 @@ pub struct EvalFeatures {
     /// Memory writes are lost with the abort, but time moves past the
     /// trigger during the halt/reload cycle, so it self-disarms.
     pub panic_at_tick: u32,
+    /// H5 parity-oracle scripted-combat driver (ADR 0006 §B.4): the scenario
+    /// name whose per-tick intent table (injected into `Memory.parity_script`)
+    /// `pv-<scenario>-<n>` creeps execute, printing one `PV1 ` console line per
+    /// creep per tick. Empty (default) = off. Fixed-capacity so `Features`
+    /// stays `Copy`; see `crate::eval_parity`.
+    pub parity_script: crate::eval_parity::ParityScriptName,
 }
 
 // ─── Top-level features ────────────────────────────────────────────────────────
